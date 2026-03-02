@@ -48,9 +48,9 @@ If a reviewer binary is missing, show how to install it:
 | gemini | `npm install -g @google/gemini-cli` + run `gemini auth` |
 | claude | `npm install -g @anthropic-ai/claude-code` |
 
-If `jq` is missing and `claude` is available, warn:
-`jq is required for Claude output parsing — install: brew install jq (macOS) / apt install jq (Linux)`
-And skip Claude reviewer until jq is installed.
+If `jq` is missing and `claude` is available, note:
+In shell mode (`EXEC_MODE=shell`), `jq` is required for Claude output parsing — install: `brew install jq` (macOS) / `apt install jq` (Linux). Skip Claude reviewer in shell mode until jq is installed.
+In team/agent mode, Opus runs as a native teammate and does not require jq.
 
 If Gemini is available, verify it is authenticated:
 
@@ -131,8 +131,7 @@ Build `TEAM_REVIEWER_PLAN` — for each reviewer in `AVAILABLE_REVIEWERS`:
 - `codex` CLI missing → type: `teammate` (The Executor persona)
 - `gemini` CLI found → type: `cli`
 - `gemini` CLI missing → type: `teammate` (The Architect persona)
-- `claude` CLI found → type: `cli` (uses invoke-opus.sh subprocess)
-- `claude` CLI missing → type: `teammate` (The Skeptic persona)
+- `claude` CLI found or missing → type: `teammate` (The Skeptic persona) [always in team/agent mode]
 
 Display the reviewer plan:
 
@@ -143,7 +142,7 @@ Reviewer plan (team mode):
   [✅ cli / ⚡ teammate]  opus    — The Skeptic
 ```
 
-Where `⚡ teammate` indicates a CLI is missing and a Claude agent will substitute.
+Where `⚡ teammate` indicates a native Claude agent reviewer. Opus is always `⚡ teammate` in team/agent mode — no CLI subprocess needed.
 
 Attempt to create the review team:
 
@@ -194,18 +193,6 @@ After it completes, read <WORK_DIR>/<name>-exit.txt and send me (the team lead) 
 Make no other changes. Wait for further instructions.
 ```
 
-**CLI-type Opus — run the invoke script:**
-
-Agent `name`: `opus-reviewer`
-```
-Run this command:
-  bash "<SCRIPT_DIR>/invoke-opus.sh" "<WORK_DIR>" "" "<MODEL>"
-
-After it completes, read <WORK_DIR>/opus-exit.txt and send me (the team lead) a message:
-  "Opus complete. Exit: <exit_code>"
-Make no other changes. Wait for further instructions.
-```
-
 **Teammate-type Codex (CLI missing) — The Executor persona:**
 
 Agent `name`: `codex-reviewer`
@@ -248,7 +235,7 @@ Send me (the team lead) a message: "Gemini complete. Exit: 0"
 Wait for further instructions — you may be asked to debate or re-review.
 ```
 
-**Teammate-type Opus (CLI missing) — The Skeptic persona:**
+**Teammate-type Opus — The Skeptic persona:**
 
 Agent `name`: `opus-reviewer`
 ```
@@ -291,7 +278,7 @@ Content:
    Write '0' to <WORK_DIR>/<name>-exit.txt. Then message me: '<Name> complete.'"
 ```
 
-For CLI-type reviewers in Round 2+, run their invoke scripts directly via Bash (using session IDs from `*-session-id.txt`). Do not message their wrapper agent.
+For CLI-type reviewers (Codex and Gemini only — Opus is always teammate-type in team mode) in Round 2+, run their invoke scripts directly via Bash (using session IDs from `*-session-id.txt`). Do not message their wrapper agent.
 
 **Per-reviewer fallback:** If a teammate-type reviewer fails to respond within 360s in Round 2+, fall back to a fresh agent spawn for that reviewer only, with injected context (see Option C below for the context injection pattern). The other teammates continue in team mode. Track each reviewer's active mode: `REVIEWER_MODE[<name>]=team|agent`.
 
@@ -588,9 +575,9 @@ If any step failed before reaching this step, still run both cleanup steps (Team
 - **Graceful degradation:** If only 1 reviewer is available, run the full flow and skip the debate phase
 - **All-fail handling:** If all reviewers fail/timeout, return `UNDECIDED` with retry guidance
 - **Session tracking:** Always recapture session IDs from `*-session-id.txt` after each invoke script call — stale IDs cause silent failures on next resume; each script handles fallback internally
-- **Opus session ID:** Read `OPUS_SESSION_ID` from `opus-session-id.txt` (written by invoke-opus.sh); script guards `--resume` with `[ -n "$OPUS_SESSION_ID" ]` internally
-- **Opus nested sessions:** `invoke-opus.sh` handles `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT` and `CLAUDE_CODE_SIMPLE=1` internally
-- **Opus jq dependency:** Skip Claude reviewer if `jq` is not installed; show install guidance
+- **Opus session ID (shell mode only):** Read `OPUS_SESSION_ID` from `opus-session-id.txt` (written by invoke-opus.sh); script guards `--resume` with `[ -n "$OPUS_SESSION_ID" ]` internally. Not applicable in team/agent mode.
+- **Opus nested sessions (shell mode only):** `invoke-opus.sh` handles `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT` and `CLAUDE_CODE_SIMPLE=1` internally. Not needed in team/agent mode where Opus is a native teammate.
+- **Opus jq dependency (shell mode only):** Skip Claude reviewer in shell mode if `jq` is not installed; show install guidance. In team/agent mode, Opus runs natively — jq is not required.
 - **Debate guard:** Explicitly skip Step 5 if fewer than 2 reviewers succeeded
 - **Revision discipline:** Make real plan improvements, not cosmetic changes
 - **User control:** If a revision would contradict the user's explicit requirements, skip it and note it

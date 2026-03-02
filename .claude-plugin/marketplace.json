@@ -8,7 +8,7 @@
     {
       "name": "debate",
       "description": "Multi-model AI plan review with parallel execution, synthesis, and debate",
-      "version": "1.1.18",
+      "version": "1.1.19",
       "source": "./",
       "author": {
         "name": "strml"

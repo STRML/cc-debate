@@ -68,6 +68,7 @@ Claude: Sending revised plan back to all reviewers...
 | `/debate:codex-review` | Single-reviewer Codex loop (up to 5 rounds) |
 | `/debate:gemini-review` | Single-reviewer Gemini loop (up to 5 rounds) |
 | `/debate:opus-review` | Single-reviewer Opus loop (up to 5 rounds) |
+| `/debate:opus-review-subagent` | Single-round Opus review via Task subagent — no CLI, no temp files |
 
 ## Installation
 
@@ -127,13 +128,16 @@ brew install coreutils
 
 ## Usage
 
-### `/debate:all [skip-debate]`
+### `/debate:all [skip-debate] [shell-mode]`
 
-Runs all available reviewers in parallel (120s timeout each). If reviewers disagree, Claude sends targeted questions back to each one to resolve contradictions. Iterates up to 3 revision rounds.
+Runs all available reviewers in parallel (Codex 120s, Gemini 240s, Opus 300s timeout). If reviewers disagree, Claude sends targeted questions back to each one to resolve contradictions. Iterates up to 3 revision rounds.
+
+When Claude Code's teammate feature is available, reviewers run as persistent team agents — they maintain context across rounds without re-spawning. Falls back to subagents or shell scripts if unavailable. Missing CLI binaries are automatically substituted with Claude teammates playing the same persona.
 
 ```
 /debate:all              # full flow with debate
 /debate:all skip-debate  # skip debate, go straight to final report
+/debate:all shell-mode   # force shell script execution (no team/agent)
 ```
 
 ### `/debate:codex-review [model]`
@@ -160,8 +164,12 @@ Iterative loop with Claude Opus as **The Skeptic** — focused on unstated assum
 
 ```
 /debate:opus-review
-/debate:opus-review claude-opus-4-5
+/debate:opus-review claude-opus-4-6
 ```
+
+### `/debate:opus-review-subagent`
+
+Single-round Opus review using Claude's built-in Task tool. No CLI subprocess, no temp files, no session management — just fast feedback. Good for a quick sanity check. Use `/debate:opus-review` for iterative multi-round review.
 
 ## Unattended / No-Prompt Use
 
@@ -179,13 +187,16 @@ Install GNU coreutils: `brew install coreutils` (macOS) or `apt install coreutil
 Codex sessions expire after a period of inactivity. The commands automatically fall back to a fresh call and recapture the new session ID.
 
 **Gemini session not found after review**
-The session UUID diff uses `gemini --list-sessions` before and after the review call. If sessions shift concurrently (multiple Gemini processes), the diff may be ambiguous and the command falls back to non-resume mode for subsequent rounds.
+Session UUID is captured by comparing `~/.gemini/tmp/` session files before and after the review call. If sessions shift concurrently (multiple Gemini processes), the diff may be ambiguous and the command falls back to non-resume mode for subsequent rounds.
 
 **Opus exits with "Claude Code cannot be launched inside another Claude Code session"**
 This means the nested-session guard wasn't applied. The commands handle this automatically via `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT` — if you see this error, ensure you're running the latest version of the plugin.
 
 **Opus review requires `jq`**
 The `claude` CLI outputs JSON and requires `jq` to extract the review text and session ID. Install with `brew install jq` (macOS) or `apt install jq` (Linux).
+
+**Codex exits with sandbox panic (exit code 77)**
+The Codex binary accesses a macOS system API that is blocked inside Claude Code's sandbox. To fix, add `codex` to `sandbox.excludedCommands` in `~/.claude/settings.json`, or run with `dangerouslyDisableSandbox: true`. The `/debate:setup` command prints the exact snippet.
 
 **Only one reviewer available**
 Single-reviewer commands (`/debate:codex-review`, `/debate:gemini-review`, `/debate:opus-review`) and `/debate:all` all work with any subset of reviewers available. With fewer reviewers, `/debate:all` skips any unavailable reviewer and may skip the debate phase if only one succeeds.
