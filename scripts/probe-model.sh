@@ -94,15 +94,20 @@ for MODEL in "${MODELS[@]}"; do
       > "$PROBE_TMP" 2>"$PROBE_ERR"
     PROBE_EXIT=$?
 
+    # Capture output size before cleanup
+    PROBE_OUTPUT_SIZE=$(wc -c < "$PROBE_TMP" 2>/dev/null || echo 0)
     rm -f "$PROBE_TMP" "$PROBE_ERR"
 
-    if [ "$PROBE_EXIT" -eq 0 ]; then
+    # Gemini sometimes exits 0 with empty output when the API is unreachable
+    # (network blocked in sandbox). Require non-empty output to confirm success.
+    if [ "$PROBE_EXIT" -eq 0 ] && [ "$PROBE_OUTPUT_SIZE" -gt 0 ]; then
       FOUND_MODEL="$MODEL"
       break
     fi
 
-    # Timeout → network/sandbox issue, stop probing
+    # Timeout or empty output → network/sandbox issue, stop probing
     [ "$PROBE_EXIT" -eq 124 ] && exit 1
+    [ "$PROBE_EXIT" -eq 0 ] && exit 1  # exit 0 + empty = false positive
     # Any other non-zero → model not available, try next
   fi
 done

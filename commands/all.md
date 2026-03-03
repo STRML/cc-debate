@@ -23,14 +23,16 @@ which claude
 which jq
 ```
 
-Build `AVAILABLE_REVIEWERS` from the results. Display a prerequisite summary:
+Build `AVAILABLE_REVIEWERS` from the results for **shell mode only**. In team/agent mode, all three reviewers always run as native teammate personas regardless of binary availability — binary presence only matters for shell mode.
+
+Display a prerequisite summary:
 
 ```text
 ## AI Review — Prerequisite Check
 
 Reviewers found:
-  ✅ codex    (OpenAI Codex)
-  ✅ gemini   (Google Gemini)
+  ✅ codex    (OpenAI Codex — shell mode CLI)
+  ✅ gemini   (Google Gemini — shell mode CLI)
   ✅ claude   (Anthropic Claude Opus)
 
 Reviewers missing:
@@ -38,9 +40,12 @@ Reviewers missing:
 
 Tools:
   ✅ jq       (shell mode only — for Opus CLI output parsing)
+
+Note: In team/agent mode, all three reviewers run as native teammate personas
+      regardless of CLI availability (Codex/Gemini CLIs are shell mode only).
 ```
 
-If a reviewer binary is missing, show how to install it:
+If a reviewer binary is missing, show how to install it (relevant for shell mode):
 
 | Reviewer | Install Command |
 |----------|----------------|
@@ -50,17 +55,17 @@ If a reviewer binary is missing, show how to install it:
 
 If `jq` is missing and `claude` is available, note:
 In shell mode (`EXEC_MODE=shell`), `jq` is required for Claude output parsing — install: `brew install jq` (macOS) / `apt install jq` (Linux). Skip Claude reviewer in shell mode until jq is installed.
-In team/agent mode, Opus runs as a native teammate and does not require jq.
+In team/agent mode, all reviewers run natively and jq is not required.
 
-If Gemini is available, verify it is authenticated:
+If Gemini CLI is available and shell mode is being considered, verify it is authenticated:
 
 ```bash
-echo "reply with only the word PONG" | timeout 30 gemini -s -e "" 2>/dev/null
+echo "reply with only the word PONG" | timeout 30 gemini -p "Reply with only the word PONG." -s -e "" 2>/dev/null
 ```
 
 If output does not contain "PONG" (case-insensitive), warn: `Gemini is not authenticated — run: gemini auth`
 
-**If NO reviewers are available**, stop and display the full install guide, then exit.
+**If NO reviewers are available AND shell-mode was requested**, stop and display the full install guide, then exit. In team/agent mode, reviews always proceed (all 3 teammate personas are always available).
 
 **If fewer than 2 reviewers are available**, note which is missing and proceed with the single available reviewer. Skip Step 5 (debate) entirely when only 1 reviewer runs — debate requires at least 2 reviewers.
 
@@ -126,23 +131,25 @@ Check if the `TeamCreate` tool is available in this session. (`TeamCreate`, `Sen
 
 **If `TeamCreate` is available:**
 
-Build `TEAM_REVIEWER_PLAN` — for each reviewer in `AVAILABLE_REVIEWERS`:
-- `codex` CLI found → type: `cli`
-- `codex` CLI missing → type: `teammate` (The Executor persona)
-- `gemini` CLI found → type: `cli`
-- `gemini` CLI missing → type: `teammate` (The Architect persona)
-- `claude` CLI found or missing → type: `teammate` (The Skeptic persona) [always in team/agent mode]
+In team/agent mode, **all reviewers always run as native Claude teammate personas** regardless of CLI binary availability. CLI tools (codex, gemini) run inside subagent processes where the macOS sandbox restricts system calls (Codex: `SCDynamicStoreCreate` panic) and outbound network (Gemini: HTTPS blocked). Using teammate personas avoids both failure modes and delivers equivalent review quality.
+
+Set `AVAILABLE_REVIEWERS = [codex, gemini, opus]` (all three, always) in team/agent mode.
+
+Build `TEAM_REVIEWER_PLAN`:
+- codex → type: `teammate` (The Executor persona) [always in team/agent mode]
+- gemini → type: `teammate` (The Architect persona) [always in team/agent mode]
+- claude → type: `teammate` (The Skeptic persona) [always in team/agent mode]
 
 Display the reviewer plan:
 
 ```text
 Reviewer plan (team mode):
-  [✅ cli / ⚡ teammate]  codex   — The Executor
-  [✅ cli / ⚡ teammate]  gemini  — The Architect
-  ⚡ teammate             opus    — The Skeptic
+  ⚡ teammate  codex   — The Executor
+  ⚡ teammate  gemini  — The Architect
+  ⚡ teammate  opus    — The Skeptic
 ```
 
-Where `⚡ teammate` indicates a native Claude agent reviewer. Opus is always `⚡ teammate` in team/agent mode — no CLI subprocess needed.
+Where `⚡ teammate` indicates a native Claude agent reviewer. All reviewers are `⚡ teammate` in team/agent mode — CLI subprocesses are not used.
 
 Attempt to create the review team:
 
@@ -181,19 +188,9 @@ The review team was created in Step 1e and persists for the full session. Do NOT
 
 For each reviewer in `TEAM_REVIEWER_PLAN`, use the Agent tool with `team_name: "debate-<REVIEW_ID>"` and the explicit `name` below. Spawn all in parallel.
 
-**CLI-type reviewer (codex or gemini) — run the invoke script:**
+All reviewers in team/agent mode are teammate-type (native Claude agents). There are no CLI-type reviewers in team/agent mode.
 
-Agent `name`: `codex-reviewer` or `gemini-reviewer`
-```
-Run this command:
-  bash "<SCRIPT_DIR>/invoke-<name>.sh" "<WORK_DIR>" "" "<MODEL>"
-
-After it completes, read <WORK_DIR>/<name>-exit.txt and send me (the team lead) a message:
-  "<Name> complete. Exit: <exit_code>"
-Make no other changes. Wait for further instructions.
-```
-
-**Teammate-type Codex (CLI missing) — The Executor persona:**
+**The Executor persona (Codex reviewer):**
 
 Agent `name`: `codex-reviewer`
 ```
@@ -214,7 +211,7 @@ Send me (the team lead) a message: "Codex complete. Exit: 0"
 Wait for further instructions — you may be asked to debate or re-review.
 ```
 
-**Teammate-type Gemini (CLI missing) — The Architect persona:**
+**The Architect persona (Gemini reviewer):**
 
 Agent `name`: `gemini-reviewer`
 ```
@@ -235,7 +232,7 @@ Send me (the team lead) a message: "Gemini complete. Exit: 0"
 Wait for further instructions — you may be asked to debate or re-review.
 ```
 
-**Teammate-type Opus — The Skeptic persona:**
+**The Skeptic persona (Opus reviewer):**
 
 Agent `name`: `opus-reviewer`
 ```
@@ -267,7 +264,7 @@ If an agent fails to report within 360s, treat that reviewer as timed-out (exit 
 
 **Round 2+ — Message existing teammates (do NOT spawn new agents):**
 
-For each teammate-type reviewer that succeeded in the previous round, send a `SendMessage`:
+For each reviewer that succeeded in the previous round, send a `SendMessage`:
 
 ```
 Recipient: "<reviewer-name>"  (e.g. "codex-reviewer", "gemini-reviewer", "opus-reviewer")
@@ -277,8 +274,6 @@ Content:
    End with VERDICT: APPROVED or VERDICT: REVISE.
    Write '0' to <WORK_DIR>/<name>-exit.txt. Then message me: '<Name> complete.'"
 ```
-
-For CLI-type reviewers (Codex and Gemini only — Opus is always teammate-type in team mode) in Round 2+, run their invoke scripts directly via Bash (using session IDs from `*-session-id.txt`). Do not message their wrapper agent.
 
 **Per-reviewer fallback:** If a teammate-type reviewer fails to respond within 360s in Round 2+, fall back to a fresh agent spawn for that reviewer only, with injected context (see Option C below for the context injection pattern). The other teammates continue in team mode. Track each reviewer's active mode: `REVIEWER_MODE[<name>]=team|agent`.
 
@@ -402,7 +397,7 @@ Max 2 debate rounds. Skip if there are no contradictions.
 
 For each contradiction, send a targeted question to each reviewer in the disagreement.
 
-**Shell / CLI-type reviewers:** Use the invoke scripts with session IDs. Build debate prompts from files — never interpolate reviewer output directly into shell strings:
+**Shell mode — CLI reviewers:** Use the invoke scripts with session IDs. Build debate prompts from files — never interpolate reviewer output directly into shell strings:
 
 ```bash
 # For Codex:
@@ -442,7 +437,7 @@ bash "<SCRIPT_DIR>/invoke-opus.sh" "<WORK_DIR>" "<OPUS_SESSION_ID>" "<OPUS_MODEL
 
 After each invoke call: check the exit code; on success read the reviewer's `*-output.md` and updated `*-session-id.txt`. If a session resume fails, skip that reviewer's debate response and note it.
 
-**Team mode — teammate-type reviewers:** Send a `SendMessage` directly. Do NOT spawn fresh agents. The reviewer already has its full conversation history. Write the debate prompt to a file and have the reviewer read the output files itself — never include raw reviewer output in the SendMessage content:
+**Team mode — all reviewers are teammate-type:** Send a `SendMessage` directly. Do NOT spawn fresh agents. The reviewer already has its full conversation history. Write the debate prompt to a file and have the reviewer read the output files itself — never include raw reviewer output in the SendMessage content:
 
 ```bash
 {
@@ -456,7 +451,7 @@ After each invoke call: check the exit code; on success read the reviewer's `*-o
 
 SendMessage the teammate with only a brief summary and the file path to read — not the raw content. Wait for the teammate's response message before proceeding.
 
-**Agent mode — teammate-type reviewers:** Spawn a fresh agent with full context injected via temp file (reviewer's prior output + other reviewer's position + debate question). Agent writes to `<name>-output.md` and exits.
+**Agent mode — all reviewers are teammate-type:** Spawn a fresh agent with full context injected via temp file (reviewer's prior output + other reviewer's position + debate question). Agent writes to `<name>-output.md` and exits.
 
 Display each debate exchange:
 
@@ -575,9 +570,10 @@ If any step failed before reaching this step, still run both cleanup steps (Team
 - **Graceful degradation:** If only 1 reviewer is available, run the full flow and skip the debate phase
 - **All-fail handling:** If all reviewers fail/timeout, return `UNDECIDED` with retry guidance
 - **Session tracking:** Always recapture session IDs from `*-session-id.txt` after each invoke script call — stale IDs cause silent failures on next resume; each script handles fallback internally
+- **CLI reviewers (shell mode only):** Codex and Gemini CLIs are only used in shell mode (`EXEC_MODE=shell`). In team/agent mode, all reviewers run as native teammate personas. CLI subprocesses inside subagent environments trigger macOS sandbox restrictions (Codex: `SCDynamicStoreCreate` panic; Gemini: outbound HTTPS blocked) that `excludedCommands` cannot reliably prevent.
 - **Opus session ID (shell mode only):** Read `OPUS_SESSION_ID` from `opus-session-id.txt` (written by invoke-opus.sh); script guards `--resume` with `[ -n "$OPUS_SESSION_ID" ]` internally. Not applicable in team/agent mode.
-- **Opus nested sessions (shell mode only):** `invoke-opus.sh` handles `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT` and `CLAUDE_CODE_SIMPLE=1` internally. Not needed in team/agent mode where Opus is a native teammate.
-- **Opus jq dependency (shell mode only):** Skip Claude reviewer in shell mode if `jq` is not installed; show install guidance. In team/agent mode, Opus runs natively — jq is not required.
+- **Opus nested sessions (shell mode only):** `invoke-opus.sh` handles `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT` and `CLAUDE_CODE_SIMPLE=1` internally. Not needed in team/agent mode where all reviewers are native teammates.
+- **jq dependency (shell mode only):** Skip Claude reviewer in shell mode if `jq` is not installed; show install guidance. In team/agent mode, all reviewers run natively — jq is not required.
 - **Debate guard:** Explicitly skip Step 5 if fewer than 2 reviewers succeeded
 - **Revision discipline:** Make real plan improvements, not cosmetic changes
 - **User control:** If a revision would contradict the user's explicit requirements, skip it and note it
