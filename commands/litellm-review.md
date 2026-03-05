@@ -27,8 +27,10 @@ Parse `base_url` and reviewer list. If a comma-separated reviewer list was passe
 
 ### 1b. Check LiteLLM connectivity
 
+Compute the models URL from `base_url`: strip any trailing `/v1` and append `/models`.
+
 ```bash
-curl -s --max-time 5 http://localhost:8200/models > /dev/null 2>&1
+curl -s --max-time 5 <MODELS_URL> > /dev/null 2>&1
 ```
 
 If connection fails, stop:

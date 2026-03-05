@@ -21,9 +21,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$WORK_DIR" || { echo "Failed to create $WORK_DIR" >&2; exit 1; }
 
-# Clear leftover prompt files from prior debate rounds
-rm -f "$WORK_DIR"/*-prompt.txt
-
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "Config not found: $CONFIG_FILE" >&2
   echo "Create it with /debate:litellm-setup or manually." >&2
@@ -86,7 +83,12 @@ done
 
 if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
   echo "[debate] Timed out waiting for reviewers after ${MAX_WAIT}s." >&2
+  # Clean up prompt files after reviewers are done (or timed out)
+  rm -f "$WORK_DIR"/*-prompt.txt
   exit 1
 else
   echo "[debate] All reviewers complete (${ELAPSED}s elapsed)." >&2
 fi
+
+# Clean up prompt files after all reviewers have consumed them
+rm -f "$WORK_DIR"/*-prompt.txt

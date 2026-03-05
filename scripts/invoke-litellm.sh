@@ -45,16 +45,6 @@ if [ -z "$WORK_DIR" ] || [ -z "$REVIEWER" ]; then
   exit 1
 fi
 
-if [ ! -d "$WORK_DIR" ]; then
-  echo "invoke-litellm.sh: work_dir does not exist: $WORK_DIR" >&2
-  exit 1
-fi
-
-if [ ! -f "$WORK_DIR/plan.md" ]; then
-  echo "invoke-litellm.sh: plan.md not found in $WORK_DIR" >&2
-  exit 1
-fi
-
 # --- Trap: ensure exit file is always written ---
 
 create_exit_file() {
@@ -69,6 +59,16 @@ create_exit_file() {
 }
 
 trap 'create_exit_file "$?" "unexpected exit"' EXIT
+
+if [ ! -d "$WORK_DIR" ]; then
+  echo "invoke-litellm.sh: work_dir does not exist: $WORK_DIR" >&2
+  exit 1
+fi
+
+if [ ! -f "$WORK_DIR/plan.md" ]; then
+  echo "invoke-litellm.sh: plan.md not found in $WORK_DIR" >&2
+  exit 1
+fi
 
 # --- Config ---
 

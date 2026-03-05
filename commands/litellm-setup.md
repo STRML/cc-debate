@@ -60,10 +60,10 @@ Read `~/.claude/debate-litellm.json`. Report:
 
 ## Step 3: Check LiteLLM connectivity
 
-Extract `base_url` from config (default: `http://localhost:8200/v1`). Strip the `/v1` suffix to hit the `/models` endpoint:
+Extract `base_url` from config (default: `http://localhost:8200/v1`). Strip any trailing `/v1` suffix to compute the models URL:
 
 ```bash
-curl -s http://localhost:8200/models
+curl -s <MODELS_URL>
 ```
 
 Report:

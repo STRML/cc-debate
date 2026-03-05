@@ -255,7 +255,7 @@ Each reviewer entry has:
 | `timeout` | No | Seconds before the API call is killed (default: 120) |
 | `system_prompt` | No | Persona and focus areas sent as the system message |
 
-`api_key` is optional — most local LiteLLM proxies don't require auth. Can also be set via the `LITELLM_API_KEY` environment variable.
+`api_key` is optional — most local LiteLLM proxies don't require auth. The API key can also be set via the `LITELLM_API_KEY` environment variable.
 
 ### Adding a reviewer
 
