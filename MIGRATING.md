@@ -20,8 +20,8 @@ v2.0.0 replaces all provider-specific CLIs (codex, gemini, claude) and API-based
 | Command | What changed |
 |---------|-------------|
 | `/debate:all` | Now config-driven via `debate-acpx.json`. Shell mode removed. No more persona fallback. |
-| `/debate:opus-review` | Now uses `acpx claude` instead of direct `claude` CLI. No more `jq` dependency. |
-| `/debate:opus-review-subagent` | Merged into `/debate:opus-review` — no longer a separate command. |
+| `/debate:opus-review` | Renamed to `/debate:claude-review`. Now uses Agent tool (context fork) instead of Team/acpx. Supports model selection (opus/sonnet). |
+| `/debate:opus-review-subagent` | Merged into `/debate:claude-review`. |
 | `/debate:setup` | Simplified — checks for `acpx` and `jq` only. |
 
 ### New commands
@@ -29,6 +29,8 @@ v2.0.0 replaces all provider-specific CLIs (codex, gemini, claude) and API-based
 | Command | Purpose |
 |---------|---------|
 | `/debate:acpx-setup` | Interactive config creation + agent probing |
+| `/debate:claude-double-review` | Two Claude reviewers (Skeptic + Architect) in parallel |
+| `/debate:claude-custom-review` | Interactive personality + model picker |
 
 ### Other changes
 

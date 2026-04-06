@@ -12,7 +12,9 @@ This is a Claude Code CLI plugin — there is no web frontend. "Frontend" here m
 /debate:acpx-setup          Interactive reviewer config + agent probe
 /debate:all                 Full parallel review + synthesis + debate (recommended)
 /debate:all skip-debate     Skip targeted debate phase
-/debate:opus-review         Iterative Opus loop — TeamCreate+SendMessage if available, subagent fallback
+/debate:claude-review       Claude review (Skeptic default, Opus) — Agent context fork + SendMessage
+/debate:claude-double-review  Two reviewers (Skeptic + Architect) in parallel
+/debate:claude-custom-review  Interactive personality + model picker
 ```
 
 ## Output Format

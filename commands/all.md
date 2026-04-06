@@ -1,6 +1,6 @@
 ---
 description: Run ALL configured AI reviewers in parallel via acpx, synthesize feedback, debate contradictions, and produce a consensus verdict. Configure reviewers in ~/.claude/debate-acpx.json.
-allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*)
+allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
 ---
 
 # AI Multi-Model Plan Review (acpx)
@@ -70,7 +70,9 @@ First check whether a plan exists in the current conversation context. If no pla
 
 Track a round counter starting at 1. Check `ROUND <= 3` before executing each round — if exceeded, go to the "max rounds reached" block in Step 7.
 
-Run all reviewers in parallel via the runner script:
+Launch the acpx reviewers AND a Claude Opus subagent **in parallel** (same message, multiple tool calls):
+
+### 2a. acpx reviewers (Bash)
 
 ```bash
 bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
@@ -78,7 +80,42 @@ bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_I
 
 If a reviewer subset was specified, pass the comma-separated list as the third argument. Use `timeout: 480000` on the Bash call (the runner blocks until all reviewers complete or time out).
 
-**Cleanup:** If the run fails or the user interrupts, always run `rm -rf <WORK_DIR>` before stopping.
+### 2b. Claude Opus subagent (Agent)
+
+**Round 1:** Spawn a named agent. It forks context, so it already has the plan — do NOT re-send it.
+
+```
+Agent:
+  name: "claude-skeptic"
+  model: "opus"
+  subagent_type: "general-purpose"
+  description: "Claude Opus skeptic reviewer"
+  run_in_background: true
+  prompt: |
+    You are The Skeptic — a senior engineer who challenges plans by finding what
+    everyone else missed. Focus on:
+    1. Unstated assumptions — what is assumed true that could be false?
+    2. Unhappy paths — what breaks when the first thing goes wrong?
+    3. Second-order failures — what does a partial success leave behind?
+    4. Security — is any user-controlled content reaching a shell string?
+    5. The one fatal flaw — if this plan has one problem, what is it?
+
+    Review the implementation plan in this conversation. The plan is already in
+    your context — do not ask for it.
+
+    Provide structured feedback with severity (CRITICAL / MAJOR / MINOR) for
+    each concern. Be specific, be direct, be constructive.
+
+    End your response with exactly one of:
+      VERDICT: APPROVED — plan is solid and ready to implement
+      VERDICT: REVISE — concerns above should be addressed first
+```
+
+**Rounds 2+:** Use SendMessage to the existing `claude-skeptic` agent with revision context (same pattern as claude-review skill).
+
+### Cleanup
+
+If the run fails or the user interrupts, always run `rm -rf <WORK_DIR>` before stopping.
 
 ### Check results
 
@@ -110,13 +147,22 @@ Then clean up and exit.
 
 **CRITICAL: You MUST use the Read tool to read each `<name>-output.md` file IN FULL.** Do NOT use grep, awk, sed, head, tail, or any other tool to extract snippets or search for keywords. Do NOT summarize without reading. Each reviewer catches different issues — skimming loses findings. Read every word.
 
-For each completed reviewer:
+For each completed acpx reviewer:
 
 ```text
 ---
 ## <Name> Review — Round N (<Agent>)
 
 [FULL content of <name>-output.md — do not truncate or summarize]
+```
+
+For the Claude Opus subagent (its result is returned directly — no file to read):
+
+```text
+---
+## Claude (Skeptic) Review — Round N
+
+[FULL agent response — do not truncate or summarize]
 ```
 
 For failed/timed-out reviewers:
@@ -292,7 +338,7 @@ rm -rf <WORK_DIR>
 ## Rules
 
 - **acpx handles everything** — except `gemini`. Gemini CLI's ACP mode is broken (hangs at initialize). `invoke-acpx.sh` detects `agent: gemini` and falls back to direct CLI invocation (`gemini -s -e ""`), which works with both OAuth and API key auth.
-- **Parallel via bash.** `run-parallel-acpx.sh` runs reviewers as nohup/disown background processes from the main agent's context. No subagents needed — no permission inheritance issues.
+- **Parallel via bash + Agent.** `run-parallel-acpx.sh` runs external reviewers as background processes. A Claude Opus subagent runs in parallel via Agent with `run_in_background: true`. Both launch in the same tool-call message for true parallelism.
 - **Debate via direct invoke.** Debate rounds call `invoke-acpx.sh` directly from the main agent (not subagents). Prompt files are picked up automatically.
 - **No session resume needed.** acpx manages sessions internally. Each round injects full context via prompt files.
 - **Config is king.** Adding a reviewer = adding an entry to `~/.claude/debate-acpx.json`.

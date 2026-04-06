@@ -295,7 +295,9 @@ The value of multiple reviewers is getting genuinely different lenses. Some idea
 | `/debate:setup` | Check prerequisites, create `~/.claude/debate-scripts` symlink, detect v1.x configs and migrate, print permission allowlist |
 | `/debate:acpx-setup` | Interactive reviewer configuration: pick agents, set up OpenRouter models, probe connectivity |
 | `/debate:all [reviewers] [skip-debate]` | Run all (or specific) reviewers in parallel, synthesize, debate, iterate up to 3 rounds |
-| `/debate:opus-review` | Iterative Opus review loop — team mode (real conversation history) if available, subagent fallback otherwise. Up to 5 rounds. |
+| `/debate:claude-review` | Claude review — single Skeptic by default, Opus model. Up to 5 rounds. |
+| `/debate:claude-double-review` | Two Claude reviewers (Skeptic + Architect) in parallel. |
+| `/debate:claude-custom-review` | Interactive picker — choose personalities and model (opus/sonnet). |
 
 ### `/debate:all` options
 

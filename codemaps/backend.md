@@ -6,7 +6,9 @@ _Updated: 2026-03-17_
 | File | Slash Command | Purpose |
 |------|--------------|---------|
 | `all.md` | `/debate:all [reviewers] [skip-debate]` | Master: parallel review + synthesis + debate (up to 3 rounds) via acpx |
-| `opus-review.md` | `/debate:opus-review` | Iterative Opus loop (up to 5 rounds) — TeamCreate+SendMessage when available, Task subagent fallback |
+| `claude-review.md` | `/debate:claude-review` | Consolidated Claude review — 5 personalities, opus/sonnet model, Agent context fork |
+| `claude-double-review.md` | `/debate:claude-double-review` | Shortcut: Skeptic + Architect |
+| `claude-custom-review.md` | `/debate:claude-custom-review` | Shortcut: interactive personality + model picker |
 | `acpx-setup.md` | `/debate:acpx-setup` | Config setup: create/validate `~/.claude/debate-acpx.json`, probe agents |
 | `setup.md` | `/debate:setup` | Prerequisite check + stable symlink creation + settings snippet |
 

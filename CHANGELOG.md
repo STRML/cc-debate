@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.1.0] — 2026-04-06
+
+### Changed
+
+- **Consolidated Claude review commands** — replaced `/debate:opus-review` with `/debate:claude-review` (single Skeptic, Opus default), `/debate:claude-double-review` (Skeptic + Architect), and `/debate:claude-custom-review` (interactive personality + model picker). All use Agent tool (context fork) instead of Team mode — more token-efficient, simpler lifecycle.
+- **Model selection** — Claude review commands now support `--model sonnet` for faster/cheaper iteration alongside the default Opus.
+- **Five reviewer personalities** — Skeptic, Architect, Pentester, Operator, Simplifier.
+- **`/debate:all` now includes Claude subagent** — runs an Opus Skeptic Agent in parallel with acpx external reviewers for synthesis.
+
+---
+
 ## [2.0.6] — 2026-03-31
 
 ### Fixed

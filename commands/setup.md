@@ -197,7 +197,7 @@ Print the complete list of Bash tool patterns needed for fully unattended operat
 ```text
 ### Permission Allowlist
 
-To run /debate:all and /debate:opus-review without any approval prompts,
+To run /debate:all and /debate:claude-review without any approval prompts,
 add the following to ~/.claude/settings.json:
 ```
 
@@ -238,7 +238,9 @@ that session. Adding to settings.json makes approval permanent across all sessio
 You are ready to run:
   /debate:all            — parallel review with synthesis and debate
   /debate:all codex      — single-reviewer via acpx
-  /debate:opus-review    — iterative Opus review (The Skeptic)
+  /debate:claude-review  — Claude review (default: Skeptic, Opus)
+  /debate:claude-double-review — two reviewers (Skeptic + Architect)
+  /debate:claude-custom-review — interactive personality + model picker
   /debate:acpx-setup     — configure reviewers
 ```
 
