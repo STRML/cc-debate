@@ -13,8 +13,14 @@
 REVIEW_ID=$(uuidgen | tr '[:upper:]' '[:lower:]' | head -c 8)
 
 # Use .tmp/ inside the project directory — avoids permission prompts for
-# writing to .claude/ ("editing own settings") or /tmp paths.
-WORK_DIR="${PWD}/.tmp/ai-review-${REVIEW_ID}"
+# writing to .claude/ ("editing own settings") or /tmp paths. Prefer the git
+# toplevel so WORK_DIR is stable regardless of which subdir the user invokes
+# from; falls back to PWD when not in a git repo.
+if GIT_TOP=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$GIT_TOP" ]; then
+  WORK_DIR="${GIT_TOP}/.tmp/ai-review-${REVIEW_ID}"
+else
+  WORK_DIR="${PWD}/.tmp/ai-review-${REVIEW_ID}"
+fi
 
 mkdir -p "$WORK_DIR" || { echo "ERROR: failed to create $WORK_DIR" >&2; exit 1; }
 

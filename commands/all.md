@@ -1,11 +1,11 @@
 ---
 description: Run ALL configured AI reviewers in parallel via acpx, synthesize feedback, debate contradictions, and produce a consensus verdict. Configure reviewers in ~/.claude/debate-acpx.json.
-allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
+allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/record-round.sh:*), Bash(bash ~/.claude/debate-scripts/safe-cleanup.sh:*), Bash(sha256sum:*), Bash(shasum:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
 ---
 
 # AI Multi-Model Plan Review (acpx)
 
-Run all configured AI reviewers in parallel via acpx, synthesize their feedback, debate contradictions, and produce a final consensus verdict. Max 3 total revision rounds.
+Run all configured AI reviewers in parallel via acpx, synthesize their feedback, debate contradictions, and produce a final consensus verdict. Max 3 total **revision** rounds (verification passes — re-reviewing a post-fix plan with no further revisions — do NOT count against this budget; see Step 6.5).
 
 Arguments:
 - First arg: optional comma-separated reviewer names (e.g. `codex,gemini`). Defaults to all from config.
@@ -115,7 +115,7 @@ Agent:
 
 ### Cleanup
 
-If the run fails or the user interrupts, always run `rm -rf <WORK_DIR>` before stopping.
+If the run fails or the user interrupts, run `bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>"` before stopping. If it refuses (SHA mismatch from a prior approved round), pass `--force` only if you intend to abandon the verification — e.g., the user is killing the review.
 
 ### Check results
 
@@ -198,6 +198,16 @@ Extract each verdict. Determine overall:
 - Any REVISE → continue to Step 5
 - Only 1 reviewer succeeded → skip debate, use that verdict as final
 
+### Record the round verdict
+
+Once you have the round-level verdict, log it. This binds the verdict to the SHA of the plan reviewers actually saw, so Step 6 can detect any post-review edits and Step 9 can refuse cleanup if the plan drifted past the last APPROVED state.
+
+```bash
+bash "<SCRIPT_DIR>/record-round.sh" "<WORK_DIR>" <ROUND_NUM> <VERDICT>
+```
+
+`<VERDICT>` must be one of `APPROVED`, `REVISE`, `SPLIT`, `UNDECIDED`.
+
 ---
 
 ## Step 5: Targeted Debate (unless `skip-debate` was passed or fewer than 2 reviewers succeeded)
@@ -244,6 +254,21 @@ After each debate exchange, delete the prompt file: `rm -f <WORK_DIR>/<name>-pro
 
 ## Step 6: Final Report
 
+### 6a. SHA self-check (CRITICAL — runs before any APPROVED claim)
+
+Before composing the final report, confirm that the plan.md you are about to call APPROVED is the same plan.md the reviewers actually saw. If you applied any Edit/Write to plan.md after the last reviewer round (e.g., a "surgical fix" in response to a Step 5 debate finding), the reviewers have NOT seen that change.
+
+```bash
+sha256sum "<WORK_DIR>/plan.md" | cut -d' ' -f1   # or shasum -a 256 on macOS
+cat "<WORK_DIR>/round-active-plan-sha.txt"
+```
+
+Compare. If they differ, **you MUST run Step 6.5 before reporting APPROVED.** Do not let your own analysis ("I made the fix correctly") substitute for an external reviewer confirming it. That substitution is the exact failure mode this gate exists to prevent.
+
+If you are tempted to write "I applied the fix and it resolves the concern" without running Step 6.5: stop. That sentence is the trap. Run the verification pass.
+
+### 6b. Compose the report
+
 ```text
 ---
 ## acpx Review — Final Report (Round N of 3)
@@ -257,13 +282,58 @@ After each debate exchange, delete the prompt file: `rm -f <WORK_DIR>/<name>-pro
 ### Claude's Recommendation
 [Synthesis: highest-priority concern, is the plan ready?]
 
+### Final-state verification
+[Cite the round whose plan SHA matches the current plan.md SHA. If a Step 6.5
+verification pass was needed, cite it here too.]
+
 ### Overall VERDICT
-VERDICT: APPROVED — All reviewers approved the plan.
+VERDICT: APPROVED — All reviewers approved the plan (final-state SHA verified).
    OR
 VERDICT: REVISE — [Reviewer(s)] identified concerns that should be addressed.
    OR
 VERDICT: SPLIT — Reviewers disagree. [Summary]. Claude recommends: [proceed/revise].
 ```
+
+---
+
+## Step 6.5: Verification Pass (mandatory if plan SHA changed since last reviewer round)
+
+This pass exists to catch the highest-leverage failure mode: the orchestrator applies a fix in response to reviewer feedback, then claims APPROVED based on its own analysis without re-running any reviewer. **A verification pass does NOT count against the 3-round revision budget** — it is re-reviewing the same logical plan with a fix applied, not a new revision cycle.
+
+Triggers:
+- Step 6a SHA self-check shows `round-active-plan-sha.txt` (or the most recent `rounds.jsonl` SHA) differs from current `plan.md`.
+- You applied any Edit/Write to `plan.md` after Step 5 (debate) without re-running reviewers.
+
+How to run:
+
+1. Write a focused verification prompt for each reviewer that flagged the issue you fixed (or all reviewers if the change is broad). Use the lightest-cost reviewer when one will do — this is verification, not full re-review.
+   ```bash
+   cat > <WORK_DIR>/<name>-prompt.txt << 'VERIFY_EOF'
+   The plan was edited after your previous review to address: [one-line summary].
+
+   Specifically: [diff summary or the changed lines].
+
+   Updated plan:
+   [content of plan.md]
+
+   Confirm: does this edit fully resolve your concern without introducing
+   regressions? End with VERDICT: APPROVED or VERDICT: REVISE.
+   VERIFY_EOF
+   ```
+2. Re-invoke the runner (parallel) or `invoke-acpx.sh` directly (single reviewer):
+   ```bash
+   bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
+   ```
+3. Read each reviewer's full updated output (Read tool, not grep).
+4. Record the verification round:
+   ```bash
+   bash "<SCRIPT_DIR>/record-round.sh" "<WORK_DIR>" <ROUND_NUM> <VERDICT>
+   ```
+   Use the same round counter you were on (or `<ROUND_NUM>.v` if your skill state tracks integers — `record-round.sh` accepts integers only, so increment by 1 and note in the report that this round was verification-only).
+
+   Note: `record-round.sh` validates the round is an integer. If you want to mark this as a verification pass without burning a revision-budget slot, use `<previous_round>+1` for the integer arg and **do not** treat it as Round N+1 of the 3-round budget — verification passes are unbounded.
+5. If verification returns REVISE, drop back into Step 7 (revision loop) — but the underlying budget counter does not advance.
+6. If verification returns APPROVED, return to Step 6 with the new SHA recorded as the latest approved state.
 
 ---
 
@@ -329,9 +399,17 @@ Review complete.
 
 ## Step 9: Cleanup
 
+Use `safe-cleanup.sh` instead of raw `rm -rf`. It refuses to delete the work dir if `plan.md` was modified after the last APPROVED reviewer pass — the artifacts you would need to verify the post-fix plan must not be wiped before that verification happens.
+
 ```bash
-rm -rf <WORK_DIR>
+bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>"
 ```
+
+If safe-cleanup refuses with a SHA-mismatch message:
+
+1. **Do not** rerun with `--force` reflexively. The mismatch means the plan was edited after the last APPROVED round and Step 6.5 (verification pass) was skipped.
+2. Run Step 6.5 now. If verification returns APPROVED, re-run cleanup; the new SHA will match.
+3. Only use `bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>" --force` if the user has explicitly directed you to skip verification (e.g., they're aborting the review and want the work dir gone).
 
 ---
 
@@ -347,5 +425,7 @@ rm -rf <WORK_DIR>
 - **Graceful degradation:** If a reviewer fails, skip it in synthesis. If all fail, return UNDECIDED.
 - **Debate guard:** Skip debate if fewer than 2 reviewers succeeded.
 - **Read fully, never grep-skim.** You MUST read each reviewer's complete output with the Read tool. Never use `grep -A`, `grep -iE`, or keyword extraction to summarize reviews — this reliably misses 50%+ of findings. If you catch yourself reaching for grep on reviewer output, stop and use Read instead.
+- **Don't substitute self-analysis for review.** If you Edit/Write `plan.md` after the last reviewer round, you MUST run Step 6.5 (verification pass) before claiming APPROVED. Phrases like "I applied the fix and it resolves the concern" are the exact failure mode the SHA self-check exists to prevent. Verification passes are unbounded — they don't burn revision-budget rounds. Use them.
+- **SHA-gated cleanup.** Step 9 uses `safe-cleanup.sh`, not `rm -rf`. If it refuses, the plan drifted past the last APPROVED state — that's your signal to verify, not to add `--force`.
 - **Revision discipline:** Make real improvements, not cosmetic changes.
 - **User control:** If a revision would contradict the user's explicit requirements, skip it and note it.

@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.2.0] — 2026-05-07
+
+### Added
+
+- **SHA-gated cleanup** (`scripts/safe-cleanup.sh`) — refuses to remove `<WORK_DIR>` if `plan.md` was modified after the last APPROVED reviewer pass. Prevents the failure mode where the orchestrator applies a fix in response to reviewer feedback, claims APPROVED based on its own analysis without re-running reviewers, then wipes the artifacts that would let it notice the gap. Override with `--force` only when explicitly abandoning verification.
+- **Round verdict log** (`scripts/record-round.sh`) — appends `{round, sha, verdict, timestamp}` to `<WORK_DIR>/rounds.jsonl` and writes `last-approved-sha.txt` whenever a round closes APPROVED. The /debate:all skill now calls this after each round's verdict is determined.
+- **Verification pass (Step 6.5 of /debate:all)** — mandatory re-review when `plan.md` SHA differs from the last reviewer round's SHA. Verification passes are explicitly **off-budget** — they don't burn revision-loop slots, since they're re-reviewing the same logical plan with a fix applied, not iterating on a new revision.
+- **SHA self-check (Step 6a of /debate:all)** — orchestrator must compare current `plan.md` SHA against `round-active-plan-sha.txt` before claiming APPROVED.
+- Tests for `safe-cleanup.sh` and `record-round.sh` (`tests/test-cleanup-and-record.sh`, 10 cases).
+
+### Changed
+
+- **Stable `WORK_DIR` resolution** — `debate-setup.sh` and `run-parallel-acpx.sh` now resolve `WORK_DIR` via `git rev-parse --show-toplevel` (fallback: `PWD`). Removes the cwd footgun where invoking the runner from a subdirectory produced a silent `plan.md not found` no-op.
+- **Loud failure on missing `plan.md`** — `run-parallel-acpx.sh` now prints `pwd`, `realpath`, and a hint to its stderr when `plan.md` is missing, instead of a single easy-to-miss line.
+- `WORK_DIR_OVERRIDE` env var on the runner accepts an absolute path as an escape hatch for non-standard layouts.
+
+### Why
+
+The 2.1.x synthesis loop had a quiet substitution failure: when a reviewer flagged a contradiction in the final round, the orchestrator could apply a surgical Edit, reason "this resolves the concern," and write APPROVED — without running any reviewer on the post-fix plan. Step 9 then unconditionally `rm -rf`'d the artifacts. The SHA-gated cleanup makes that substitution structurally impossible to commit silently, and the off-budget verification pass gives the orchestrator the right escape hatch.
+
+---
+
 ## [2.1.0] — 2026-04-06
 
 ### Changed

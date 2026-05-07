@@ -22,7 +22,18 @@ if ! [[ "$REVIEW_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   exit 1
 fi
 
-WORK_DIR=".tmp/ai-review-${REVIEW_ID}"
+# Resolve WORK_DIR. Prefer the git repo root so the path is stable regardless
+# of which subdir the user invokes from — the original `${PWD}/.tmp/...` form
+# silently no-ops when the user invokes from a different directory than the
+# one where debate-setup.sh wrote plan.md. Falls back to PWD-relative outside
+# a git repo (preserves test compatibility — tests use mktemp -d).
+if [ -n "${WORK_DIR_OVERRIDE:-}" ]; then
+  WORK_DIR="$WORK_DIR_OVERRIDE"
+elif GIT_TOP=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$GIT_TOP" ]; then
+  WORK_DIR="${GIT_TOP}/.tmp/ai-review-${REVIEW_ID}"
+else
+  WORK_DIR=".tmp/ai-review-${REVIEW_ID}"
+fi
 
 # Note: $() triggers permission prompts in Claude Code, but this script runs
 # via nohup/disown outside the sandbox, so it's fine here.
@@ -31,8 +42,24 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$WORK_DIR" || { echo "Failed to create $WORK_DIR" >&2; exit 1; }
 
 if [ ! -f "$WORK_DIR/plan.md" ]; then
-  echo "[debate] plan.md not found in $WORK_DIR — nothing to review" >&2
+  echo "[debate] FATAL: plan.md not found in $WORK_DIR — nothing to review" >&2
+  echo "  pwd:        $(pwd)" >&2
+  if command -v realpath >/dev/null 2>&1; then
+    echo "  resolved:   $(realpath "$WORK_DIR" 2>/dev/null || echo "(unresolvable)")" >&2
+  fi
+  echo "  hint:       run from the project root (the dir where debate-setup.sh wrote plan.md)" >&2
+  echo "  hint:       or set WORK_DIR_OVERRIDE=<absolute path> if you know the right work dir" >&2
   exit 1
+fi
+
+# Record the SHA of the plan reviewers are about to see. The orchestrator
+# (the /debate:all skill) then calls record-round.sh after determining the
+# round verdict; the SHA there must match this one or someone edited plan.md
+# mid-round.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "$WORK_DIR/plan.md" | cut -d' ' -f1 > "$WORK_DIR/round-active-plan-sha.txt"
+elif command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 "$WORK_DIR/plan.md" | cut -d' ' -f1 > "$WORK_DIR/round-active-plan-sha.txt"
 fi
 
 if [ ! -f "$CONFIG_FILE" ]; then
