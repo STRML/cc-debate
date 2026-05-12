@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.2.2] — 2026-05-12
+
+### Changed
+
+- **`/debate:setup` and `/debate:acpx-setup` now patch `~/.claude/settings.json` directly** instead of printing a snippet for the user to copy. Previous behavior: print the required allowlist and hope the user merged it. Actual behavior in practice: users (and Claude itself in subsequent sessions) assumed the entries were applied because the setup command emitted them, then `/debate:all` silently failed with exit 144 on the next run. The setup commands now Read `~/.claude/settings.json`, diff against the required entries, back up to `~/.claude/settings.json.bak-debate-setup`, Edit-in-place to add only the missing ones, and re-validate with `jq empty` (restoring from backup on parse failure). Output now reports what was added vs already present rather than emitting a JSON blob.
+
+---
+
 ## [2.2.1] — 2026-05-12
 
 ### Fixed

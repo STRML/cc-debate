@@ -1,6 +1,6 @@
 ---
 description: Check debate plugin prerequisites, verify acpx is installed, and print the exact settings.json snippet for fully unattended (no-prompt) operation.
-allowed-tools: Bash(which acpx:*), Bash(which npx:*), Bash(which jq:*), Bash(bash ~/.claude/plugins/cache/cc-debate/debate/*/scripts/create-links.sh:*), Bash(ls:*), Bash(cat:*), Write(~/.claude/debate-acpx.json)
+allowed-tools: Bash(which acpx:*), Bash(which npx:*), Bash(which jq:*), Bash(bash ~/.claude/plugins/cache/cc-debate/debate/*/scripts/create-links.sh:*), Bash(ls:*), Bash(cat:*), Bash(jq:*), Bash(cp:*), Write(~/.claude/debate-acpx.json), Read(~/.claude/settings.json), Edit(~/.claude/settings.json), Write(~/.claude/settings.json)
 ---
 
 # debate — Setup & Permission Check
@@ -190,50 +190,110 @@ Report:
 
 Note: Re-run `/debate:setup` after updating the plugin to refresh this symlink.
 
-## Step 7: Print permission allowlist
+## Step 7: Patch permission allowlist in ~/.claude/settings.json
 
-Print the complete list of Bash tool patterns needed for fully unattended operation (no approval prompts):
+**DO NOT just print the snippet and hope the user copies it. Actively patch
+`~/.claude/settings.json` to ensure the required entries are present.**
+Past sessions printed the JSON and assumed the user would merge it manually;
+they often didn't, and then `/debate:all` silently failed with exit 144 the
+next time it ran. The point of this step is to make that impossible.
+
+### 7a. Compute the required entries
+
+The full required allowlist for unattended `/debate:all` and `/debate:claude-review`:
+
+```
+Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*)
+Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*)
+Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*)
+Bash(which acpx:*)
+Bash(which jq:*)
+Read(.tmp/ai-review*)
+Edit(.tmp/ai-review*)
+Write(.tmp/ai-review*)
+Write(~/.acpx/**)
+Read(~/.acpx/**)
+Edit(~/.acpx/**)
+Bash(rm -rf .tmp/ai-review-:*)
+```
+
+### 7b. Read the current settings.json
+
+Use the Read tool on `~/.claude/settings.json`.
+
+- If the file doesn't exist, create it with `{"permissions":{"allow":[<all required entries>]}}` via Write and skip to 7d.
+- If it exists but is malformed JSON, STOP. Print the parse error, the snippet
+  the user needs to add manually, and exit Step 7 with a `⚠️` summary line.
+  Do not attempt to rewrite a file you can't parse.
+
+### 7c. Diff required vs. present
+
+Compute which required entries are missing from `.permissions.allow`. Use exact
+string match — `Write(~/.acpx/**)` does not satisfy `Write(/Users/<you>/.acpx/**)`
+and vice versa; allowlist matching is literal.
+
+If all required entries are already present:
 
 ```text
 ### Permission Allowlist
-
-To run /debate:all and /debate:claude-review without any approval prompts,
-add the following to ~/.claude/settings.json:
+  ✅ ~/.claude/settings.json already contains all required entries (N entries verified)
 ```
 
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*)",
-      "Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*)",
-      "Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*)",
-      "Bash(which acpx:*)",
-      "Bash(which jq:*)",
-      "Read(.tmp/ai-review*)",
-      "Edit(.tmp/ai-review*)",
-      "Write(.tmp/ai-review*)",
-      "Write(~/.acpx/**)",
-      "Read(~/.acpx/**)",
-      "Bash(rm -rf .tmp/ai-review-:*)"
-    ]
-  }
-}
-```
+Skip to Step 8.
+
+### 7d. Patch the file
+
+For each missing entry, append it to `.permissions.allow` using the Edit tool.
+Insert the new lines together as a group, immediately after an existing
+debate/acpx-related entry if one exists (e.g. after
+`"Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*)"`), otherwise at the
+end of the `allow` array. Preserve the rest of the file byte-for-byte —
+do not reformat unrelated keys, do not strip comments if a JSONC-style file
+has them, do not reorder existing entries.
+
+Before writing, run `jq empty ~/.claude/settings.json` (via Bash) on the
+*pre-patch* file to confirm it parses. After writing, re-run `jq empty` to
+confirm the patched file is still valid JSON. If the post-patch `jq` fails,
+restore from the backup (`cp ~/.claude/settings.json.bak-debate-setup
+~/.claude/settings.json`) and report the failure — do NOT leave the user
+with a broken settings file.
+
+The backup: before the first Edit, run
+`cp ~/.claude/settings.json ~/.claude/settings.json.bak-debate-setup` so
+there's a known-good fallback.
+
+### 7e. Report what changed
 
 ```text
-NOTE: These patterns are already declared in the allowed-tools frontmatter of
-each command, so each individual session will prompt once and remember within
-that session. Adding to settings.json makes approval permanent across all sessions.
-
-IMPORTANT: The Write(~/.acpx/**) entry is required. acpx writes queue lock files
-to ~/.acpx/queues/*.lock on every invocation. Without this allowlist entry, the
-Claude Code sandbox blocks the writes and reviewer subprocesses fail with
-exit code 144 — usually surfaced as "background command failed" with no useful
-error. This affects /debate:all runs because run-parallel-acpx.sh spawns acpx
-via nohup/disown, but the children still inherit sandbox restrictions on some
-Claude Code versions.
+### Permission Allowlist
+  ✅ Patched ~/.claude/settings.json
+     Added N entries:
+       + Write(~/.acpx/**)
+       + Read(~/.acpx/**)
+       + Edit(~/.acpx/**)
+     M entries already present, left untouched.
+     Backup: ~/.claude/settings.json.bak-debate-setup
 ```
+
+If any entry was added, also print:
+
+```text
+  ℹ️  Settings changes take effect on the next session start, not on
+     /reload-plugins. Start a new conversation (or run the failing /debate
+     command in this session and approve the one-off prompt) for unattended
+     operation.
+```
+
+### Why this is active rather than instructional
+
+acpx writes a per-job queue lock to `~/.acpx/queues/<id>.lock` on every
+invocation. Without `Write(~/.acpx/**)` in the settings allowlist, the
+Claude Code sandbox blocks the write and reviewer subprocesses exit 144.
+Because `run-parallel-acpx.sh` spawns reviewers via `nohup`/`disown`, the
+sandbox-blocked-write error never surfaces as an interactive permission
+prompt — `/debate:all` just reports "all reviewers failed" with no obvious
+cause. Printing the snippet and trusting the user to copy it is how this
+regression keeps recurring. Patch the file directly.
 
 ## Step 8: Print final status
 

@@ -1,6 +1,6 @@
 ---
 description: Check acpx CLI installation, validate debate-acpx.json config, probe each configured agent, and print permission allowlist for unattended operation.
-allowed-tools: Bash(bash ~/.claude/debate-scripts/acpx-env-snapshot.sh:*), Bash(which npx:*), Bash(acpx:*), Bash(npx acpx@latest:*), Bash(gemini:*), Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/create-litellm-agent.sh:*), Bash(ls:*), Bash(chmod:*), Bash(mkdir:*), Write(~/.claude/debate-acpx.json), Write(~/.acpx/*), Write(~/.opencode.json)
+allowed-tools: Bash(bash ~/.claude/debate-scripts/acpx-env-snapshot.sh:*), Bash(which npx:*), Bash(acpx:*), Bash(npx acpx@latest:*), Bash(gemini:*), Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/create-litellm-agent.sh:*), Bash(ls:*), Bash(chmod:*), Bash(mkdir:*), Bash(jq:*), Bash(cp:*), Write(~/.claude/debate-acpx.json), Write(~/.acpx/*), Write(~/.acpx/**), Read(~/.acpx/**), Edit(~/.acpx/**), Write(~/.opencode.json), Read(~/.claude/settings.json), Edit(~/.claude/settings.json), Write(~/.claude/settings.json)
 ---
 
 # debate — acpx Setup Check
@@ -297,37 +297,39 @@ For custom agents with no acpx session: try `$ACPX_CMD <agent> sessions ensure` 
 
 From the snapshot: `debate-scripts: symlinked` → ✅ ready; `not found` → ❌ run `/debate:setup`.
 
-## Step 5: Print permission allowlist
+## Step 5: Patch permission allowlist in ~/.claude/settings.json
 
-```text
-### Permission Allowlist
+**DO NOT just print the snippet.** Actively patch `~/.claude/settings.json`
+following the same procedure as `/debate:setup` Step 7 — read, diff, back up,
+Edit-in-place the missing entries, re-validate with `jq empty`. See Step 7
+of `/debate:setup` for the full procedure (backup file, JSON-parse guard,
+restore-on-failure path). Required entries for unattended `/debate:all`:
 
-To run /debate:all without approval prompts, add to ~/.claude/settings.json:
+```
+Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*)
+Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*)
+Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*)
+Bash(rm -rf .tmp/ai-review-:*)
+Read(.tmp/ai-review*)
+Edit(.tmp/ai-review*)
+Write(.tmp/ai-review*)
+Write(~/.acpx/**)
+Read(~/.acpx/**)
+Edit(~/.acpx/**)
 ```
 
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*)",
-      "Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*)",
-      "Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*)",
-      "Bash(rm -rf .tmp/ai-review-:*)",
-      "Read(.tmp/ai-review*)",
-      "Edit(.tmp/ai-review*)",
-      "Write(.tmp/ai-review*)",
-      "Write(~/.acpx/**)",
-      "Read(~/.acpx/**)"
-    ]
-  }
-}
-```
+Report what was added vs already present. If `~/.claude/settings.json` is
+malformed JSON, stop and surface the parse error — do not rewrite a file you
+can't parse.
 
-**The `~/.acpx/**` entries are mandatory.** acpx writes a queue lock to
-`~/.acpx/queues/<id>.lock` on every invocation. Without these allowlist
-entries, reviewer subprocesses exit 144 — and because they're spawned via
+**Why this is active rather than instructional:** acpx writes per-job queue
+locks to `~/.acpx/queues/<id>.lock` on every invocation. Without
+`Write(~/.acpx/**)` in the settings allowlist, the Claude Code sandbox blocks
+those writes and reviewer subprocesses exit 144. Because they're spawned via
 `nohup`/`disown`, the sandbox-blocked-write error never surfaces as a prompt;
 `/debate:all` just reports "all reviewers failed" with no obvious cause.
+Printing the snippet and trusting the user to copy it is how this regression
+keeps recurring.
 
 ## Step 6: Print summary
 
