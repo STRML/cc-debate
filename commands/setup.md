@@ -213,6 +213,8 @@ add the following to ~/.claude/settings.json:
       "Read(.tmp/ai-review*)",
       "Edit(.tmp/ai-review*)",
       "Write(.tmp/ai-review*)",
+      "Write(~/.acpx/**)",
+      "Read(~/.acpx/**)",
       "Bash(rm -rf .tmp/ai-review-:*)"
     ]
   }
@@ -223,6 +225,14 @@ add the following to ~/.claude/settings.json:
 NOTE: These patterns are already declared in the allowed-tools frontmatter of
 each command, so each individual session will prompt once and remember within
 that session. Adding to settings.json makes approval permanent across all sessions.
+
+IMPORTANT: The Write(~/.acpx/**) entry is required. acpx writes queue lock files
+to ~/.acpx/queues/*.lock on every invocation. Without this allowlist entry, the
+Claude Code sandbox blocks the writes and reviewer subprocesses fail with
+exit code 144 — usually surfaced as "background command failed" with no useful
+error. This affects /debate:all runs because run-parallel-acpx.sh spawns acpx
+via nohup/disown, but the children still inherit sandbox restrictions on some
+Claude Code versions.
 ```
 
 ## Step 8: Print final status

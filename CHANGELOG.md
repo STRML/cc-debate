@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.2.1] — 2026-05-12
+
+### Fixed
+
+- **Sandbox allowlist for `~/.acpx/`** — `/debate:setup` and `/debate:acpx-setup` now print `Write(~/.acpx/**)` and `Read(~/.acpx/**)` as required permission allowlist entries. Without them, acpx's per-job queue lock files at `~/.acpx/queues/*.lock` are blocked by the Claude Code sandbox and reviewer subprocesses exit 144. Because `run-parallel-acpx.sh` spawns reviewers via `nohup`/`disown`, the sandbox-blocked-write error never surfaces as a permission prompt — `/debate:all` just reports "all reviewers failed" with no obvious cause. The `/debate:all` command's `allowed-tools` frontmatter now also declares these paths.
+
+---
+
 ## [2.2.0] — 2026-05-07
 
 ### Added

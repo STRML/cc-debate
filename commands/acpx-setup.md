@@ -315,11 +315,19 @@ To run /debate:all without approval prompts, add to ~/.claude/settings.json:
       "Bash(rm -rf .tmp/ai-review-:*)",
       "Read(.tmp/ai-review*)",
       "Edit(.tmp/ai-review*)",
-      "Write(.tmp/ai-review*)"
+      "Write(.tmp/ai-review*)",
+      "Write(~/.acpx/**)",
+      "Read(~/.acpx/**)"
     ]
   }
 }
 ```
+
+**The `~/.acpx/**` entries are mandatory.** acpx writes a queue lock to
+`~/.acpx/queues/<id>.lock` on every invocation. Without these allowlist
+entries, reviewer subprocesses exit 144 — and because they're spawned via
+`nohup`/`disown`, the sandbox-blocked-write error never surfaces as a prompt;
+`/debate:all` just reports "all reviewers failed" with no obvious cause.
 
 ## Step 6: Print summary
 
