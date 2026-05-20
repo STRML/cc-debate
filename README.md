@@ -109,6 +109,8 @@ These have native Agent Client Protocol support. Install the CLI, and acpx handl
 > ```json
 > "env": { "GEMINI_API_KEY": "AIza..." }
 > ```
+>
+> **Antigravity CLI transition (June 18, 2026):** Google is migrating Google One and free-tier Gemini CLI users to the new [Antigravity CLI](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/). The `GEMINI_API_KEY` path used by this plugin is unaffected — AI Studio API keys bill against AI Studio quota, not Google One OAuth tiers, so the `gemini` reviewer continues to work. Paid Gemini Code Assist Standard/Enterprise users also keep the `gemini` CLI as-is. A dedicated `antigravity` reviewer will be added once [acpx](https://github.com/openclaw/acpx) ships native ACP support for it.
 
 > **Claude note:** Using `claude` as a reviewer means Claude reviewing its own plan — useful for a fresh-context skeptical read, but not truly independent. For independent perspectives, use non-Claude agents. `invoke-acpx.sh` automatically handles the nested-session guard (`CLAUDECODE`) required to run Claude as a subprocess.
 
