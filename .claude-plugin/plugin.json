@@ -1,6 +1,6 @@
 {
   "name": "debate",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "description": "Multi-model AI plan review: run any acpx-supported agent (Codex, Gemini, Kimi, Qwen, etc.) in parallel, synthesize feedback, debate contradictions",
   "author": {
     "name": "strml",

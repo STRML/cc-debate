@@ -115,7 +115,7 @@ Agent:
 
 ### Cleanup
 
-If the run fails or the user interrupts, run `bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>"` before stopping. If it refuses (SHA mismatch from a prior approved round), pass `--force` only if you intend to abandon the verification — e.g., the user is killing the review.
+If the run fails or the user interrupts, clean up before stopping. At this point there is no reviewed-and-saved final plan, so abandon the work dir with `bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>" --force`. (Without `--force` it will refuse — a prior APPROVED round may not match, and no `--saved` copy exists — which is correct: only `--force` should delete an unsaved plan.)
 
 ### Check results
 
@@ -383,7 +383,7 @@ Options:
 
 ---
 
-## Step 8: Present Final Plan
+## Step 8: Present & Persist Final Plan
 
 Read `<WORK_DIR>/plan.md` and display:
 
@@ -397,19 +397,31 @@ Read `<WORK_DIR>/plan.md` and display:
 Review complete.
 ```
 
+Then **persist the final plan to a durable location outside `<WORK_DIR>`** — the work dir is deleted in Step 9, so this is the only chance to save the reviewed plan. Write `<WORK_DIR>/plan.md` verbatim to a path that survives cleanup:
+
+- If the plan originated from a file in the project (e.g. a plan under `docs/.../plans/`), write it back there.
+- Otherwise default to `<repo-root>/plan-reviewed-<REVIEW_ID>.md`, or ask the user where they want it.
+
+Record the path you saved to as `<SAVED_PLAN>`. It must be byte-identical to `plan.md` — Step 9 verifies the SHA before deleting anything.
+
 ## Step 9: Cleanup
 
-Use `safe-cleanup.sh` instead of raw `rm -rf`. It refuses to delete the work dir if `plan.md` was modified after the last APPROVED reviewer pass — the artifacts you would need to verify the post-fix plan must not be wiped before that verification happens.
+Use `safe-cleanup.sh` instead of raw `rm -rf`. It enforces two gates before deleting the work dir:
+
+1. **APPROVED gate** — refuses if `plan.md` was modified after the last APPROVED reviewer pass, so the artifacts needed to verify a post-fix plan aren't wiped first.
+2. **SAVED gate** — refuses unless `--saved` points to a durable copy of `plan.md` with an identical SHA, so a successful review never ends with the only copy of the plan thrown away.
+
+Pass the `<SAVED_PLAN>` path from Step 8:
 
 ```bash
-bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>"
+bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>" --saved "<SAVED_PLAN>"
 ```
 
-If safe-cleanup refuses with a SHA-mismatch message:
+If safe-cleanup refuses:
 
-1. **Do not** rerun with `--force` reflexively. The mismatch means the plan was edited after the last APPROVED round and Step 6.5 (verification pass) was skipped.
-2. Run Step 6.5 now. If verification returns APPROVED, re-run cleanup; the new SHA will match.
-3. Only use `bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>" --force` if the user has explicitly directed you to skip verification (e.g., they're aborting the review and want the work dir gone).
+- **APPROVED-gate (SHA mismatch) message:** the plan was edited after the last APPROVED round and Step 6.5 (verification pass) was skipped. **Do not** rerun with `--force` reflexively. Run Step 6.5 now; if verification returns APPROVED, re-save the plan and re-run cleanup.
+- **SAVED-gate message** (no `--saved`, saved file not found, divergent SHA, or saved copy inside the work dir): you didn't durably persist the final plan. Complete Step 8 — write `plan.md` to a path outside `<WORK_DIR>` — then re-run with the correct `--saved` path.
+- Only use `bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>" --force` if the user has explicitly directed you to abandon the plan (e.g., aborting the review and wanting the work dir gone).
 
 ---
 
@@ -426,6 +438,6 @@ If safe-cleanup refuses with a SHA-mismatch message:
 - **Debate guard:** Skip debate if fewer than 2 reviewers succeeded.
 - **Read fully, never grep-skim.** You MUST read each reviewer's complete output with the Read tool. Never use `grep -A`, `grep -iE`, or keyword extraction to summarize reviews — this reliably misses 50%+ of findings. If you catch yourself reaching for grep on reviewer output, stop and use Read instead.
 - **Don't substitute self-analysis for review.** If you Edit/Write `plan.md` after the last reviewer round, you MUST run Step 6.5 (verification pass) before claiming APPROVED. Phrases like "I applied the fix and it resolves the concern" are the exact failure mode the SHA self-check exists to prevent. Verification passes are unbounded — they don't burn revision-budget rounds. Use them.
-- **SHA-gated cleanup.** Step 9 uses `safe-cleanup.sh`, not `rm -rf`. If it refuses, the plan drifted past the last APPROVED state — that's your signal to verify, not to add `--force`.
+- **SHA-gated cleanup.** Step 9 uses `safe-cleanup.sh`, not `rm -rf`. It refuses to delete the work dir unless (a) `plan.md` still matches the last APPROVED state and (b) `--saved` points to a durable, byte-identical copy of the plan. A refusal is your signal to verify or to save the plan — not to add `--force`. The work dir is the only copy of the final plan until Step 8 persists it.
 - **Revision discipline:** Make real improvements, not cosmetic changes.
 - **User control:** If a revision would contradict the user's explicit requirements, skip it and note it.

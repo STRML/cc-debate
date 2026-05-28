@@ -105,44 +105,60 @@ test_record_round_fails_without_plan() {
 
 # --- safe-cleanup.sh ---
 
+# Save a durable copy of plan.md outside the work dir and echo its path.
+save_copy() {
+  local d="$1"
+  local saved
+  saved=$(mktemp)
+  cat "$d/plan.md" > "$saved"
+  echo "$saved"
+}
+
 test_safe_cleanup_no_record_proceeds() {
-  local d
+  local d saved
   d=$(mktemp -d)
   echo "plan" > "$d/plan.md"
+  saved=$(save_copy "$d")
 
-  bash "$SAFE_CLEANUP" "$d"
+  bash "$SAFE_CLEANUP" "$d" --saved "$saved"
+  rm -f "$saved"
   [ ! -d "$d" ]
 }
 
 test_safe_cleanup_matching_sha_proceeds() {
-  local d
+  local d saved
   d=$(mktemp -d)
   echo "plan v1" > "$d/plan.md"
   bash "$RECORD_ROUND" "$d" 1 APPROVED >/dev/null
+  saved=$(save_copy "$d")
 
-  bash "$SAFE_CLEANUP" "$d"
+  bash "$SAFE_CLEANUP" "$d" --saved "$saved"
+  rm -f "$saved"
   [ ! -d "$d" ]
 }
 
 test_safe_cleanup_refuses_on_mismatch() {
-  local d
+  local d saved
   d=$(mktemp -d)
   echo "plan v1" > "$d/plan.md"
   bash "$RECORD_ROUND" "$d" 1 APPROVED >/dev/null
 
-  # Edit the plan after the approved round.
+  # Edit the plan after the approved round, then save a matching durable copy
+  # so the only failing gate is the APPROVED gate.
   echo "plan v2 (post-fix)" > "$d/plan.md"
+  saved=$(save_copy "$d")
 
   set +e
-  bash "$SAFE_CLEANUP" "$d" 2>/dev/null
+  bash "$SAFE_CLEANUP" "$d" --saved "$saved" 2>/dev/null
   local rc=$?
   set -e
 
-  [ "$rc" -eq 1 ] || { rm -rf "$d"; return 1; }
-  [ -d "$d" ] || { rm -rf "$d"; return 1; }   # work_dir survives
+  [ "$rc" -eq 1 ] || { rm -rf "$d"; rm -f "$saved"; return 1; }
+  [ -d "$d" ] || { rm -rf "$d"; rm -f "$saved"; return 1; }   # work_dir survives
 
   # --force overrides
   bash "$SAFE_CLEANUP" "$d" --force
+  rm -f "$saved"
   [ ! -d "$d" ]
 }
 
@@ -154,15 +170,96 @@ test_safe_cleanup_missing_dir_is_noop() {
 }
 
 test_safe_cleanup_revise_only_proceeds() {
-  # No round ever closed APPROVED → no last-approved-sha.txt → cleanup OK.
-  local d
+  # No round ever closed APPROVED → no last-approved-sha.txt → APPROVED gate OK.
+  local d saved
   d=$(mktemp -d)
   echo "plan" > "$d/plan.md"
   bash "$RECORD_ROUND" "$d" 1 REVISE >/dev/null
   bash "$RECORD_ROUND" "$d" 2 REVISE >/dev/null
+  saved=$(save_copy "$d")
 
-  bash "$SAFE_CLEANUP" "$d"
+  bash "$SAFE_CLEANUP" "$d" --saved "$saved"
+  rm -f "$saved"
   [ ! -d "$d" ]
+}
+
+test_safe_cleanup_refuses_without_saved() {
+  # A plan exists but no durable copy was provided → refuse, work_dir survives.
+  local d
+  d=$(mktemp -d)
+  echo "plan" > "$d/plan.md"
+
+  set +e
+  bash "$SAFE_CLEANUP" "$d" 2>/dev/null
+  local rc=$?
+  set -e
+
+  [ "$rc" -eq 1 ] || { rm -rf "$d"; return 1; }
+  [ -d "$d" ] || return 1
+
+  rm -rf "$d"
+}
+
+test_safe_cleanup_force_bypasses_missing_saved() {
+  local d
+  d=$(mktemp -d)
+  echo "plan" > "$d/plan.md"
+
+  bash "$SAFE_CLEANUP" "$d" --force
+  [ ! -d "$d" ]
+}
+
+test_safe_cleanup_refuses_saved_not_found() {
+  local d
+  d=$(mktemp -d)
+  echo "plan" > "$d/plan.md"
+
+  set +e
+  bash "$SAFE_CLEANUP" "$d" --saved "/nonexistent/path/plan.md" 2>/dev/null
+  local rc=$?
+  set -e
+
+  [ "$rc" -eq 1 ] || { rm -rf "$d"; return 1; }
+  [ -d "$d" ] || return 1
+
+  rm -rf "$d"
+}
+
+test_safe_cleanup_refuses_saved_mismatch() {
+  local d saved
+  d=$(mktemp -d)
+  echo "plan v1" > "$d/plan.md"
+  saved=$(mktemp)
+  echo "different content" > "$saved"
+
+  set +e
+  bash "$SAFE_CLEANUP" "$d" --saved "$saved" 2>/dev/null
+  local rc=$?
+  set -e
+
+  rm -f "$saved"
+  [ "$rc" -eq 1 ] || { rm -rf "$d"; return 1; }
+  [ -d "$d" ] || return 1
+
+  rm -rf "$d"
+}
+
+test_safe_cleanup_refuses_saved_inside_workdir() {
+  # The saved copy must be outside the work dir, or it gets deleted too.
+  local d
+  d=$(mktemp -d)
+  echo "plan" > "$d/plan.md"
+  cp "$d/plan.md" "$d/saved-plan.md"
+
+  set +e
+  bash "$SAFE_CLEANUP" "$d" --saved "$d/saved-plan.md" 2>/dev/null
+  local rc=$?
+  set -e
+
+  [ "$rc" -eq 1 ] || { rm -rf "$d"; return 1; }
+  [ -d "$d" ] || return 1
+
+  rm -rf "$d"
 }
 
 test_safe_cleanup_usage_error() {
@@ -170,6 +267,20 @@ test_safe_cleanup_usage_error() {
   bash "$SAFE_CLEANUP" 2>/dev/null
   local rc=$?
   set -e
+  [ "$rc" -eq 2 ]
+}
+
+test_safe_cleanup_saved_requires_path() {
+  local d
+  d=$(mktemp -d)
+  echo "plan" > "$d/plan.md"
+
+  set +e
+  bash "$SAFE_CLEANUP" "$d" --saved 2>/dev/null
+  local rc=$?
+  set -e
+
+  rm -rf "$d"
   [ "$rc" -eq 2 ]
 }
 
@@ -188,7 +299,13 @@ run_test "safe-cleanup proceeds when SHA matches"      test_safe_cleanup_matchin
 run_test "safe-cleanup refuses on SHA mismatch"        test_safe_cleanup_refuses_on_mismatch
 run_test "safe-cleanup is no-op if dir missing"        test_safe_cleanup_missing_dir_is_noop
 run_test "safe-cleanup proceeds on REVISE-only rounds" test_safe_cleanup_revise_only_proceeds
+run_test "safe-cleanup refuses without --saved"        test_safe_cleanup_refuses_without_saved
+run_test "safe-cleanup --force bypasses missing saved" test_safe_cleanup_force_bypasses_missing_saved
+run_test "safe-cleanup refuses when saved not found"   test_safe_cleanup_refuses_saved_not_found
+run_test "safe-cleanup refuses when saved mismatches"  test_safe_cleanup_refuses_saved_mismatch
+run_test "safe-cleanup refuses saved inside work_dir"  test_safe_cleanup_refuses_saved_inside_workdir
 run_test "safe-cleanup usage error on no args"         test_safe_cleanup_usage_error
+run_test "safe-cleanup --saved requires a path"        test_safe_cleanup_saved_requires_path
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

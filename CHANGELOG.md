@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.2.3] — 2026-05-28
+
+### Added
+
+- **SAVED gate in `scripts/safe-cleanup.sh`** — cleanup now refuses to delete `<WORK_DIR>` unless `--saved <path>` points to a durable copy of `plan.md` whose SHA matches byte-for-byte. The work dir is the only copy of the reviewed plan until it's persisted; previously a successful review could end with Step 9 deleting that single copy. The gate also rejects a `--saved` path that lives inside the work dir (it would be deleted too), a missing saved file, and a divergent copy. `--force` still bypasses both gates for deliberate abandonment. Argument parsing was reworked to accept `--saved` and `--force` in any order.
+- **Step 8 of `/debate:all` now persists the final plan** to a durable location outside `<WORK_DIR>` (back to its source file, or `plan-reviewed-<REVIEW_ID>.md`) before Step 9 cleans up, and passes that path to `safe-cleanup.sh --saved`.
+- Six new cases in `tests/test-cleanup-and-record.sh` covering the SAVED gate (refuses without `--saved`, `--force` bypass, saved-not-found, SHA mismatch, saved-inside-work-dir, `--saved` requires a path argument). Suite is now 16 cases.
+
+### Why
+
+The SHA-gated cleanup added in 2.2.0 stopped the orchestrator from wiping artifacts of an *unverified* plan, but nothing forced the *verified* plan to be saved before deletion. On a clean APPROVED run, Step 9 deleted `<WORK_DIR>/plan.md` — the only copy — leaving the user with a review verdict but no plan. The SAVED gate makes durable persistence a precondition for cleanup.
+
+---
+
 ## [2.2.2] — 2026-05-12
 
 ### Changed
