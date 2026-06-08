@@ -103,6 +103,7 @@ fi
 
 CONFIG_TIMEOUT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].timeout // empty' "$CONFIG_FILE")
 CONFIG_SYSTEM_PROMPT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].system_prompt // empty' "$CONFIG_FILE")
+CONFIG_MODEL=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].model // empty' "$CONFIG_FILE")
 
 # --- Nested Claude guard ---
 # When the agent is `claude`, Claude Code's nested-session guard (CLAUDECODE=1)
@@ -154,6 +155,8 @@ else
 
   {
     echo "$SYSTEM_PROMPT"
+    echo ""
+    echo "READ-ONLY REVIEW — HARD RULE: You are reviewing a plan, nothing more. Do NOT create, edit, write, move, rename, or delete any file, and do NOT run any command that mutates the filesystem or repository (no patches, no fixes applied in place). You have read-only access only. Output your review as text in your reply — that text is the entire deliverable. Any write attempt is denied by the sandbox and only wastes the round."
     echo ""
     echo "Review this implementation plan:"
     echo ""
@@ -242,7 +245,9 @@ if [ "$AGENT" = "gemini" ]; then
     GEMINI_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
   fi
   # -s: sandbox  -e "": disable extensions (faster startup)
-  GEMINI_CMD+=(gemini -s -e "")
+  # --approval-mode plan: read-only mode — gemini cannot write/edit any file
+  # while reviewing (the plan doc stays untouched).
+  GEMINI_CMD+=(gemini -s -e "" --approval-mode plan)
 
   set +e
   "${GEMINI_CMD[@]}" < "$PROMPT_FILE" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
@@ -253,7 +258,10 @@ if [ "$AGENT" = "gemini" ]; then
 fi
 
 # --- Opus: direct Claude CLI invocation ---
-# Uses `claude --print --model claude-opus-4-6` via stdin — bypasses acpx entirely.
+# Uses `claude --print --model <model>` via stdin — bypasses acpx entirely.
+# Model comes from the reviewer's config `.model`, defaulting to a CURRENT opus id.
+# (A stale id like claude-opus-4-6 makes --print return empty with exit 0 — a silent
+# review failure. Keep this default current, or set `.model` per reviewer in config.)
 # CLAUDECODE is already unset above so the nested-session guard doesn't block it.
 
 if [ "$AGENT" = "opus" ]; then
@@ -271,7 +279,8 @@ if [ "$AGENT" = "opus" ]; then
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
     OPUS_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
   fi
-  OPUS_CMD+=(claude --print --model claude-opus-4-6)
+  # --permission-mode plan: read-only mode — the reviewer cannot edit/write files.
+  OPUS_CMD+=(claude --print --permission-mode plan --model "${CONFIG_MODEL:-claude-opus-4-8}")
 
   set +e
   "${OPUS_CMD[@]}" < "$PROMPT_FILE" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
@@ -289,7 +298,12 @@ ACPX_CMD=()
 if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
   ACPX_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
 fi
-ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads "$AGENT" --file "$PROMPT_FILE")
+# Read-only enforcement: --approve-reads auto-approves read/search requests;
+# --non-interactive-permissions deny auto-denies any write/edit/exec the agent
+# requests (headless can't prompt, so it denies rather than hangs). This is the
+# hard guarantee that a reviewer (e.g. an over-eager external agent) cannot
+# modify the plan doc or any file in the repo while reviewing.
+ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-permissions deny "$AGENT" --file "$PROMPT_FILE")
 
 set +e
 "${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"

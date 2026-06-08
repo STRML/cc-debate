@@ -70,7 +70,7 @@ First check whether a plan exists in the current conversation context. If no pla
 
 Track a round counter starting at 1. Check `ROUND <= 3` before executing each round — if exceeded, go to the "max rounds reached" block in Step 7.
 
-Launch the acpx reviewers AND a Claude Opus subagent **in parallel** (same message, multiple tool calls):
+Launch the acpx reviewers AND a Claude Opus subagent **in parallel**. Issue **both** tool calls (2a and 2b) in a **single message**, and run **both in the background** (`run_in_background: true`). This is load-bearing: if you run the acpx Bash call as a blocking foreground call, you will not dispatch the opus Agent until the runner returns ~8 minutes later — the opus review then runs *serially after* acpx instead of alongside it, doubling wall-clock. Background both, then wait for both to finish (Step 2c).
 
 ### 2a. acpx reviewers (Bash)
 
@@ -78,7 +78,7 @@ Launch the acpx reviewers AND a Claude Opus subagent **in parallel** (same messa
 bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
 ```
 
-If a reviewer subset was specified, pass the comma-separated list as the third argument. Use `timeout: 480000` on the Bash call (the runner blocks until all reviewers complete or time out).
+If a reviewer subset was specified, pass the comma-separated list as the third argument. Run this Bash call with `run_in_background: true` (do **not** block on it) — the runner internally blocks until all reviewers complete or time out, and you'll get a task-completion notification when it exits. This keeps the call from serializing the opus subagent behind it.
 
 ### 2b. Claude Opus subagent (Agent)
 
@@ -112,6 +112,10 @@ Agent:
 ```
 
 **Rounds 2+:** Use SendMessage to the existing `claude-skeptic` agent with revision context (same pattern as claude-review skill).
+
+### 2c. Wait for both to finish
+
+Both 2a (the acpx runner) and 2b (the opus subagent) are now running in the background, concurrently. Wait for **both** to complete before proceeding — you'll receive a task-completion notification for the acpx runner and the agent result for opus. Do not read reviewer outputs until the acpx runner has signaled done (its exit files aren't all written until then). Once both have returned, continue to "Check results".
 
 ### Cleanup
 
@@ -218,6 +222,8 @@ For each contradiction, write a debate prompt to `<WORK_DIR>/<name>-prompt.txt`:
 
 ```bash
 cat > <WORK_DIR>/<name>-prompt.txt << 'DEBATE_EOF'
+READ-ONLY: Do not write, edit, or create any file — reply with text only.
+
 There is a disagreement on [topic].
 
 The other reviewer's position:
@@ -309,6 +315,8 @@ How to run:
 1. Write a focused verification prompt for each reviewer that flagged the issue you fixed (or all reviewers if the change is broad). Use the lightest-cost reviewer when one will do — this is verification, not full re-review.
    ```bash
    cat > <WORK_DIR>/<name>-prompt.txt << 'VERIFY_EOF'
+   READ-ONLY: Do not write, edit, or create any file — reply with text only.
+
    The plan was edited after your previous review to address: [one-line summary].
 
    Specifically: [diff summary or the changed lines].
@@ -355,6 +363,8 @@ How to run:
 5. For each reviewer, write a context-rich prompt for the next round:
    ```bash
    cat > <WORK_DIR>/<name>-prompt.txt << 'REVISION_EOF'
+   READ-ONLY: Do not write, edit, or create any file — reply with text only.
+
    The plan has been revised based on reviewer feedback.
 
    Changes made:
@@ -428,7 +438,8 @@ If safe-cleanup refuses:
 ## Rules
 
 - **acpx handles everything** — except `gemini`. Gemini CLI's ACP mode is broken (hangs at initialize). `invoke-acpx.sh` detects `agent: gemini` and falls back to direct CLI invocation (`gemini -s -e ""`), which works with both OAuth and API key auth.
-- **Parallel via bash + Agent.** `run-parallel-acpx.sh` runs external reviewers as background processes. A Claude Opus subagent runs in parallel via Agent with `run_in_background: true`. Both launch in the same tool-call message for true parallelism.
+- **Parallel via bash + Agent.** `run-parallel-acpx.sh` runs external reviewers as background processes. A Claude Opus subagent runs in parallel via Agent with `run_in_background: true`. **Both the Bash runner call and the opus Agent call must use `run_in_background: true` and be issued in the same tool-call message** — otherwise a blocking foreground runner serializes opus behind the full acpx wait (~8 min wasted). Step 2c waits for both.
+- **Reviewers are read-only.** Every reviewer is invoked with write access denied: acpx agents get `--approve-reads --non-interactive-permissions deny` (reads auto-approved, writes auto-denied), gemini gets `--approval-mode plan`, opus/claude gets `--permission-mode plan`, and each prompt carries an explicit read-only directive. A reviewer cannot edit `plan.md` or any repo file while reviewing — its review text is the only deliverable. Don't add write permissions to work around a reviewer that "wants to fix it inline."
 - **Debate via direct invoke.** Debate rounds call `invoke-acpx.sh` directly from the main agent (not subagents). Prompt files are picked up automatically.
 - **No session resume needed.** acpx manages sessions internally. Each round injects full context via prompt files.
 - **Config is king.** Adding a reviewer = adding an entry to `~/.claude/debate-acpx.json`.

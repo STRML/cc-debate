@@ -90,6 +90,39 @@ if [ ${#REVIEWERS[@]} -eq 0 ]; then
   exit 1
 fi
 
+# --- Sequential session warm-up (prevents the parallel-ensure race) ---
+# acpx stores sessions in a shared ~/.acpx index. Firing N reviewers at once means
+# N concurrent `acpx <agent> sessions ensure` calls racing on that index — writes get
+# lost and the immediately-following submit fails with "No acpx session found",
+# which the per-reviewer error mislabels as "not authenticated". Warming each
+# agent's session sequentially first (ensure is idempotent — it reuses an existing
+# session) makes the subsequent parallel submits all find their session.
+# Skipped when SKIP_SESSION_CHECK is set (tests / mock acpx), and for agents that
+# bypass acpx sessions entirely (gemini and opus use direct CLI invocation).
+if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
+  if command -v acpx >/dev/null 2>&1; then
+    WARM_ACPX=(acpx)
+  elif command -v npx >/dev/null 2>&1; then
+    WARM_ACPX=(npx acpx@latest)
+  else
+    WARM_ACPX=()
+  fi
+  if [ ${#WARM_ACPX[@]} -gt 0 ]; then
+    declare -A WARMED=()
+    for NAME in "${REVIEWERS[@]}"; do
+      [[ "$NAME" =~ ^[a-zA-Z0-9_-]+$ ]] || continue
+      AGENT=$(jq -r --arg name "$NAME" '.reviewers[$name].agent // empty' "$CONFIG_FILE")
+      [ -z "$AGENT" ] && continue
+      [ "$AGENT" = "gemini" ] || [ "$AGENT" = "opus" ] && continue
+      [ -n "${WARMED[$AGENT]:-}" ] && continue   # one ensure per distinct agent
+      WARMED[$AGENT]=1
+      echo "[debate] Warming acpx session for '$AGENT'..." >&2
+      "${WARM_ACPX[@]}" "$AGENT" sessions ensure >/dev/null 2>&1 \
+        || echo "[debate] Warm-up for '$AGENT' failed (agent may be unconfigured)." >&2
+    done
+  fi
+fi
+
 EXIT_FILES=()
 PIDS=()
 MAX_REVIEWER_TIMEOUT=0

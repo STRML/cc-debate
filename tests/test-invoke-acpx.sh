@@ -105,6 +105,10 @@ test_prompt_file_used_for_debate() {
   # The prompt file passed to acpx should be the debate prompt, not the generated one
   grep -q "test-reviewer-prompt.txt" "$log_file" || return 1
 
+  # acpx must be invoked read-only: reads auto-approved, writes auto-denied
+  grep -q "\-\-approve-reads" "$log_file" || return 1
+  grep -q "\-\-non-interactive-permissions deny" "$log_file" || return 1
+
   # Should NOT have generated an acpx-prompt file
   [ ! -f "$work_dir/test-reviewer-acpx-prompt.txt" ] || return 1
 
@@ -450,9 +454,10 @@ test_gemini_uses_direct_cli() {
   # Output should be from the gemini mock (default: "Mock gemini review. VERDICT: APPROVED")
   grep -q "Mock gemini review" "$work_dir/no-prompt-output.md" || return 1
 
-  # gemini mock was called
+  # gemini mock was called, in read-only plan mode
   [ -f "$gemini_log" ] || return 1
   grep -q "gemini" "$gemini_log" || return 1
+  grep -q "\-\-approval-mode plan" "$gemini_log" || return 1
 
   # acpx should NOT have been called for this reviewer
   ! grep -q "no-prompt" "$acpx_log" 2>/dev/null || return 1
@@ -482,8 +487,8 @@ test_gemini_skips_session_ensure() {
 }
 
 test_opus_uses_direct_cli() {
-  # When agent is "opus", invoke-acpx.sh should use claude --print --model claude-opus-4-6
-  # directly (not via acpx).
+  # When agent is "opus", invoke-acpx.sh should use claude --print --model claude-opus-4-8
+  # (the current default when config sets no model) directly, not via acpx.
   local work_dir config acpx_log claude_log
   work_dir=$(setup_work_dir)
   config=$(setup_config "$work_dir")
@@ -502,10 +507,11 @@ test_opus_uses_direct_cli() {
   # Output should be from claude mock (default: "Mock Claude Opus review. VERDICT: APPROVED")
   grep -q "Mock Claude Opus review" "$work_dir/opus-reviewer-output.md" || return 1
 
-  # claude mock was called with --print and --model flags
+  # claude mock was called with --print, --permission-mode plan (read-only), and --model
   [ -f "$claude_log" ] || return 1
   grep -q "\-\-print" "$claude_log" || return 1
-  grep -q "claude-opus-4-6" "$claude_log" || return 1
+  grep -q "\-\-permission-mode plan" "$claude_log" || return 1
+  grep -q "claude-opus-4-8" "$claude_log" || return 1
 
   # acpx should NOT have been called for this reviewer
   ! grep -q "opus-reviewer" "$acpx_log" 2>/dev/null || return 1

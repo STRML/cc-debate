@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.4] — 2026-06-07 (reviewer reliability + read-only)
+
+### Added
+
+- **Reviewers are now read-only.** Every reviewer is invoked with write access denied so it cannot edit `plan.md` or any repo file mid-review (an external agent once edited the design doc it was reviewing). acpx agents get `--approve-reads --non-interactive-permissions deny` (reads auto-approved, writes auto-denied because headless can't prompt); gemini gets `--approval-mode plan`; opus/claude gets `--permission-mode plan`. Every generated prompt — initial, debate, verify, revision — also carries an explicit READ-ONLY directive. New test assertions in `tests/test-invoke-acpx.sh` lock in all three flag paths.
+
+### Changed
+
+- **`/debate:all` Step 2 no longer serializes the opus subagent.** The acpx runner Bash call now runs with `run_in_background: true` alongside the opus Agent (also background), both issued in one message, with a new Step 2c that waits for both. Previously a blocking foreground runner meant opus didn't start until acpx returned (~8 min later), running serially and doubling wall-clock.
+- **Sequential acpx session warm-up** in `run-parallel-acpx.sh` — one idempotent `sessions ensure` per distinct agent before the parallel submits, eliminating the shared-`~/.acpx`-index race that surfaced as spurious "No acpx session found" / "not authenticated" failures.
+- **Opus reviewer model default** bumped to a current id (`claude-opus-4-8`) with per-reviewer `.model` config override; a stale id made `claude --print` return empty with exit 0 (a silent review failure).
+
 ## [2.2.3] — 2026-05-28
 
 ### Added
