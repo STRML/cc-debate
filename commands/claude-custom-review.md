@@ -1,6 +1,6 @@
 ---
 description: Interactive Claude review — choose personalities and model before review starts. Shortcut for claude-review in interactive mode.
-allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet)
+allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet), Read(~/.claude/debate-acpx.json)
 ---
 
 # Claude Custom Review

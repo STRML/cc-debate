@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.3.0] — 2026-06-09 (Fable + Opus skeptic pair)
+
+### Added
+
+- **Model-tuned skeptic pair.** The single Opus Skeptic in `/debate:all` and `/debate:claude-review` is now two parallel Claude subagents with prompts tuned to each model's measured strengths (from a Fable 5 vs Opus 4.8 panel comparison): the **Fable Skeptic** (`model: fable`) hunts behavioral failures — hang/blocking paths, consumer-side parser gaps — with an explicit "verify library behavior before asserting" rule and a deep-reasoning brief (Fable's accuracy scales with thinking effort); the **Opus Skeptic** (`model: opus`) works a bounded precision checklist — worst-case arithmetic with shown math, boundary conditions, file-by-file consistency sweeps, test-coverage gaps — and must label emergent-behavior claims HYPOTHESIS (Opus's boldest systemic claims were the ones refuted, and its effort scaling plateaus past medium). Convergent findings between the two are the strongest signal.
+- **`/debate:fable`** (alias **`/debate:mythos`**) and **`/debate:opus`** — single-skeptic shortcuts.
+- **Stored fable preference.** Fable costs ~2x Opus, so `/debate:setup` and `/debate:acpx-setup` now ask once whether to enable the Fable Skeptic and persist `"fable_reviewer": true|false` in `~/.claude/debate-acpx.json`. When `false`, default reviews fall back to a solo Opus Skeptic with the classic broad prompt. `/debate:fable` / `/debate:mythos` override the preference — invoking them by name is explicit consent.
+
+### Changed
+
+- `/debate:claude-double-review` is now skeptic pair + Architect.
+- The interactive picker in `/debate:claude-custom-review` lists 6 personalities; `--model` applies only to non-pinned personalities.
+
 ## [2.2.4] — 2026-06-07 (reviewer reliability + read-only)
 
 ### Added

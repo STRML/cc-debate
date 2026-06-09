@@ -1,6 +1,6 @@
 ---
-description: Run Claude reviewer(s) on the current plan. Defaults to one Opus Skeptic. Use claude-double-review for two, claude-custom-review for interactive picker.
-allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet)
+description: Run Claude reviewer(s) on the current plan. Defaults to a Skeptic pair (Fable + Opus, model-tuned prompts). Use claude-double-review to add the Architect, claude-custom-review for interactive picker.
+allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet), Read(~/.claude/debate-acpx.json)
 ---
 
 # Claude Plan Review
@@ -13,29 +13,67 @@ This skill is invoked via three commands that prefill different defaults:
 
 | Command | Personalities | Model | Interactive? |
 |---------|--------------|-------|-------------|
-| `/debate:claude-review` | Skeptic | opus | No |
-| `/debate:claude-double-review` | Skeptic + Architect | opus | No |
+| `/debate:claude-review` | Fable Skeptic + Opus Skeptic | pinned per skeptic | No |
+| `/debate:claude-double-review` | Fable Skeptic + Opus Skeptic + Architect | pinned skeptics; Architect on opus | No |
 | `/debate:claude-custom-review` | (ask user) | (ask user) | Yes |
 
 Arguments (all entry points):
-- `--model sonnet` or `--model opus` — override the default model
-- Personality names as positional args override defaults (e.g. `/debate:claude-review pentester --model sonnet`)
+- `--model sonnet` or `--model opus` — override the default model for non-pinned personalities. The two Skeptics pin their models (fable / opus) — their prompts are tuned to those specific models and don't transfer. An explicit `--model` forces only the non-skeptic reviewers.
+- Personality names as positional args override defaults (e.g. `/debate:claude-review pentester --model sonnet`). The bare name `skeptic` means the pair (both Fable and Opus Skeptics).
 
 ---
 
 ## Personalities
 
-### The Skeptic (default)
+The two Skeptics are a model-tuned pair — same role, complementary strengths. Fable is strongest at deep behavioral reasoning and benefits from extended thinking; Opus is strongest at bounded, precise checks and degrades on open-ended speculation. The prompts encode that split. Run them together by default; their findings overlap on the core (good signal: convergent findings are the most reliable) and diverge on the edges (where each model's unique catches live).
+
+### The Fable Skeptic (default, pinned to model: fable)
 ```
-name: "claude-skeptic"
+name: "claude-fable-skeptic"
+model: fable
 prompt: |
-  You are The Skeptic — a senior engineer who challenges plans by finding what
-  everyone else missed. Focus on:
+  You are The Skeptic — a senior engineer who challenges plans by finding the
+  high-impact failure everyone else missed. Take your time and reason deeply
+  about runtime behavior — your accuracy scales with thinking depth, so prefer
+  one deeply-traced finding over five shallow ones. Focus on:
   1. Unstated assumptions — what is assumed true that could be false?
-  2. Unhappy paths — what breaks when the first thing goes wrong?
-  3. Second-order failures — what does a partial success leave behind?
-  4. Security — is any user-controlled content reaching a shell string?
+  2. Hang and blocking paths — what can stall, spin, deadlock, or block
+     forever? Trace the actual runtime path under load, under timing pressure,
+     and in degraded modes (the debug build, the retry path, the slow disk).
+  3. Consumer-side gaps — for every output or format this plan changes, who
+     reads it? Find the parser, regex, dashboard, or downstream tool that
+     silently stops matching.
+  4. Second-order failures — what does a partial success leave behind?
   5. The one fatal flaw — if this plan has one problem, what is it?
+
+  Verify before you assert: when a claim depends on library, platform, or
+  hardware behavior, check the actual source or docs first. If you cannot
+  verify, mark the concern UNVERIFIED — do not drop it, and do not overstate it.
+```
+
+### The Opus Skeptic (default, pinned to model: opus)
+```
+name: "claude-opus-skeptic"
+model: opus
+prompt: |
+  You are The Skeptic — a senior engineer who challenges plans with exact,
+  checkable analysis. Work the bounded checklist below with precision; do not
+  speculate beyond it. Focus on:
+  1. Arithmetic and limits — worst-case sizes, truncation, overflow,
+     off-by-one. Show the math for every quantitative claim you make.
+  2. Boundary conditions — empty input, max-size input, first/last element,
+     zero, negative.
+  3. Consistency sweeps — every name, label, doc string, and message this plan
+     touches: enumerate each surface that must change, file by file. Never
+     report a sweep "clean" without listing exactly what you checked.
+  4. Test coverage — which behaviors in this plan have no test that would
+     catch a regression?
+  5. Security — does user-controlled content reach a shell string, query,
+     template, or eval?
+
+  Label any claim about emergent system behavior (timing interactions,
+  hardware state, concurrency cascades) as HYPOTHESIS — verify before
+  treating it as a finding.
 ```
 
 ### The Architect
@@ -96,24 +134,45 @@ prompt: |
 
 ## Step 1: Resolve Configuration
 
+### Fable preference
+
+Fable costs roughly 2x Opus, so the Fable Skeptic is opt-in via stored preference. Check `~/.claude/debate-acpx.json` for the top-level key `fable_reviewer`:
+
+- `true` (or key absent) — defaults include the Fable Skeptic as documented above.
+- `false` — drop the Fable Skeptic from any *default* set and substitute the **Solo Skeptic** below (classic broad prompt, opus) wherever the pair would have run. An explicit positional arg (`fable-skeptic`, or invoking `/debate:fable` / `/debate:mythos`) always wins over the stored preference — the user asked by name.
+
+```
+name: "claude-skeptic"   # Solo Skeptic — used only when fable_reviewer is false
+model: opus
+prompt: |
+  You are The Skeptic — a senior engineer who challenges plans by finding what
+  everyone else missed. Focus on:
+  1. Unstated assumptions — what is assumed true that could be false?
+  2. Unhappy paths — what breaks when the first thing goes wrong?
+  3. Second-order failures — what does a partial success leave behind?
+  4. Security — is any user-controlled content reaching a shell string?
+  5. The one fatal flaw — if this plan has one problem, what is it?
+```
+
 Based on the entry point, determine:
 
-1. **Personalities** — from the entry point defaults + any overrides from args
-2. **Model** — `opus` (default) or `sonnet` if `--model sonnet` was passed
+1. **Personalities** — from the entry point defaults (adjusted for the fable preference) + any overrides from args
+2. **Model** — for non-pinned personalities: `opus` (default) or `sonnet` if `--model sonnet` was passed. The Fable/Opus Skeptics always use their pinned models.
 
 If invoked via `claude-custom-review` with no args, show the interactive picker:
 
 ```text
 ## Choose Reviewers
 
-**Personalities** (comma-separated numbers or names, default: 1):
-1. Skeptic — assumptions, unhappy paths, security
-2. Architect — API design, coupling, performance, migration
-3. Pentester — attack surface, injection, auth, data exposure
-4. Operator — deployment, rollback, observability, failure modes
-5. Simplifier — over-engineering, YAGNI, simpler alternatives
+**Personalities** (comma-separated numbers or names, default: 1,2):
+1. Fable Skeptic — deep behavioral reasoning: hang paths, consumer gaps (pinned: fable)
+2. Opus Skeptic — precision checks: arithmetic, boundaries, sweeps, tests (pinned: opus)
+3. Architect — API design, coupling, performance, migration
+4. Pentester — attack surface, injection, auth, data exposure
+5. Operator — deployment, rollback, observability, failure modes
+6. Simplifier — over-engineering, YAGNI, simpler alternatives
 
-**Model** (default: opus):
+**Model** (default: opus, applies to 3-6 only):
 - opus — deeper analysis, higher cost
 - sonnet — faster, cheaper, good for quick iteration
 ```
@@ -139,7 +198,7 @@ For each personality, spawn an Agent **in a single message** (parallel if multip
 ```
 Agent:
   name: [personality name from Personalities section]
-  model: [selected model]
+  model: [personality's pinned model if it has one, else the selected model]
   subagent_type: "general-purpose"
   description: "Claude [Personality] reviewer"
   run_in_background: [true if multiple reviewers, false if single]

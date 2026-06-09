@@ -1,6 +1,6 @@
 ---
 description: Run ALL configured AI reviewers in parallel via acpx, synthesize feedback, debate contradictions, and produce a consensus verdict. Configure reviewers in ~/.claude/debate-acpx.json.
-allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/record-round.sh:*), Bash(bash ~/.claude/debate-scripts/safe-cleanup.sh:*), Bash(sha256sum:*), Bash(shasum:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Write(~/.acpx/**), Read(~/.acpx/**), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
+allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/record-round.sh:*), Bash(bash ~/.claude/debate-scripts/safe-cleanup.sh:*), Bash(sha256sum:*), Bash(shasum:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Write(~/.acpx/**), Read(~/.acpx/**), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
 ---
 
 # AI Multi-Model Plan Review (acpx)
@@ -70,7 +70,7 @@ First check whether a plan exists in the current conversation context. If no pla
 
 Track a round counter starting at 1. Check `ROUND <= 3` before executing each round — if exceeded, go to the "max rounds reached" block in Step 7.
 
-Launch the acpx reviewers AND a Claude Opus subagent **in parallel**. Issue **both** tool calls (2a and 2b) in a **single message**, and run **both in the background** (`run_in_background: true`). This is load-bearing: if you run the acpx Bash call as a blocking foreground call, you will not dispatch the opus Agent until the runner returns ~8 minutes later — the opus review then runs *serially after* acpx instead of alongside it, doubling wall-clock. Background both, then wait for both to finish (Step 2c).
+Launch the acpx reviewers AND the Claude skeptic subagent(s) **in parallel**. Issue **all** tool calls (2a and 2b) in a **single message**, and run **all in the background** (`run_in_background: true`). This is load-bearing: if you run the acpx Bash call as a blocking foreground call, you will not dispatch the skeptic Agents until the runner returns ~8 minutes later — the skeptic reviews then run *serially after* acpx instead of alongside it, doubling wall-clock. Background everything, then wait for all to finish (Step 2c).
 
 ### 2a. acpx reviewers (Bash)
 
@@ -78,27 +78,53 @@ Launch the acpx reviewers AND a Claude Opus subagent **in parallel**. Issue **bo
 bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
 ```
 
-If a reviewer subset was specified, pass the comma-separated list as the third argument. Run this Bash call with `run_in_background: true` (do **not** block on it) — the runner internally blocks until all reviewers complete or time out, and you'll get a task-completion notification when it exits. This keeps the call from serializing the opus subagent behind it.
+If a reviewer subset was specified, pass the comma-separated list as the third argument. Run this Bash call with `run_in_background: true` (do **not** block on it) — the runner internally blocks until all reviewers complete or time out, and you'll get a task-completion notification when it exits. This keeps the call from serializing the skeptic subagents behind it.
 
-### 2b. Claude Opus subagent (Agent)
+### 2b. Claude skeptic subagents (Agent)
 
-**Round 1:** Spawn a named agent. It forks context, so it already has the plan — do NOT re-send it.
+The Claude side of the panel is a model-tuned **skeptic pair**: a Fable Skeptic (deep behavioral reasoning — hang paths, consumer-side gaps) and an Opus Skeptic (precision checks — arithmetic, boundaries, consistency sweeps). Same role, complementary strengths; convergent findings between them are the most reliable signal.
+
+**Fable preference:** Fable costs roughly 2x Opus. Check the top-level `fable_reviewer` key in `~/.claude/debate-acpx.json` (already read in Step 1a). If it is `false`, spawn ONLY the Opus-based skeptic, using the name `claude-skeptic` and this classic prompt instead of the pair:
+
+```
+You are The Skeptic — a senior engineer who challenges plans by finding what
+everyone else missed. Focus on:
+1. Unstated assumptions — what is assumed true that could be false?
+2. Unhappy paths — what breaks when the first thing goes wrong?
+3. Second-order failures — what does a partial success leave behind?
+4. Security — is any user-controlled content reaching a shell string?
+5. The one fatal flaw — if this plan has one problem, what is it?
+```
+
+If `fable_reviewer` is `true` or absent, spawn both agents below.
+
+**Round 1:** Spawn the named agent(s) in the same message as 2a. They fork context, so they already have the plan — do NOT re-send it.
 
 ```
 Agent:
-  name: "claude-skeptic"
-  model: "opus"
+  name: "claude-fable-skeptic"
+  model: "fable"
   subagent_type: "general-purpose"
-  description: "Claude Opus skeptic reviewer"
+  description: "Claude Fable skeptic reviewer"
   run_in_background: true
   prompt: |
-    You are The Skeptic — a senior engineer who challenges plans by finding what
-    everyone else missed. Focus on:
+    You are The Skeptic — a senior engineer who challenges plans by finding the
+    high-impact failure everyone else missed. Take your time and reason deeply
+    about runtime behavior — your accuracy scales with thinking depth, so prefer
+    one deeply-traced finding over five shallow ones. Focus on:
     1. Unstated assumptions — what is assumed true that could be false?
-    2. Unhappy paths — what breaks when the first thing goes wrong?
-    3. Second-order failures — what does a partial success leave behind?
-    4. Security — is any user-controlled content reaching a shell string?
+    2. Hang and blocking paths — what can stall, spin, deadlock, or block
+       forever? Trace the actual runtime path under load, under timing pressure,
+       and in degraded modes (the debug build, the retry path, the slow disk).
+    3. Consumer-side gaps — for every output or format this plan changes, who
+       reads it? Find the parser, regex, dashboard, or downstream tool that
+       silently stops matching.
+    4. Second-order failures — what does a partial success leave behind?
     5. The one fatal flaw — if this plan has one problem, what is it?
+
+    Verify before you assert: when a claim depends on library, platform, or
+    hardware behavior, check the actual source or docs first. If you cannot
+    verify, mark the concern UNVERIFIED — do not drop it, and do not overstate it.
 
     Review the implementation plan in this conversation. The plan is already in
     your context — do not ask for it.
@@ -111,11 +137,49 @@ Agent:
       VERDICT: REVISE — concerns above should be addressed first
 ```
 
-**Rounds 2+:** Use SendMessage to the existing `claude-skeptic` agent with revision context (same pattern as claude-review skill).
+```
+Agent:
+  name: "claude-opus-skeptic"
+  model: "opus"
+  subagent_type: "general-purpose"
+  description: "Claude Opus skeptic reviewer"
+  run_in_background: true
+  prompt: |
+    You are The Skeptic — a senior engineer who challenges plans with exact,
+    checkable analysis. Work the bounded checklist below with precision; do not
+    speculate beyond it. Focus on:
+    1. Arithmetic and limits — worst-case sizes, truncation, overflow,
+       off-by-one. Show the math for every quantitative claim you make.
+    2. Boundary conditions — empty input, max-size input, first/last element,
+       zero, negative.
+    3. Consistency sweeps — every name, label, doc string, and message this
+       plan touches: enumerate each surface that must change, file by file.
+       Never report a sweep "clean" without listing exactly what you checked.
+    4. Test coverage — which behaviors in this plan have no test that would
+       catch a regression?
+    5. Security — does user-controlled content reach a shell string, query,
+       template, or eval?
+
+    Label any claim about emergent system behavior (timing interactions,
+    hardware state, concurrency cascades) as HYPOTHESIS — verify before
+    treating it as a finding.
+
+    Review the implementation plan in this conversation. The plan is already in
+    your context — do not ask for it.
+
+    Provide structured feedback with severity (CRITICAL / MAJOR / MINOR) for
+    each concern. Be specific, be direct, be constructive.
+
+    End your response with exactly one of:
+      VERDICT: APPROVED — plan is solid and ready to implement
+      VERDICT: REVISE — concerns above should be addressed first
+```
+
+**Rounds 2+:** Use SendMessage to each existing skeptic agent (`claude-fable-skeptic` and `claude-opus-skeptic`, or `claude-skeptic` when fable is disabled) with revision context, in the same message as the 2a re-run (same pattern as claude-review skill).
 
 ### 2c. Wait for both to finish
 
-Both 2a (the acpx runner) and 2b (the opus subagent) are now running in the background, concurrently. Wait for **both** to complete before proceeding — you'll receive a task-completion notification for the acpx runner and the agent result for opus. Do not read reviewer outputs until the acpx runner has signaled done (its exit files aren't all written until then). Once both have returned, continue to "Check results".
+2a (the acpx runner) and 2b (the skeptic subagents) are now running in the background, concurrently. Wait for **all** of them to complete before proceeding — you'll receive a task-completion notification for the acpx runner and an agent result per skeptic. Do not read reviewer outputs until the acpx runner has signaled done (its exit files aren't all written until then). Once everything has returned, continue to "Check results".
 
 ### Cleanup
 
@@ -160,14 +224,21 @@ For each completed acpx reviewer:
 [FULL content of <name>-output.md — do not truncate or summarize]
 ```
 
-For the Claude Opus subagent (its result is returned directly — no file to read):
+For each Claude skeptic subagent (results are returned directly — no file to read):
 
 ```text
 ---
-## Claude (Skeptic) Review — Round N
+## Claude Fable (Skeptic) Review — Round N
+
+[FULL agent response — do not truncate or summarize]
+
+---
+## Claude Opus (Skeptic) Review — Round N
 
 [FULL agent response — do not truncate or summarize]
 ```
+
+(When `fable_reviewer` is `false`, there is a single `## Claude (Skeptic) Review — Round N` section.)
 
 For failed/timed-out reviewers:
 ```text
@@ -438,7 +509,7 @@ If safe-cleanup refuses:
 ## Rules
 
 - **acpx handles everything** — except `gemini`. Gemini CLI's ACP mode is broken (hangs at initialize). `invoke-acpx.sh` detects `agent: gemini` and falls back to direct CLI invocation (`gemini -s -e ""`), which works with both OAuth and API key auth.
-- **Parallel via bash + Agent.** `run-parallel-acpx.sh` runs external reviewers as background processes. A Claude Opus subagent runs in parallel via Agent with `run_in_background: true`. **Both the Bash runner call and the opus Agent call must use `run_in_background: true` and be issued in the same tool-call message** — otherwise a blocking foreground runner serializes opus behind the full acpx wait (~8 min wasted). Step 2c waits for both.
+- **Parallel via bash + Agent.** `run-parallel-acpx.sh` runs external reviewers as background processes. The Claude skeptic subagents (Fable + Opus pair, or solo when `fable_reviewer` is false) run in parallel via Agent with `run_in_background: true`. **The Bash runner call and every skeptic Agent call must use `run_in_background: true` and be issued in the same tool-call message** — otherwise a blocking foreground runner serializes the skeptics behind the full acpx wait (~8 min wasted). Step 2c waits for all of them.
 - **Reviewers are read-only.** Every reviewer is invoked with write access denied: acpx agents get `--approve-reads --non-interactive-permissions deny` (reads auto-approved, writes auto-denied), gemini gets `--approval-mode plan`, opus/claude gets `--permission-mode plan`, and each prompt carries an explicit read-only directive. A reviewer cannot edit `plan.md` or any repo file while reviewing — its review text is the only deliverable. Don't add write permissions to work around a reviewer that "wants to fix it inline."
 - **Debate via direct invoke.** Debate rounds call `invoke-acpx.sh` directly from the main agent (not subagents). Prompt files are picked up automatically.
 - **No session resume needed.** acpx manages sessions internally. Each round injects full context via prompt files.

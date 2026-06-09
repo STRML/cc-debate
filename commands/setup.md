@@ -175,6 +175,27 @@ Read `~/.claude/debate-acpx.json`. Report:
   ```
 - File missing → suggest running `/debate:acpx-setup` to create it interactively
 
+### 5b. Fable reviewer preference
+
+The Claude skeptic side of `/debate:all` and `/debate:claude-review` defaults to a model-tuned pair: a Fable Skeptic (deep behavioral reasoning) + an Opus Skeptic (precision checks). Fable costs roughly **2x Opus**, so this is a stored opt-in.
+
+Check `~/.claude/debate-acpx.json` for the top-level `fable_reviewer` key:
+
+- Key present (`true` or `false`) → report it and move on:
+  ```text
+  Fable reviewer: ✅ enabled (skeptic pair: Fable + Opus)
+  ```
+  or
+  ```text
+  Fable reviewer: ⬜ disabled (solo Opus Skeptic) — re-run /debate:setup to change
+  ```
+- Key absent → ask the user with AskUserQuestion:
+  - **Question:** "Use a Fable 5 skeptic alongside the Opus skeptic? Fable finds more high-impact behavioral issues (hang paths, consumer-side gaps) but costs roughly 2x Opus per review."
+  - Options: "Yes — skeptic pair (Recommended)" / "No — Opus only"
+  - Then persist the answer: Read `~/.claude/debate-acpx.json`, add the top-level `"fable_reviewer": true` (or `false`) key, and Write the file back (the Write tool is allowlisted for this path — do not shell out to jq/mv). If the config file doesn't exist yet, note the preference and have `/debate:acpx-setup` write it when creating the file.
+
+The preference is read at review time by `/debate:all`, `/debate:claude-review`, and its shortcuts. `/debate:fable` and `/debate:mythos` always run Fable regardless — invoking them by name is explicit consent.
+
 ## Step 6: Create stable scripts symlink
 
 Create `~/.claude/debate-scripts` pointing to the installed version's scripts directory.
@@ -308,9 +329,11 @@ regression keeps recurring. Patch the file directly.
 You are ready to run:
   /debate:all            — parallel review with synthesis and debate
   /debate:all codex      — single-reviewer via acpx
-  /debate:claude-review  — Claude review (default: Skeptic, Opus)
-  /debate:claude-double-review — two reviewers (Skeptic + Architect)
+  /debate:claude-review  — Claude review (default: Fable + Opus skeptic pair)
+  /debate:claude-double-review — skeptic pair + Architect
   /debate:claude-custom-review — interactive personality + model picker
+  /debate:fable          — single Fable Skeptic (alias: /debate:mythos)
+  /debate:opus           — single Opus Skeptic
   /debate:acpx-setup     — configure reviewers
 ```
 

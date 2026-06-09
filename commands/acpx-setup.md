@@ -209,6 +209,8 @@ Write `~/.claude/debate-acpx.json` with all selected reviewers. For OpenRouter r
 }
 ```
 
+**Fable reviewer preference:** before writing the file, ask the user (AskUserQuestion) whether to enable the Fable Skeptic alongside the Opus Skeptic for the Claude side of reviews — Fable finds more high-impact behavioral issues but costs roughly **2x Opus** per review. Store the answer as a top-level `"fable_reviewer": true|false` key in the same file. If the file already has the key, keep it and skip the question.
+
 Built-in agents do not need `model_id`. OpenRouter agents (created via Step 2c) must have it set to the OpenRouter model ID (e.g., `inception/mercury-2`). LiteLLM agents (created via Step 2d) should set it to a descriptive string like `"deepseek-r1 via LiteLLM"` so the summary can display the underlying model.
 
 Set timeout to 240-300 for larger/slower agents, 120 for faster ones.

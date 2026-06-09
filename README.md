@@ -297,9 +297,13 @@ The value of multiple reviewers is getting genuinely different lenses. Some idea
 | `/debate:setup` | Check prerequisites, create `~/.claude/debate-scripts` symlink, detect v1.x configs and migrate, print permission allowlist |
 | `/debate:acpx-setup` | Interactive reviewer configuration: pick agents, set up OpenRouter models, probe connectivity |
 | `/debate:all [reviewers] [skip-debate]` | Run all (or specific) reviewers in parallel, synthesize, debate, iterate up to 3 rounds |
-| `/debate:claude-review` | Claude review — single Skeptic by default, Opus model. Up to 5 rounds. |
-| `/debate:claude-double-review` | Two Claude reviewers (Skeptic + Architect) in parallel. |
-| `/debate:claude-custom-review` | Interactive picker — choose personalities and model (opus/sonnet). |
+| `/debate:claude-review` | Claude review — model-tuned skeptic pair by default (Fable Skeptic + Opus Skeptic). Up to 5 rounds. |
+| `/debate:claude-double-review` | Skeptic pair + Architect in parallel. |
+| `/debate:claude-custom-review` | Interactive picker — choose personalities and model. |
+| `/debate:fable` | Single Fable Skeptic — deep behavioral reasoning (hang paths, consumer-side gaps). Alias: `/debate:mythos`. |
+| `/debate:opus` | Single Opus Skeptic — precision checks (arithmetic, boundaries, consistency sweeps, test coverage). |
+
+**The skeptic pair.** Fable 5 and Opus 4.8 fail differently: in panel comparisons, Fable's unique confirmed findings were behavioral (blocking/hang paths, consumer-side parser gaps) and it self-corrects by verifying library behavior; Opus wins on exact worst-case arithmetic, boundary nits, and labeling consistency, but its emergent-behavior claims get refuted more often. The two skeptic prompts are tuned to those strengths, and convergent findings between them are the strongest signal. Fable costs roughly **2x Opus**, so `/debate:setup` asks once whether to enable it and stores `"fable_reviewer": true|false` in `~/.claude/debate-acpx.json`; when disabled, reviews fall back to a solo Opus Skeptic. `/debate:fable` and `/debate:mythos` ignore the preference — invoking them by name is explicit consent.
 
 ### `/debate:all` options
 

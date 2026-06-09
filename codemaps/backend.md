@@ -6,9 +6,12 @@ _Updated: 2026-03-17_
 | File | Slash Command | Purpose |
 |------|--------------|---------|
 | `all.md` | `/debate:all [reviewers] [skip-debate]` | Master: parallel review + synthesis + debate (up to 3 rounds) via acpx |
-| `claude-review.md` | `/debate:claude-review` | Consolidated Claude review — 5 personalities, opus/sonnet model, Agent context fork |
-| `claude-double-review.md` | `/debate:claude-double-review` | Shortcut: Skeptic + Architect |
+| `claude-review.md` | `/debate:claude-review` | Consolidated Claude review — 6 personalities (Fable + Opus skeptic pair default), Agent context fork, `fable_reviewer` preference |
+| `claude-double-review.md` | `/debate:claude-double-review` | Shortcut: skeptic pair + Architect |
 | `claude-custom-review.md` | `/debate:claude-custom-review` | Shortcut: interactive personality + model picker |
+| `fable.md` | `/debate:fable` | Shortcut: single Fable Skeptic (ignores `fable_reviewer` preference) |
+| `mythos.md` | `/debate:mythos` | Alias for `/debate:fable` |
+| `opus.md` | `/debate:opus` | Shortcut: single Opus Skeptic |
 | `acpx-setup.md` | `/debate:acpx-setup` | Config setup: create/validate `~/.claude/debate-acpx.json`, probe agents |
 | `setup.md` | `/debate:setup` | Prerequisite check + stable symlink creation + settings snippet |
 
