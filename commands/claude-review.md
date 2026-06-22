@@ -159,6 +159,20 @@ Based on the entry point, determine:
 1. **Personalities** — from the entry point defaults (adjusted for the fable preference) + any overrides from args
 2. **Model** — for non-pinned personalities: `opus` (default) or `sonnet` if `--model sonnet` was passed. The Fable/Opus Skeptics always use their pinned models.
 
+### Fable availability probe
+
+If the Fable Skeptic is in the selected personalities (either by default with `fable_reviewer: true`, or by explicit positional arg / `/debate:fable` / `/debate:mythos`), probe fable before the parallel Agent spawn:
+
+```bash
+claude --model fable --print --output-format json 'ok' 2>&1
+```
+
+Interpret:
+- Exit 0 and non-empty result → fable is live, proceed normally.
+- Non-zero exit, or output contains `not available` / `unknown model` / `deactivated` / empty result → fable is deactivated for this account. Drop the Fable Skeptic and substitute the **Solo Skeptic** (defined above). Print a single line to the user: `Fable unavailable — substituting Solo Skeptic.` Do NOT spawn an Agent with `model: fable` afterward — a spawned-but-empty teammate is the failure mode we're avoiding.
+
+If the user invoked `/debate:fable` or `/debate:mythos` explicitly and fable is unavailable, abort with `Fable is deactivated. Use /debate:opus or /debate:claude-review instead.` rather than silently substituting — they asked for fable by name.
+
 If invoked via `claude-custom-review` with no args, show the interactive picker:
 
 ```text
