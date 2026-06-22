@@ -129,7 +129,7 @@ test_new_files_exist() {
     scripts/run-parallel-acpx.sh \
     scripts/acpx-env-snapshot.sh \
     commands/acpx-setup.md \
-    tests/mock-gemini.sh \
+    tests/mock-agy.sh \
     tests/mock-claude.sh \
     MIGRATING.md; do
     if [ ! -f "$PROJECT_DIR/$f" ]; then
@@ -142,7 +142,7 @@ test_new_files_exist() {
 
 test_new_scripts_executable() {
   local bad=0
-  for f in scripts/invoke-acpx.sh scripts/run-parallel-acpx.sh scripts/acpx-env-snapshot.sh tests/mock-gemini.sh tests/mock-claude.sh; do
+  for f in scripts/invoke-acpx.sh scripts/run-parallel-acpx.sh scripts/acpx-env-snapshot.sh tests/mock-agy.sh tests/mock-claude.sh; do
     if [ ! -x "$PROJECT_DIR/$f" ]; then
       echo "  Not executable: $f"
       bad=1

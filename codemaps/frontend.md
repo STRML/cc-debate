@@ -24,7 +24,7 @@ This is a Claude Code CLI plugin — there is no web frontend. "Frontend" here m
 ### Prerequisite Summary (`/debate:all` Step 1)
 ```
 ## AI Review — Prerequisite Check
-Reviewers found:  ✅ codex  ✅ gemini  ✅ claude
+Reviewers found:  ✅ codex  ✅ antigravity  ✅ claude
 Reviewers missing: ❌ [none]
 Tools: ✅ jq
 ```
@@ -35,7 +35,7 @@ Tools: ✅ jq
 <concerns>
 VERDICT: REVISE
 
-## Gemini Review — Round 1  [The Architect]
+## Antigravity Review — Round 1  [The Architect]
 <concerns>
 VERDICT: REVISE
 

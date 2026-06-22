@@ -8,7 +8,7 @@ allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash 
 Run all configured AI reviewers in parallel via acpx, synthesize their feedback, debate contradictions, and produce a final consensus verdict. Max 3 total **revision** rounds (verification passes — re-reviewing a post-fix plan with no further revisions — do NOT count against this budget; see Step 6.5).
 
 Arguments:
-- First arg: optional comma-separated reviewer names (e.g. `codex,gemini`). Defaults to all from config.
+- First arg: optional comma-separated reviewer names (e.g. `codex,antigravity`). Defaults to all from config.
 - `skip-debate` — skip the targeted debate phase, go straight to final report.
 
 **Reviewer config** (`~/.claude/debate-acpx.json`):
@@ -51,9 +51,9 @@ List the reviewers that will run:
 ## acpx Review — Starting
 
 Reviewers:
-  codex    → agent: codex    (120s)
-  gemini   → agent: gemini   (240s)
-  mercury  → agent: mercury  (120s)
+  codex        → agent: codex        (120s)
+  antigravity  → agent: antigravity  (240s)
+  mercury      → agent: mercury      (120s)
 ```
 
 ### 1d. Verify sessions
@@ -508,9 +508,9 @@ If safe-cleanup refuses:
 
 ## Rules
 
-- **acpx handles everything** — except `gemini`. Gemini CLI's ACP mode is broken (hangs at initialize). `invoke-acpx.sh` detects `agent: gemini` and falls back to direct CLI invocation (`gemini -s -e ""`), which works with both OAuth and API key auth.
+- **acpx handles everything** — except `antigravity` and `opus`, which have no native acpx ACP support and use direct CLI invocation. `invoke-acpx.sh` detects `agent: antigravity` and runs the Antigravity CLI: `agy -p "<plan>" --sandbox` under a Python PTY (because `agy -p` drops its output when stdout is not a TTY), with OAuth or `ANTIGRAVITY_API_KEY` auth. The prompt is a positional argument (agy ignores stdin in print mode).
 - **Parallel via bash + Agent.** `run-parallel-acpx.sh` runs external reviewers as background processes. The Claude skeptic subagents (Fable + Opus pair, or solo when `fable_reviewer` is false) run in parallel via Agent with `run_in_background: true`. **The Bash runner call and every skeptic Agent call must use `run_in_background: true` and be issued in the same tool-call message** — otherwise a blocking foreground runner serializes the skeptics behind the full acpx wait (~8 min wasted). Step 2c waits for all of them.
-- **Reviewers are read-only.** Every reviewer is invoked with write access denied: acpx agents get `--approve-reads --non-interactive-permissions deny` (reads auto-approved, writes auto-denied), gemini gets `--approval-mode plan`, opus/claude gets `--permission-mode plan`, and each prompt carries an explicit read-only directive. A reviewer cannot edit `plan.md` or any repo file while reviewing — its review text is the only deliverable. Don't add write permissions to work around a reviewer that "wants to fix it inline."
+- **Reviewers are read-only.** Every reviewer is invoked with write access denied: acpx agents get `--approve-reads --non-interactive-permissions deny` (reads auto-approved, writes auto-denied), opus/claude gets `--permission-mode plan`, and each prompt carries an explicit read-only directive. `antigravity` has no hard read-only flag, so it runs from a throwaway workspace with the plan supplied in-prompt (it never needs repo access) plus `--sandbox` to block terminal commands. A reviewer cannot edit `plan.md` or any repo file while reviewing — its review text is the only deliverable. Don't add write permissions to work around a reviewer that "wants to fix it inline."
 - **Debate via direct invoke.** Debate rounds call `invoke-acpx.sh` directly from the main agent (not subagents). Prompt files are picked up automatically.
 - **No session resume needed.** acpx manages sessions internally. Each round injects full context via prompt files.
 - **Config is king.** Adding a reviewer = adding an entry to `~/.claude/debate-acpx.json`.

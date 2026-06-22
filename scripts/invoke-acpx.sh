@@ -5,7 +5,7 @@
 # Usage: invoke-acpx.sh <config_file> <work_dir> <reviewer_name> [timeout]
 #   config_file   — path to JSON config (e.g. ~/.claude/debate-acpx.json)
 #   work_dir      — temp directory (must contain plan.md)
-#   reviewer_name — e.g. "codex", "gemini", "kimi"
+#   reviewer_name — e.g. "codex", "antigravity", "kimi"
 #   timeout       — optional override; falls back to config value, then 120s
 #
 # Config schema:
@@ -120,8 +120,8 @@ fi
 # Skip if SKIP_SESSION_CHECK is set (for testing with mock acpx)
 
 if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
-  # Gemini and Opus use direct CLI invocation — skip acpx session check.
-  if [ "$AGENT" != "gemini" ] && [ "$AGENT" != "opus" ]; then
+  # Antigravity and Opus use direct CLI invocation — skip acpx session check.
+  if [ "$AGENT" != "antigravity" ] && [ "$AGENT" != "opus" ]; then
     echo "[$REVIEWER] Ensuring acpx session for '$AGENT'..." >&2
     if ! "${ACPX_BIN[@]}" "$AGENT" sessions ensure > /dev/null 2>&1; then
       echo "[$REVIEWER] Failed to ensure acpx session for '$AGENT'." >&2
@@ -184,7 +184,7 @@ fi
 
 # --- Shared result handler ---
 # Call after running any reviewer command. Uses globals: REVIEWER, WORK_DIR, TIMEOUT, EXIT_CODE.
-# $1: label used in log/error messages (e.g. "gemini CLI" or "acpx")
+# $1: label used in log/error messages (e.g. "agy (Antigravity CLI)" or "acpx")
 
 handle_invocation_result() {
   local label="$1"
@@ -224,37 +224,122 @@ handle_invocation_result() {
   exit "$EXIT_CODE"
 }
 
-# --- Gemini: direct CLI invocation ---
-# Gemini CLI's ACP mode (--acp / --experimental-acp) never completes the ACP initialize
-# handshake regardless of auth method. Use the gemini CLI directly via stdin instead.
-# Works with both OAuth (default) and API key auth.
+# --- Antigravity: direct CLI invocation ---
+# Antigravity CLI's `agy` is the successor to the Gemini CLI for plan review.
+# acpx has no native ACP support for it yet, so invoke `agy` directly. Three quirks
+# drive this block (all verified against agy v1.0.x):
+#   1. Prompt is a POSITIONAL ARGUMENT — `agy -p "<prompt>"`. stdin is NOT read in
+#      print mode (it echoes the input and then times out waiting for a response).
+#   2. Non-TTY stdout bug — `agy -p` drops its final response (and can hang) when
+#      stdout is not a TTY, which is exactly our case (capturing to a file). We run
+#      it under a PTY via `script`, then strip the PTY's ANSI/CR/EOT noise.
+#   3. No hard read-only flag — unlike gemini's `--approval-mode plan`, agy has no
+#      equivalent, and `--sandbox` only restricts terminal commands (it does NOT
+#      prevent file writes). We contain it by running from a throwaway workspace
+#      (the full plan is in the prompt arg, so agy needs no repo access) plus the
+#      explicit read-only directive already baked into the prompt.
+# Works with OAuth (run `agy` once to sign in) or ANTIGRAVITY_API_KEY auth.
 
-if [ "$AGENT" = "gemini" ]; then
-  if ! command -v gemini > /dev/null 2>&1; then
-    echo "[$REVIEWER] gemini CLI not found. Install: npm install -g @google/gemini-cli" >&2
-    echo "gemini CLI not installed. Run: npm install -g @google/gemini-cli" > "$WORK_DIR/${REVIEWER}-output.md"
+if [ "$AGENT" = "antigravity" ]; then
+  if ! command -v agy > /dev/null 2>&1; then
+    echo "[$REVIEWER] agy CLI not found. Install the Antigravity CLI and run 'agy' once to sign in." >&2
+    echo "agy CLI not installed. Install the Antigravity CLI (https://antigravity.google) and run 'agy' to sign in." > "$WORK_DIR/${REVIEWER}-output.md"
     echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
     trap - EXIT
     exit 1
   fi
 
-  echo "[$REVIEWER] Submitting plan to gemini CLI directly (timeout: ${TIMEOUT}s)..." >&2
-
-  GEMINI_CMD=()
-  if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-    GEMINI_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
+  # A PTY is needed (quirk 2): agy drops its output unless stdout is a TTY. We use a
+  # small Python runner rather than `script(1)` because BSD `script` aborts
+  # ("tcgetattr/ioctl: Operation not supported on socket") when stdin is not a real
+  # TTY — which is exactly how the debate runner launches us (nohup, stdin a
+  # pipe/socket). The runner puts ONLY agy's stdout on a pty (stderr stays on our
+  # stderr → ${REVIEWER}-stderr.log) and falls back to a plain pipe if the
+  # environment forbids pty allocation (e.g. a restrictive sandbox), so it degrades
+  # instead of failing. Identical on macOS and Linux.
+  PY_BIN=""
+  if command -v python3 > /dev/null 2>&1; then
+    PY_BIN="python3"
+  elif command -v python > /dev/null 2>&1; then
+    PY_BIN="python"
+  else
+    echo "[$REVIEWER] python3 not found — required to run agy under a PTY." >&2
+    echo "python3 not installed. Install Python 3 to use the antigravity reviewer." > "$WORK_DIR/${REVIEWER}-output.md"
+    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    trap - EXIT
+    exit 1
   fi
-  # -s: sandbox  -e "": disable extensions (faster startup)
-  # --approval-mode plan: read-only mode — gemini cannot write/edit any file
-  # while reviewing (the plan doc stays untouched).
-  GEMINI_CMD+=(gemini -s -e "" --approval-mode plan)
+
+  echo "[$REVIEWER] Submitting plan to agy (Antigravity CLI) directly (timeout: ${TIMEOUT}s)..." >&2
+
+  # Prompt as a positional argument (quirk 1). Pass via env so plan content (newlines,
+  # quotes, anything) reaches agy verbatim with zero shell/Python re-escaping.
+  AGY_PROMPT="$(cat "$PROMPT_FILE")"
+  export AGY_PROMPT
+  export AGY_BIN; AGY_BIN="$(command -v agy)"
+  export AGY_PRINT_TIMEOUT="${TIMEOUT}s"     # Go duration for --print-timeout
+  # --model is optional; its value is a display name from `agy models`
+  # (e.g. "Gemini 3.1 Pro (High)").
+  if [ -n "$CONFIG_MODEL" ]; then
+    export AGY_MODEL="$CONFIG_MODEL"
+  else
+    unset AGY_MODEL || true
+  fi
+
+  # Throwaway workspace for read-only containment (quirk 3).
+  AGY_WORKSPACE="$WORK_DIR/.agy-workspace"
+  mkdir -p "$AGY_WORKSPACE"
+
+  TIMEOUT_PREFIX=()
+  if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
+    TIMEOUT_PREFIX=("$TIMEOUT_BIN" "$TIMEOUT")
+  fi
+
+  # Strip the PTY's ANSI escapes (literal ESC via printf — portable across BSD/GNU sed),
+  # carriage returns, and EOT (^D) bytes from the captured output.
+  ESC=$(printf '\033')
 
   set +e
-  "${GEMINI_CMD[@]}" < "$PROMPT_FILE" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
-  EXIT_CODE=$?
+  ( cd "$AGY_WORKSPACE" && "${TIMEOUT_PREFIX[@]}" "$PY_BIN" -c '
+import os, sys, subprocess
+cmd = [os.environ["AGY_BIN"], "-p", os.environ["AGY_PROMPT"],
+       "--sandbox", "--print-timeout", os.environ["AGY_PRINT_TIMEOUT"]]
+model = os.environ.get("AGY_MODEL")
+if model:
+    cmd += ["--model", model]
+# Put only agy stdout on a pty so isatty(stdout) is true; stderr stays on fd 2.
+master = None
+try:
+    master, slave = os.openpty()
+except OSError:
+    master = None
+out = b""
+if master is not None:
+    p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=slave, close_fds=True)
+    os.close(slave)
+    while True:
+        try:
+            chunk = os.read(master, 65536)
+        except OSError:
+            break
+        if not chunk:
+            break
+        out += chunk
+    os.close(master)
+    rc = p.wait()
+else:
+    p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
+    out = p.stdout
+    rc = p.returncode
+sys.stdout.buffer.write(out)
+sys.stdout.buffer.flush()
+sys.exit(rc if rc and rc > 0 else (1 if rc else 0))
+' ) 2>"$WORK_DIR/${REVIEWER}-stderr.log" \
+    | sed -E "s/${ESC}\[[0-9;]*[A-Za-z]//g" | tr -d '\r\004' > "$WORK_DIR/${REVIEWER}-output.md"
+  EXIT_CODE=${PIPESTATUS[0]}
   set -e
 
-  handle_invocation_result "gemini CLI"
+  handle_invocation_result "agy (Antigravity CLI)"
 fi
 
 # --- Opus: direct Claude CLI invocation ---

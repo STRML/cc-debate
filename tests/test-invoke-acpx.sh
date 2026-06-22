@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INVOKE="$PROJECT_DIR/scripts/invoke-acpx.sh"
 MOCK="$SCRIPT_DIR/mock-acpx.sh"
-MOCK_GEMINI="$SCRIPT_DIR/mock-gemini.sh"
+MOCK_AGY="$SCRIPT_DIR/mock-agy.sh"
 MOCK_CLAUDE="$SCRIPT_DIR/mock-claude.sh"
 
 PASS=0
@@ -35,7 +35,7 @@ setup_config() {
       "system_prompt": "You are a test reviewer."
     },
     "no-prompt": {
-      "agent": "gemini",
+      "agent": "antigravity",
       "timeout": 60
     },
     "opus-reviewer": {
@@ -433,31 +433,34 @@ test_stderr_surfaced_on_failure() {
   rm -rf "$work_dir"
 }
 
-test_gemini_uses_direct_cli() {
-  # When agent is "gemini", invoke-acpx.sh should use the gemini CLI directly
-  # (not acpx) because Gemini's ACP mode is non-functional.
-  local work_dir config acpx_log gemini_log
+test_antigravity_uses_direct_cli() {
+  # When agent is "antigravity", invoke-acpx.sh should use the agy CLI directly
+  # (not acpx) because Antigravity has no native ACP support yet.
+  local work_dir config acpx_log agy_log
   work_dir=$(setup_work_dir)
   config=$(setup_config "$work_dir")
   acpx_log="$work_dir/acpx-log.txt"
-  gemini_log="$work_dir/gemini-log.txt"
+  agy_log="$work_dir/agy-log.txt"
 
   SKIP_SESSION_CHECK=1 \
   PATH="$SCRIPT_DIR:$PATH" \
   MOCK_ACPX_LOG="$acpx_log" \
-  MOCK_GEMINI_LOG="$gemini_log" \
+  MOCK_AGY_LOG="$agy_log" \
     bash "$INVOKE" "$config" "$work_dir" "no-prompt" 2>/dev/null
 
   # Should succeed
   [ "$(cat "$work_dir/no-prompt-exit.txt")" = "0" ] || return 1
 
-  # Output should be from the gemini mock (default: "Mock gemini review. VERDICT: APPROVED")
-  grep -q "Mock gemini review" "$work_dir/no-prompt-output.md" || return 1
+  # Output should be from the agy mock (default: "Mock agy review. VERDICT: APPROVED")
+  grep -q "Mock agy review" "$work_dir/no-prompt-output.md" || return 1
 
-  # gemini mock was called, in read-only plan mode
-  [ -f "$gemini_log" ] || return 1
-  grep -q "gemini" "$gemini_log" || return 1
-  grep -q "\-\-approval-mode plan" "$gemini_log" || return 1
+  # agy mock was called in print mode with --sandbox; NOT gemini's --approval-mode plan
+  [ -f "$agy_log" ] || return 1
+  grep -q "agy" "$agy_log" || return 1
+  grep -q "\-p" "$agy_log" || return 1
+  grep -q "\-\-sandbox" "$agy_log" || return 1
+  grep -q "\-\-print-timeout" "$agy_log" || return 1
+  ! grep -q "\-\-approval-mode plan" "$agy_log" 2>/dev/null || return 1
 
   # acpx should NOT have been called for this reviewer
   ! grep -q "no-prompt" "$acpx_log" 2>/dev/null || return 1
@@ -465,8 +468,8 @@ test_gemini_uses_direct_cli() {
   rm -rf "$work_dir"
 }
 
-test_gemini_skips_session_ensure() {
-  # sessions ensure should NOT be called for the gemini agent
+test_antigravity_skips_session_ensure() {
+  # sessions ensure should NOT be called for the antigravity agent
   local work_dir config log_file
   work_dir=$(setup_work_dir)
   config=$(setup_config "$work_dir")
@@ -546,14 +549,14 @@ echo ""
 echo "=== invoke-acpx.sh tests ==="
 echo ""
 
-# Create mock binaries on PATH for acpx, gemini, and claude (direct CLI paths)
+# Create mock binaries on PATH for acpx, agy, and claude (direct CLI paths)
 ln -sf "$MOCK" "$SCRIPT_DIR/acpx"
 chmod +x "$SCRIPT_DIR/acpx"
-ln -sf "$MOCK_GEMINI" "$SCRIPT_DIR/gemini"
-chmod +x "$SCRIPT_DIR/gemini"
+ln -sf "$MOCK_AGY" "$SCRIPT_DIR/agy"
+chmod +x "$SCRIPT_DIR/agy"
 ln -sf "$MOCK_CLAUDE" "$SCRIPT_DIR/claude"
 chmod +x "$SCRIPT_DIR/claude"
-trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/gemini" "$SCRIPT_DIR/claude"' EXIT
+trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/agy" "$SCRIPT_DIR/claude"' EXIT
 
 run_test "happy path" test_happy_path
 run_test "debate prompt file" test_prompt_file_used_for_debate
@@ -572,8 +575,8 @@ run_test "session creation fails exits 4" test_session_creation_fails_exits_4
 run_test "session exists no extra calls" test_session_exists_no_extra_calls
 run_test "skip session check env" test_skip_session_check_env
 run_test "stderr surfaced on failure" test_stderr_surfaced_on_failure
-run_test "gemini uses direct CLI" test_gemini_uses_direct_cli
-run_test "gemini skips session ensure" test_gemini_skips_session_ensure
+run_test "antigravity uses direct CLI" test_antigravity_uses_direct_cli
+run_test "antigravity skips session ensure" test_antigravity_skips_session_ensure
 run_test "opus uses direct CLI" test_opus_uses_direct_cli
 run_test "opus skips session ensure" test_opus_skips_session_ensure
 

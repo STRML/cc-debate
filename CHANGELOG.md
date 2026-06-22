@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.0] — 2026-06-22 (Antigravity replaces the Gemini reviewer)
+
+### Changed
+
+- **The Google reviewer is now `antigravity`, not `gemini`.** Google is transitioning the Gemini CLI to the [Antigravity CLI](https://antigravity.google), so the direct-CLI Google reviewer now drives `agy` instead of `gemini`. Rename the reviewer's `"agent": "gemini"` to `"agent": "antigravity"` in `~/.claude/debate-acpx.json` (and the reviewer key, by convention). Auth is OAuth (run `agy` once to sign in) or `ANTIGRAVITY_API_KEY` / `GEMINI_API_KEY`.
+- `invoke-acpx.sh` handles three `agy` quirks discovered while migrating: the prompt is a **positional argument** (agy ignores stdin in print mode); `agy -p` is run with its stdout on a **Python-allocated pty** because it drops its output (and can hang) when stdout is not a TTY — `script(1)` was rejected because BSD `script` aborts on a non-TTY stdin, which is how the debate runner launches reviewers, and the runner falls back to a plain pipe when pty allocation is denied (e.g. a restrictive sandbox); and because `agy` has **no read-only flag** (`--sandbox` only blocks terminal commands, not file writes), it runs from a throwaway workspace with the plan supplied in-prompt so it never needs repo access.
+- Optional `model` config field selects the review model — any display name from `agy models` (e.g. `"Gemini 3.1 Pro (High)"`).
+- Requires `python3` on PATH for the `antigravity` reviewer.
+
 ## [2.3.0] — 2026-06-09 (Fable + Opus skeptic pair)
 
 ### Added

@@ -146,7 +146,7 @@ Same approach as LiteLLM — map each reviewer to the corresponding acpx agent:
 {
   "reviewers": {
     "codex": { "agent": "codex", "timeout": 300 },
-    "gemini": { "agent": "gemini", "timeout": 240 }
+    "antigravity": { "agent": "antigravity", "timeout": 240 }
   }
 }
 ```
@@ -203,7 +203,7 @@ After updating the plugin, re-run `/debate:setup` to refresh the `~/.claude/deba
 |-------|-------|---------|
 | `codex` | OpenAI Codex CLI | `npm install -g @openai/codex` |
 | `claude` | Claude Code | Already installed — nested-session guard handled automatically |
-| `gemini` | Google Gemini CLI | `npm install -g @google/gemini-cli` |
+| `antigravity` | Google Gemini via Antigravity CLI (`agy`, direct — not acpx) | Install the [Antigravity CLI](https://antigravity.google) + run `agy` to sign in |
 | `cursor` | Cursor CLI | Install Cursor IDE |
 | `copilot` | GitHub Copilot CLI | `gh extension install github/gh-copilot` |
 | `kimi` | Kimi CLI | See kimi docs |

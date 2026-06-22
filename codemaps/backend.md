@@ -52,7 +52,7 @@ _Updated: 2026-03-17_
 }
 ```
 
-Available acpx agents: codex, claude, gemini, cursor, copilot, kimi, kiro, qwen, opencode, kilocode.
+Available acpx agents: codex, claude, cursor, copilot, kimi, kiro, qwen, opencode, kilocode. The `antigravity` (agy) and `opus` reviewers are invoked directly, not via acpx.
 
 ## Plugin Metadata (`.claude-plugin/`)
 

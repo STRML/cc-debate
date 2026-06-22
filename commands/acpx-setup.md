@@ -1,6 +1,6 @@
 ---
 description: Check acpx CLI installation, validate debate-acpx.json config, probe each configured agent, and print permission allowlist for unattended operation.
-allowed-tools: Bash(bash ~/.claude/debate-scripts/acpx-env-snapshot.sh:*), Bash(which npx:*), Bash(acpx:*), Bash(npx acpx@latest:*), Bash(gemini:*), Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/create-litellm-agent.sh:*), Bash(ls:*), Bash(chmod:*), Bash(mkdir:*), Bash(jq:*), Bash(cp:*), Write(~/.claude/debate-acpx.json), Write(~/.acpx/*), Write(~/.acpx/**), Read(~/.acpx/**), Edit(~/.acpx/**), Write(~/.opencode.json), Read(~/.claude/settings.json), Edit(~/.claude/settings.json), Write(~/.claude/settings.json)
+allowed-tools: Bash(bash ~/.claude/debate-scripts/acpx-env-snapshot.sh:*), Bash(which npx:*), Bash(acpx:*), Bash(npx acpx@latest:*), Bash(agy:*), Bash(agy models:*), Bash(which agy:*), Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/create-litellm-agent.sh:*), Bash(ls:*), Bash(chmod:*), Bash(mkdir:*), Bash(jq:*), Bash(cp:*), Write(~/.claude/debate-acpx.json), Write(~/.acpx/*), Write(~/.acpx/**), Read(~/.acpx/**), Edit(~/.acpx/**), Write(~/.opencode.json), Read(~/.claude/settings.json), Edit(~/.claude/settings.json), Write(~/.claude/settings.json)
 ---
 
 # debate — acpx Setup Check
@@ -52,9 +52,9 @@ Show the parsed config:
 ```text
 ### Config: ~/.claude/debate-acpx.json
   Reviewers:
-    codex    → agent: codex    (built-in, 120s timeout)
-    gemini   → agent: gemini   (built-in, 240s timeout)
-    mercury  → agent: mercury  (custom/opencode, 120s timeout)
+    codex        → agent: codex        (built-in, 120s timeout)
+    antigravity  → agent: antigravity  (direct CLI, 240s timeout)
+    mercury      → agent: mercury      (custom/opencode, 120s timeout)
 ```
 
 Proceed to Step 3.
@@ -72,7 +72,6 @@ Present three categories:
 
 Built-in acpx agents (need the agent CLI installed):
   codex    — OpenAI Codex        (npm install -g @openai/codex)
-  gemini   — Google Gemini       (npm install -g @google/gemini-cli) ⚠️  needs GEMINI_API_KEY for acpx
   cursor   — Cursor CLI          (install Cursor IDE)
   copilot  — GitHub Copilot CLI  (gh extension install github/gh-copilot)
   kimi     — Kimi CLI
@@ -80,6 +79,9 @@ Built-in acpx agents (need the agent CLI installed):
   qwen     — Qwen Code
   opencode — OpenCode            (npm install -g opencode-ai)
 
+Direct-CLI agents (no acpx ACP support — invoke-acpx.sh calls them directly):
+  antigravity — Google Gemini via Antigravity CLI (install https://antigravity.google,
+             run `agy` once to sign in) — runs `agy -p` under a Python PTY
   claude   — Claude Code         (already installed) ⚠️  requires CLAUDECODE to be
              unset — invoke-acpx.sh handles this automatically
   opus     — Claude Opus 4.6    (already installed) direct CLI invocation, bypasses
@@ -228,14 +230,14 @@ For system prompts, suggest unique review personas for each reviewer. Examples:
 
 For each configured reviewer:
 
-- **Non-gemini, non-opus agents:** ensure a session exists and run a quick test via acpx:
+- **Non-antigravity, non-opus agents:** ensure a session exists and run a quick test via acpx:
   ```bash
   $ACPX_CMD <agent> sessions ensure 2>&1
   echo "Reply with only the word PONG." | $ACPX_CMD --format quiet --approve-reads <agent>
   ```
-- **gemini agent:** probe using direct CLI (see below — ACP mode is broken):
+- **antigravity agent:** probe using the Antigravity CLI directly (see below):
   ```bash
-  echo "Reply with only the word PONG." | timeout 5 gemini -s -e ""
+  agy models 2>&1 | head -1
   ```
 - **opus agent:** probe using direct Claude CLI:
   ```bash
@@ -243,51 +245,42 @@ For each configured reviewer:
   ```
 
 Report:
-- Response contains "PONG" → `✅ <name>: <agent> responds`
+- Response contains "PONG" (or `agy models` lists a model) → `✅ <name>: <agent> responds`
 - Session creation fails or probe times out → `❌ <name>: <agent> failed`
 
-### Gemini agent — direct CLI invocation
+### Antigravity agent — direct CLI invocation
 
-The `gemini` agent uses the Gemini CLI directly (not via acpx ACP mode). Gemini CLI's ACP mode hangs indefinitely at the initialize handshake and is not usable. Direct CLI invocation works with both OAuth and API key auth.
+The `antigravity` agent uses the Antigravity CLI (`agy`) directly — acpx has no native ACP support for it yet. `invoke-acpx.sh` runs `agy -p "<plan>" --sandbox` under a Python PTY (the `agy -p` output drops when stdout is not a TTY) with the prompt passed as a positional argument. Works with OAuth (run `agy` once to sign in) or `ANTIGRAVITY_API_KEY` / `GEMINI_API_KEY`.
 
-**Probe command for gemini:**
+**Probe command for antigravity** (lists models only when signed in):
 ```bash
-echo "Reply with only the word PONG." | timeout 5 gemini -s -e ""
+agy models 2>&1 | head -1
 ```
-(Use `gtimeout` if `timeout` is not available on macOS.)
 
-- Response contains "PONG" → `✅ gemini: CLI responds`
-- Command not found → `❌ gemini: CLI not installed — npm install -g @google/gemini-cli`
-- Auth error → see below
+- Lists a model name → `✅ antigravity: agy responds`
+- "Please sign in to view available models" → `❌ antigravity: not signed in — run 'agy' once to sign in`
+- Command not found → `❌ antigravity: agy not installed — install the Antigravity CLI (https://antigravity.google)`
+- `python3` missing → `❌ antigravity: python3 required (agy is run under a PTY)`
 
-**If auth fails:**
-
-Common auth errors come from wrong `selectedType` in `~/.gemini/settings.json`. Valid values:
-- `"oauth-personal"` — browser OAuth (default, works for direct CLI)
-- `"gemini-api-key"` — uses `GEMINI_API_KEY` env var (required if no browser access)
-- `"vertex-ai"` — Google Cloud Vertex AI
-
-`"api-key"` is NOT valid and causes "Invalid auth method selected".
-
-If the user needs API key auth (e.g., headless environment):
+**If not signed in:**
 
 ```text
-  Fix: get a free Gemini API key:
+  Fix: sign in to the Antigravity CLI:
 
-  1. Visit: https://aistudio.google.com/apikey
-  2. Click "Create API key" → copy the key (starts with "AIza...")
-  3. Set auth type in ~/.gemini/settings.json:
-       { "selectedType": "gemini-api-key" }
+  1. Run `agy` (with no arguments) in a terminal
+  2. Follow the browser OAuth flow, or paste the authorization code shown
+  3. Re-run /debate:acpx-setup to verify.
+
+  Headless / no browser? Set an API key instead:
   4. Add to ~/.claude/settings.json:
-       { "env": { "GEMINI_API_KEY": "AIza..." } }
-  5. Restart Claude Code, then re-run /debate:acpx-setup to verify.
+       { "env": { "ANTIGRAVITY_API_KEY": "..." } }
+  5. Restart Claude Code, then re-run /debate:acpx-setup.
 ```
 
-Ask the user if they want to set up the API key now. If yes:
+Ask the user if they want to set up an API key now (headless only). If yes:
 1. Ask them to paste the key
-2. Read `~/.claude/settings.json`, add or merge `"env": { "GEMINI_API_KEY": "<key>" }`, write back
-3. Read `~/.gemini/settings.json`, set `"selectedType": "gemini-api-key"`, write back
-4. Inform them to restart Claude Code for the env var to take effect
+2. Read `~/.claude/settings.json`, add or merge `"env": { "ANTIGRAVITY_API_KEY": "<key>" }`, write back
+3. Inform them to restart Claude Code for the env var to take effect
 
 ### Other agent failure modes
 
@@ -347,9 +340,9 @@ For each reviewer from the config loaded above — built-in agents show `built-i
   Scripts:  ✅ symlinked
 
   Reviewers:
-    codex    ✅ built-in    (120s timeout)
-    gemini   ✅ built-in    (240s timeout)
-    mercury  ✅ openrouter  (120s timeout) — openrouter/inception/mercury-2
+    codex        ✅ built-in    (120s timeout)
+    antigravity  ✅ direct CLI  (240s timeout)
+    mercury      ✅ openrouter  (120s timeout) — openrouter/inception/mercury-2
     deepseek ✅ litellm     (120s timeout) — deepseek-r1 via LiteLLM
 
 You are ready to run:

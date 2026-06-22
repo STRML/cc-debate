@@ -1,6 +1,6 @@
 ---
 description: Check debate plugin prerequisites, verify acpx is installed, and print the exact settings.json snippet for fully unattended (no-prompt) operation.
-allowed-tools: Bash(which acpx:*), Bash(which npx:*), Bash(which jq:*), Bash(bash ~/.claude/plugins/cache/cc-debate/debate/*/scripts/create-links.sh:*), Bash(ls:*), Bash(cat:*), Bash(jq:*), Bash(cp:*), Write(~/.claude/debate-acpx.json), Read(~/.claude/settings.json), Edit(~/.claude/settings.json), Write(~/.claude/settings.json)
+allowed-tools: Bash(which acpx:*), Bash(which npx:*), Bash(which jq:*), Bash(which agy:*), Bash(bash ~/.claude/plugins/cache/cc-debate/debate/*/scripts/create-links.sh:*), Bash(ls:*), Bash(cat:*), Bash(jq:*), Bash(cp:*), Write(~/.claude/debate-acpx.json), Read(~/.claude/settings.json), Edit(~/.claude/settings.json), Write(~/.claude/settings.json)
 ---
 
 # debate — Setup & Permission Check
@@ -45,20 +45,20 @@ Report:
 - Found → `✅ jq: found at /path/to/jq`
 - Missing → `❌ jq: not found — install: brew install jq (macOS) / apt install jq (Linux)`
 
-## Step 3: Check gemini CLI (if configured)
+## Step 3: Check Antigravity CLI (if configured)
 
-If `gemini` is not in the user's `~/.claude/debate-acpx.json` config, skip this step silently.
+If `antigravity` is not in the user's `~/.claude/debate-acpx.json` config, skip this step silently.
 
-Check whether the `gemini` CLI is installed and responding:
+Check whether the `agy` CLI (Antigravity) is installed:
 ```bash
-which gemini 2>/dev/null || echo "not found"
+which agy 2>/dev/null || echo "not found"
 ```
 
 Report:
-- Found → `✅ gemini CLI: found at /path/to/gemini`
-- Not found → `❌ gemini CLI: not found — install: npm install -g @google/gemini-cli`
+- Found → `✅ agy CLI: found at /path/to/agy`
+- Not found → `❌ agy CLI: not found — install the Antigravity CLI (https://antigravity.google) and run 'agy' once to sign in`
 
-Note: `/debate:all` invokes `gemini` directly (not via acpx) — Gemini CLI's ACP mode is non-functional. OAuth (default auth) works fine for direct CLI invocation. An API key is only required if running in a headless environment without browser access.
+Note: `/debate:all` invokes `agy` directly (not via acpx) — acpx has no native ACP support for it yet. Running `agy` once to sign in (OAuth) is enough; `ANTIGRAVITY_API_KEY` (or `GEMINI_API_KEY`) is only needed for fully headless environments without browser access. `python3` is also required (the script runs `agy -p` under a Python PTY to work around its non-TTY output bug).
 
 ## Step 4: Detect v1.x installation and migrate
 
@@ -100,7 +100,7 @@ Read each old config and extract reviewer entries. Map `model` fields to acpx ag
 |-------------------|------------|
 | `claude-opus-*`, `claude-sonnet-*`, `claude-*` | `claude` |
 | `gpt-*`, `o1-*`, `o3-*`, `o4-*` | `codex` |
-| `gemini-*` | `gemini` |
+| `gemini-*` | `antigravity` |
 | Any other model | Skip with warning — no acpx agent equivalent |
 
 For each mappable reviewer from the old config, create an entry in the new format:
@@ -170,8 +170,8 @@ Read `~/.claude/debate-acpx.json`. Report:
   ```text
   ### Config: ~/.claude/debate-acpx.json
     Reviewers:
-      codex   → agent: codex    (120s timeout)
-      gemini  → agent: gemini   (240s timeout)
+      codex        → agent: codex        (120s timeout)
+      antigravity  → agent: antigravity  (240s timeout)
   ```
 - File missing → suggest running `/debate:acpx-setup` to create it interactively
 

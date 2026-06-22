@@ -32,15 +32,15 @@ You: /debate:all
 
 Claude: Running parallel review via acpx...
 
-  codex    → agent: codex    (120s)
-  gemini   → agent: gemini   (240s)
-  mercury  → agent: mercury  (120s)
+  codex        → agent: codex        (120s)
+  antigravity  → agent: antigravity  (240s)
+  mercury      → agent: mercury      (120s)
 
   ## Codex Review — Round 1
   The retry logic in Step 4 doesn't handle the case where...
   VERDICT: REVISE
 
-  ## Gemini Review — Round 1
+  ## Antigravity Review — Round 1
   Missing error handling when the API is unavailable...
   VERDICT: REVISE
 
@@ -60,7 +60,7 @@ Claude: Revising plan...
 Claude: Re-submitting to all reviewers...
 
   ## Codex Review — Round 2   →  VERDICT: APPROVED ✅
-  ## Gemini Review — Round 2  →  VERDICT: APPROVED ✅
+  ## Antigravity Review — Round 2  →  VERDICT: APPROVED ✅
   ## Mercury Review — Round 2 →  VERDICT: APPROVED ✅
 
   VERDICT: APPROVED — unanimous after 2 rounds
@@ -91,7 +91,7 @@ These have native Agent Client Protocol support. Install the CLI, and acpx handl
 | Agent name | Model | Install |
 |-----------|-------|---------|
 | `codex` | OpenAI Codex | `npm install -g @openai/codex` + `OPENAI_API_KEY` |
-| `gemini` | Google Gemini 2.x/3.x | `npm install -g @google/gemini-cli` + `gemini auth` + `GEMINI_API_KEY` ¹ |
+| `antigravity` | Google Gemini 3.x via Antigravity CLI | Install the [Antigravity CLI](https://antigravity.google) (`agy`) + run `agy` once to sign in ¹ |
 | `claude` | Claude (Opus/Sonnet) | Already installed — you're running it now |
 | `kimi` | Kimi (Moonshot AI) | See [Kimi CLI docs](https://github.com/moonshot-ai/kimi-cli) |
 | `kiro` | Kiro (AWS) | See [Kiro docs](https://kiro.dev) |
@@ -105,12 +105,13 @@ These have native Agent Client Protocol support. Install the CLI, and acpx handl
 | `pi` | Pi Coding Agent | See acpx docs |
 | `openclaw` | OpenClaw | See acpx docs |
 
-> ¹ **Gemini note:** The Gemini CLI's stored OAuth works for direct CLI use but not for acpx's non-interactive subprocess mode. You need a separate API key. Get one free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then add it to `~/.claude/settings.json`:
+> ¹ **Antigravity note:** acpx has no native ACP support for the Antigravity CLI yet, so `invoke-acpx.sh` calls `agy` directly. Stored OAuth from running `agy` once works fine for this; alternatively set `ANTIGRAVITY_API_KEY` (or `GEMINI_API_KEY`) in `~/.claude/settings.json` for fully headless environments:
 > ```json
-> "env": { "GEMINI_API_KEY": "AIza..." }
+> "env": { "ANTIGRAVITY_API_KEY": "..." }
 > ```
+> Pick the review model with the optional `model` config field — any display name from `agy models` (e.g. `"Gemini 3.1 Pro (High)"`). Two `agy` quirks the script handles for you: the prompt is passed as a positional argument (stdin is ignored in print mode), and `agy -p` is run under a PTY (via Python) because it drops its output when stdout is not a TTY. `agy` has no hard read-only flag, so the reviewer is run from a throwaway workspace with the plan supplied in-prompt — it never needs repo access.
 >
-> **Antigravity CLI transition (June 18, 2026):** Google is migrating Google One and free-tier Gemini CLI users to the new [Antigravity CLI](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/). The `GEMINI_API_KEY` path used by this plugin is unaffected — AI Studio API keys bill against AI Studio quota, not Google One OAuth tiers, so the `gemini` reviewer continues to work. Paid Gemini Code Assist Standard/Enterprise users also keep the `gemini` CLI as-is. A dedicated `antigravity` reviewer will be added once [acpx](https://github.com/openclaw/acpx) ships native ACP support for it.
+> **Migrated from the Gemini CLI (June 2026):** Google is [transitioning the Gemini CLI to the Antigravity CLI](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/). This plugin's Google reviewer now uses `agy` directly — the old `gemini` agent has been replaced by `antigravity`.
 
 > **Claude note:** Using `claude` as a reviewer means Claude reviewing its own plan — useful for a fresh-context skeptical read, but not truly independent. For independent perspectives, use non-Claude agents. `invoke-acpx.sh` automatically handles the nested-session guard (`CLAUDECODE`) required to run Claude as a subprocess.
 
@@ -181,7 +182,7 @@ Then add to `~/.claude/debate-acpx.json`:
 | Kimi K2.5 | `moonshotai/kimi-k2.5` | 1M context |
 | Mistral Large | `mistralai/mistral-large` | Good architecture instincts |
 | GPT-4.1 | `openai/gpt-4.1` | Broad coverage |
-| Gemini 2.5 Pro | `google/gemini-2.5-pro` | Strong if you don't have Gemini CLI |
+| Gemini 2.5 Pro | `google/gemini-2.5-pro` | Strong if you don't have the Antigravity CLI |
 
 ### Any model via LiteLLM (using opencode)
 
@@ -256,9 +257,10 @@ Reviewers live in `~/.claude/debate-acpx.json`. This is the only file you need t
       "timeout": 120,
       "system_prompt": "You are The Executor — find what breaks at runtime. Focus on shell correctness, exit codes, race conditions, file I/O."
     },
-    "gemini": {
-      "agent": "gemini",
+    "antigravity": {
+      "agent": "antigravity",
       "timeout": 240,
+      "model": "Gemini 3.1 Pro (High)",
       "system_prompt": "You are The Architect — review for structural integrity. Focus on approach validity, over-engineering, missing phases, graceful degradation."
     },
     "mercury": {
@@ -276,6 +278,7 @@ Reviewers live in `~/.claude/debate-acpx.json`. This is the only file you need t
 | `agent` | Yes | acpx agent name (see [Supported Agents](#supported-agents)) |
 | `timeout` | No | Seconds before the review is killed. Default: 120. Use 240-300 for large/slow agents. |
 | `system_prompt` | No | Persona sent as the prompt prefix. Omit for generic reviewer behavior. |
+| `model` | No | For the `antigravity` agent — model display name from `agy models` (e.g. `Gemini 3.1 Pro (High)`). For the `opus` agent — the Claude model id. Omit to use the agent's default. |
 | `model_id` | No | For OpenRouter agents — the underlying model ID (e.g. `inception/mercury-2`). Shown in the summary. |
 
 ### Good reviewer personas
@@ -344,8 +347,11 @@ Run `/debate:setup` to print this snippet with verified paths.
 **Reviewer fails immediately with "No acpx session found"**
 For custom agents (OpenRouter via opencode), create a session first: `acpx <agent> sessions new`. `/debate:acpx-setup` does this automatically during the probe step.
 
-**Gemini fails with auth error**
-`GEMINI_API_KEY` is not set. Get a free key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and add it to `~/.claude/settings.json` under `"env"`. Restart Claude Code.
+**Antigravity (`agy`) fails with an auth error**
+You're not signed in. Run `agy` once in a terminal to complete the browser OAuth flow. For headless environments, set `ANTIGRAVITY_API_KEY` (or `GEMINI_API_KEY`) in `~/.claude/settings.json` under `"env"` and restart Claude Code.
+
+**Antigravity (`agy`) review comes back empty**
+`agy -p` drops its output when stdout is not a TTY; `invoke-acpx.sh` runs it under a PTY via Python to avoid this. If `python3` is missing, or the environment forbids PTY allocation and the bug triggers, install `python3` and ensure the reviewer isn't running under a restrictive sandbox.
 
 **OpenRouter model returns wrong answers / ignores persona**
 The `OPENCODE_CONFIG_CONTENT` env var may not be taking effect. Verify your `start.sh` exports it correctly and that the model ID matches what's on openrouter.ai/models exactly.

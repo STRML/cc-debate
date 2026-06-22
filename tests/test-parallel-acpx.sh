@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PARALLEL="$PROJECT_DIR/scripts/run-parallel-acpx.sh"
 MOCK="$SCRIPT_DIR/mock-acpx.sh"
-MOCK_GEMINI="$SCRIPT_DIR/mock-gemini.sh"
+MOCK_AGY="$SCRIPT_DIR/mock-agy.sh"
 MOCK_CLAUDE="$SCRIPT_DIR/mock-claude.sh"
 
 PASS=0
@@ -25,7 +25,7 @@ setup_env() {
 {
   "reviewers": {
     "alpha": { "agent": "codex", "timeout": 10 },
-    "beta": { "agent": "gemini", "timeout": 10 },
+    "beta": { "agent": "antigravity", "timeout": 10 },
     "gamma": { "agent": "opus", "timeout": 10 }
   }
 }
@@ -206,7 +206,7 @@ EOF
 }
 
 test_whitespace_trimmed_reviewer_list() {
-  # "/debate:all codex, gemini" (space after comma) should work correctly
+  # "/debate:all codex, antigravity" (space after comma) should work correctly
   local tmp_dir review_id work_dir
   tmp_dir=$(setup_env)
   review_id="test-$(date +%s)-trim"
@@ -262,7 +262,7 @@ test_one_failure_doesnt_block_others() {
 {
   "reviewers": {
     "good": { "agent": "codex", "timeout": 10 },
-    "bad": { "agent": "gemini", "timeout": 10 }
+    "bad": { "agent": "antigravity", "timeout": 10 }
   }
 }
 EOF
@@ -290,14 +290,14 @@ echo ""
 echo "=== run-parallel-acpx.sh tests ==="
 echo ""
 
-# Create mock binaries on PATH for acpx, gemini, and claude (direct CLI paths)
+# Create mock binaries on PATH for acpx, agy, and claude (direct CLI paths)
 ln -sf "$MOCK" "$SCRIPT_DIR/acpx"
 chmod +x "$SCRIPT_DIR/acpx"
-ln -sf "$MOCK_GEMINI" "$SCRIPT_DIR/gemini"
-chmod +x "$SCRIPT_DIR/gemini"
+ln -sf "$MOCK_AGY" "$SCRIPT_DIR/agy"
+chmod +x "$SCRIPT_DIR/agy"
 ln -sf "$MOCK_CLAUDE" "$SCRIPT_DIR/claude"
 chmod +x "$SCRIPT_DIR/claude"
-trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/gemini" "$SCRIPT_DIR/claude"' EXIT
+trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/agy" "$SCRIPT_DIR/claude"' EXIT
 
 run_test "parallel happy path" test_parallel_happy_path
 run_test "subset reviewers" test_subset_reviewers

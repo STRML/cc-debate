@@ -98,7 +98,7 @@ fi
 # agent's session sequentially first (ensure is idempotent — it reuses an existing
 # session) makes the subsequent parallel submits all find their session.
 # Skipped when SKIP_SESSION_CHECK is set (tests / mock acpx), and for agents that
-# bypass acpx sessions entirely (gemini and opus use direct CLI invocation).
+# bypass acpx sessions entirely (antigravity and opus use direct CLI invocation).
 if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
   if command -v acpx >/dev/null 2>&1; then
     WARM_ACPX=(acpx)
@@ -113,7 +113,7 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
       [[ "$NAME" =~ ^[a-zA-Z0-9_-]+$ ]] || continue
       AGENT=$(jq -r --arg name "$NAME" '.reviewers[$name].agent // empty' "$CONFIG_FILE")
       [ -z "$AGENT" ] && continue
-      [ "$AGENT" = "gemini" ] || [ "$AGENT" = "opus" ] && continue
+      [ "$AGENT" = "antigravity" ] || [ "$AGENT" = "opus" ] && continue
       [ -n "${WARMED[$AGENT]:-}" ] && continue   # one ensure per distinct agent
       WARMED[$AGENT]=1
       echo "[debate] Warming acpx session for '$AGENT'..." >&2
