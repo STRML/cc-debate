@@ -80,6 +80,8 @@ bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_I
 
 If a reviewer subset was specified, pass the comma-separated list as the third argument. Run this Bash call with `run_in_background: true` (do **not** block on it) — the runner internally blocks until all reviewers complete or time out, and you'll get a task-completion notification when it exits. This keeps the call from serializing the skeptic subagents behind it.
 
+**Run this Bash call with `dangerouslyDisableSandbox: true`.** The external reviewers need to escape the Claude Code sandbox: the `antigravity` reviewer writes its project config to `~/.gemini/config/projects/` before it can open a conversation (a sandboxed write there fails with `operation not permitted`, and `agy` then reports `failed to send message: no active conversation` — surfacing as an empty/garbage review), and codex/gemini need outbound network the seatbelt policy otherwise blocks. `nohup`/`disown` inside the runner dodge permission prompts but do **not** lift the seatbelt sandbox — only launching the call unsandboxed does. (Alternative if you prefer not to disable the sandbox per-call: add `~/.gemini` to the write allowlist in `settings.json`.)
+
 ### 2b. Claude skeptic subagents (Agent)
 
 The Claude side of the panel is a model-tuned **skeptic pair**: a Fable Skeptic (deep behavioral reasoning — hang paths, consumer-side gaps) and an Opus Skeptic (precision checks — arithmetic, boundaries, consistency sweeps). Same role, complementary strengths; convergent findings between them are the most reliable signal.

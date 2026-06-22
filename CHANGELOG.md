@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.4.1] — 2026-06-22 (antigravity reviewer needs an unsandboxed runner)
+
+### Fixed
+
+- **The `antigravity` reviewer failed under the Claude Code sandbox with a misleading error.** `agy` writes a project config to `~/.gemini/config/projects/` before it can open a conversation; that path is outside the sandbox's write allowlist, so the write failed with `operation not permitted` and `agy` then reported `failed to send message: no active conversation`, which landed in the review output as an empty/garbage review (exit 0). It looked like an auth/login problem but was a filesystem-write block. `commands/all.md` Step 2a now directs the orchestrator to launch the `run-parallel-acpx.sh` Bash call with the sandbox disabled (`nohup`/`disown` inside the runner do not lift the seatbelt — only launching the call unsandboxed does). Codex/gemini already needed this for outbound network; the agy migration added a filesystem-write dependency on top. Alternative noted in the step: allowlist `~/.gemini` writes in `settings.json`.
+
 ## [2.4.0] — 2026-06-22 (Antigravity replaces the Gemini reviewer)
 
 ### Changed
