@@ -313,6 +313,19 @@ Read(~/.acpx/**)
 Edit(~/.acpx/**)
 ```
 
+Plus one **repo-scoped read grant** so review subagents can read this repo's
+source at its absolute path without prompting. Compute it for the current repo
+and add the exact entry to the required set:
+
+```bash
+echo "Read($(git rev-parse --show-toplevel 2>/dev/null || pwd)/**)"
+```
+
+Scoped to the repo under review rather than a blanket `Read(**)` — the
+secret-path deny rules already protect `.env`/`~/.ssh`/`~/.aws`/`secrets/`, so
+this only grants read of repo source and won't auto-approve reads in unrelated
+projects. The run commands preflight-check this and warn if it's missing.
+
 Report what was added vs already present. If `~/.claude/settings.json` is
 malformed JSON, stop and surface the parse error — do not rewrite a file you
 can't parse.

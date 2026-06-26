@@ -332,13 +332,19 @@ Add to `~/.claude/settings.json` to permanently approve all debate tool calls:
       "Bash(rm -rf .tmp/ai-review-:*)",
       "Read(.tmp/ai-review*)",
       "Edit(.tmp/ai-review*)",
-      "Write(.tmp/ai-review*)"
+      "Write(.tmp/ai-review*)",
+      "Read(/path/to/your/repo/**)"
     ]
   }
 }
 ```
 
-Run `/debate:setup` to print this snippet with verified paths.
+The last entry is a **repo-scoped read grant** so review subagents can read the
+repo's source at its absolute path without prompting (replace the placeholder
+with your repo root — `git rev-parse --show-toplevel`). It's scoped per repo
+rather than a blanket `Read(**)`; secret paths (`.env`, `~/.ssh`, `~/.aws`,
+`secrets/`) stay denied. Run `/debate:setup` inside a repo to add that repo's
+entry automatically with verified paths.
 
 ---
 

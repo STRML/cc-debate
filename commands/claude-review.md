@@ -1,6 +1,6 @@
 ---
 description: Run Claude reviewer(s) on the current plan. Defaults to a Skeptic pair (Fable + Opus, model-tuned prompts). Use claude-double-review to add the Architect, claude-custom-review for interactive picker.
-allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet), Read(~/.claude/debate-acpx.json)
+allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet), Read(~/.claude/debate-acpx.json), Read(~/.claude/settings.json), Bash(git rev-parse --show-toplevel:*)
 ---
 
 # Claude Plan Review
@@ -192,6 +192,27 @@ If invoked via `claude-custom-review` with no args, show the interactive picker:
 ```
 
 Wait for the user's selection.
+
+### Repo-read permission preflight
+
+The reviewer subagents read repo source at its absolute path. If the allowlist
+doesn't cover it, every source read prompts and the subagents fall back to
+`sed`/`cat`/`grep` to dodge the prompt (degraded review). Check once before
+spawning:
+
+```bash
+git rev-parse --show-toplevel 2>/dev/null || pwd
+```
+
+Read `~/.claude/settings.json` and scan `.permissions.allow` for an entry
+covering `<repo-root>/**` — `Read(<repo-root>/**)` exactly, a broader ancestor
+(`Read(/Users/<you>/git/**)`), or a blanket `Read(**)`.
+
+- **Covered** → proceed silently.
+- **Missing** → print one `⚠️` line naming the exact entry to add,
+  `Read(<repo-root>/**)`, and that `/debate:setup` (run in this repo) adds it
+  permanently. Secret paths stay denied. Proceed either way — the review still
+  runs, just with prompts.
 
 ---
 

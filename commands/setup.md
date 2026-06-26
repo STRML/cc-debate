@@ -238,6 +238,20 @@ Edit(~/.acpx/**)
 Bash(rm -rf .tmp/ai-review-:*)
 ```
 
+Plus one **repo-scoped read grant** so review subagents can read this repo's
+source at its absolute path without prompting. Compute it for the current repo:
+
+```bash
+echo "Read($(git rev-parse --show-toplevel 2>/dev/null || pwd)/**)"
+```
+
+Add that exact `Read(<repo-root>/**)` entry to the required set. This is
+deliberately scoped to the repo under review rather than a blanket `Read(**)`:
+the secret-path deny rules already protect `.env`/`~/.ssh`/`~/.aws`/`secrets/`,
+and a per-repo grant avoids auto-approving reads in unrelated projects. Each
+repo you review gets its own entry the first time you run `/debate:setup` there;
+the run commands preflight-check this and warn if it's missing.
+
 ### 7b. Read the current settings.json
 
 Use the Read tool on `~/.claude/settings.json`.

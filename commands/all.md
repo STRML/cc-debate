@@ -41,7 +41,25 @@ Run setup:
 bash ~/.claude/debate-scripts/debate-setup.sh
 ```
 
-Note `REVIEW_ID`, `WORK_DIR`, and `SCRIPT_DIR` from output.
+Note `REVIEW_ID`, `WORK_DIR`, `SCRIPT_DIR`, and `REPO_ROOT` from output.
+
+### 1b-perm. Preflight: repo-read permission
+
+Review subagents read repo source at its absolute path under `REPO_ROOT`. If the
+allowlist doesn't cover it, every source read prompts and the subagents fall back
+to `sed`/`cat`/`grep` to dodge the prompt (degraded review quality). Check before
+launching:
+
+Read `~/.claude/settings.json` and scan `.permissions.allow` for an entry that
+covers `<REPO_ROOT>/**` — either `Read(<REPO_ROOT>/**)` exactly, a broader
+ancestor (`Read(/Users/<you>/git/**)`), or a blanket `Read(**)`.
+
+- **Covered** → print `  ✅ repo-read permission present` and proceed.
+- **Missing** → print a `⚠️` line with the exact entry to add:
+  `Read(<REPO_ROOT>/**)`, and offer to patch it now (append to
+  `.permissions.allow`, validate with `jq empty`, settings take effect next
+  session). Secret paths stay denied, so this only grants read of repo source.
+  Proceed either way — without it the review still runs, just with prompts.
 
 ### 1c. Announce
 

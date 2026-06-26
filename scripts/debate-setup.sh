@@ -19,13 +19,17 @@ REVIEW_ID=$(uuidgen | tr '[:upper:]' '[:lower:]' | head -c 8)
 if GIT_TOP=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$GIT_TOP" ]; then
   WORK_DIR="${GIT_TOP}/.tmp/ai-review-${REVIEW_ID}"
 else
-  WORK_DIR="${PWD}/.tmp/ai-review-${REVIEW_ID}"
+  GIT_TOP="${PWD}"
+  WORK_DIR="${GIT_TOP}/.tmp/ai-review-${REVIEW_ID}"
 fi
 
 mkdir -p "$WORK_DIR" || { echo "ERROR: failed to create $WORK_DIR" >&2; exit 1; }
 
 echo "REVIEW_ID=${REVIEW_ID}"
 echo "WORK_DIR=${WORK_DIR}"
+# Repo root reviewers read source from. The allowlist needs Read(<REPO_ROOT>/**)
+# so subagent source reads don't prompt; callers preflight-check this.
+echo "REPO_ROOT=${GIT_TOP}"
 
 # Prefer the stable symlink so subsequent Claude Bash tool calls use a path
 # that matches the allowed-tools patterns in each command file.
