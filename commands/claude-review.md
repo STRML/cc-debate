@@ -49,6 +49,11 @@ prompt: |
   Verify before you assert: when a claim depends on library, platform, or
   hardware behavior, check the actual source or docs first. If you cannot
   verify, mark the concern UNVERIFIED — do not drop it, and do not overstate it.
+
+  Ground the plan's citations first: before building any critique on a file:line,
+  function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
+  citation you cannot confirm is itself the finding — report the plan as citing a
+  fabricated identifier rather than reasoning on top of it.
 ```
 
 ### The Opus Skeptic (default, pinned to model: opus)
@@ -74,6 +79,11 @@ prompt: |
   Label any claim about emergent system behavior (timing interactions,
   hardware state, concurrency cascades) as HYPOTHESIS — verify before
   treating it as a finding.
+
+  Ground the plan's citations first: before building any critique on a file:line,
+  function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
+  citation you cannot confirm is itself the finding — report the plan as citing a
+  fabricated identifier rather than reasoning on top of it.
 ```
 
 ### The Architect
@@ -152,6 +162,11 @@ prompt: |
   3. Second-order failures — what does a partial success leave behind?
   4. Security — is any user-controlled content reaching a shell string?
   5. The one fatal flaw — if this plan has one problem, what is it?
+
+  Ground the plan's citations first: before building any critique on a file:line,
+  function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
+  citation you cannot confirm is itself the finding — report the plan as citing a
+  fabricated identifier rather than reasoning on top of it.
 ```
 
 Based on the entry point, determine:
