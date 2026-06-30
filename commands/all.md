@@ -1,6 +1,6 @@
 ---
 description: Run ALL configured AI reviewers in parallel via acpx, synthesize feedback, debate contradictions, and produce a consensus verdict. Configure reviewers in ~/.claude/debate-acpx.json.
-allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/record-round.sh:*), Bash(bash ~/.claude/debate-scripts/safe-cleanup.sh:*), Bash(sha256sum:*), Bash(shasum:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Write(~/.acpx/**), Read(~/.acpx/**), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
+allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/record-round.sh:*), Bash(bash ~/.claude/debate-scripts/safe-cleanup.sh:*), Bash(sha256sum:*), Bash(shasum:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Write(~/.acpx/**), Read(~/.acpx/**), Read(~/.claude/debate-scripts/reviewer-prompts.md), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
 ---
 
 # AI Multi-Model Plan Review (acpx)
@@ -118,19 +118,12 @@ If a reviewer subset was specified, pass the comma-separated list as the third a
 
 The Claude side of the panel is a model-tuned **skeptic pair**: a Fable Skeptic (deep behavioral reasoning — hang paths, consumer-side gaps) and an Opus Skeptic (precision checks — arithmetic, boundaries, consistency sweeps). Same role, complementary strengths; convergent findings between them are the most reliable signal.
 
-**Fable preference:** Fable costs roughly 2x Opus. Check the top-level `fable_reviewer` key in `~/.claude/debate-acpx.json` (already read in Step 1a). If it is `false`, spawn ONLY the Opus-based skeptic, using the name `claude-skeptic` and this classic prompt instead of the pair:
+The three skeptic prompt bodies live in the shared source
+`~/.claude/debate-scripts/reviewer-prompts.md` (shared with `/debate:claude-review` —
+edit there once). **Read that file now**; each Agent block below references a `##`
+section in it for its `prompt:` body.
 
-```
-You are The Skeptic — a senior engineer who challenges plans by finding what
-everyone else missed. Focus on:
-1. Unstated assumptions — what is assumed true that could be false?
-2. Unhappy paths — what breaks when the first thing goes wrong?
-3. Second-order failures — what does a partial success leave behind?
-4. Security — is any user-controlled content reaching a shell string?
-5. The one fatal flaw — if this plan has one problem, what is it?
-
-[shared reviewer footer]
-```
+**Fable preference:** Fable costs roughly 2x Opus. Check the top-level `fable_reviewer` key in `~/.claude/debate-acpx.json` (already read in Step 1a). If it is `false`, spawn ONLY the Opus-based skeptic — `name: claude-skeptic`, `model: opus`, `prompt:` = `reviewer-prompts.md` § Solo Skeptic + `[shared reviewer footer]` — instead of the pair.
 
 If `fable_reviewer` is `true` or absent, spawn both agents below.
 
@@ -175,23 +168,7 @@ Agent:
   description: "Claude Fable skeptic reviewer"
   run_in_background: true
   prompt: |
-    You are The Skeptic — a senior engineer who challenges plans by finding the
-    high-impact failure everyone else missed. Take your time and reason deeply
-    about runtime behavior — your accuracy scales with thinking depth, so prefer
-    one deeply-traced finding over five shallow ones. Focus on:
-    1. Unstated assumptions — what is assumed true that could be false?
-    2. Hang and blocking paths — what can stall, spin, deadlock, or block
-       forever? Trace the actual runtime path under load, under timing pressure,
-       and in degraded modes (the debug build, the retry path, the slow disk).
-    3. Consumer-side gaps — for every output or format this plan changes, who
-       reads it? Find the parser, regex, dashboard, or downstream tool that
-       silently stops matching.
-    4. Second-order failures — what does a partial success leave behind?
-    5. The one fatal flaw — if this plan has one problem, what is it?
-
-    Verify before you assert: when a claim depends on library, platform, or
-    hardware behavior, check the actual source or docs first. If you cannot
-    verify, mark the concern UNVERIFIED — do not drop it, and do not overstate it.
+    [reviewer-prompts.md § Fable Skeptic body]
 
     [shared reviewer footer]
 ```
@@ -204,24 +181,7 @@ Agent:
   description: "Claude Opus skeptic reviewer"
   run_in_background: true
   prompt: |
-    You are The Skeptic — a senior engineer who challenges plans with exact,
-    checkable analysis. Work the bounded checklist below with precision; do not
-    speculate beyond it. Focus on:
-    1. Arithmetic and limits — worst-case sizes, truncation, overflow,
-       off-by-one. Show the math for every quantitative claim you make.
-    2. Boundary conditions — empty input, max-size input, first/last element,
-       zero, negative.
-    3. Consistency sweeps — every name, label, doc string, and message this
-       plan touches: enumerate each surface that must change, file by file.
-       Never report a sweep "clean" without listing exactly what you checked.
-    4. Test coverage — which behaviors in this plan have no test that would
-       catch a regression?
-    5. Security — does user-controlled content reach a shell string, query,
-       template, or eval?
-
-    Label any claim about emergent system behavior (timing interactions,
-    hardware state, concurrency cascades) as HYPOTHESIS — verify before
-    treating it as a finding.
+    [reviewer-prompts.md § Opus Skeptic body]
 
     [shared reviewer footer]
 ```

@@ -128,6 +128,7 @@ test_new_files_exist() {
     scripts/invoke-acpx.sh \
     scripts/run-parallel-acpx.sh \
     scripts/acpx-env-snapshot.sh \
+    scripts/reviewer-prompts.md \
     commands/acpx-setup.md \
     tests/mock-agy.sh \
     tests/mock-claude.sh \
@@ -162,6 +163,15 @@ test_scripts_parse() {
   [ "$bad" -eq 0 ]
 }
 
+test_skeptic_bodies_single_source() {
+  # The Fable/Opus skeptic prompt bodies must live only in scripts/reviewer-prompts.md,
+  # not inline in any command file (guards against the cross-file drift we deduped).
+  local found
+  found=$(grep -rl "Take your time and reason deeply\|Work the bounded checklist below" \
+    "$PROJECT_DIR/commands" 2>/dev/null || true)
+  [ -z "$found" ] || { echo "  Skeptic body inlined in: $found (should reference reviewer-prompts.md)"; return 1; }
+}
+
 test_gitignore_updated() {
   grep -q "^\.tmp/" "$PROJECT_DIR/.gitignore" || return 1
 }
@@ -189,6 +199,7 @@ run_test "deleted files gone" test_deleted_files_dont_exist
 run_test "new files exist" test_new_files_exist
 run_test "new scripts executable" test_new_scripts_executable
 run_test "all scripts parse" test_scripts_parse
+run_test "skeptic bodies single-source" test_skeptic_bodies_single_source
 run_test ".gitignore updated" test_gitignore_updated
 run_test "version consistent" test_version_consistent
 

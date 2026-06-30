@@ -1,6 +1,6 @@
 ---
 description: Run Claude reviewer(s) on the current plan. Defaults to a Skeptic pair (Fable + Opus, model-tuned prompts). Use claude-double-review to add the Architect, claude-custom-review for interactive picker.
-allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet), Read(~/.claude/debate-acpx.json), Read(~/.claude/settings.json), Bash(git rev-parse --show-toplevel:*)
+allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet), Read(~/.claude/debate-acpx.json), Read(~/.claude/settings.json), Read(~/.claude/debate-scripts/reviewer-prompts.md), Bash(git rev-parse --show-toplevel:*)
 ---
 
 # Claude Plan Review
@@ -44,54 +44,13 @@ Arguments (all entry points):
 
 The two Skeptics are a model-tuned pair — same role, complementary strengths. Fable is strongest at deep behavioral reasoning and benefits from extended thinking; Opus is strongest at bounded, precise checks and degrades on open-ended speculation. The prompts encode that split. Run them together by default; their findings overlap on the core (good signal: convergent findings are the most reliable) and diverge on the edges (where each model's unique catches live).
 
-### The Fable Skeptic (default, pinned to model: fable)
-```
-name: "claude-fable-skeptic"
-model: fable
-prompt: |
-  You are The Skeptic — a senior engineer who challenges plans by finding the
-  high-impact failure everyone else missed. Take your time and reason deeply
-  about runtime behavior — your accuracy scales with thinking depth, so prefer
-  one deeply-traced finding over five shallow ones. Focus on:
-  1. Unstated assumptions — what is assumed true that could be false?
-  2. Hang and blocking paths — what can stall, spin, deadlock, or block
-     forever? Trace the actual runtime path under load, under timing pressure,
-     and in degraded modes (the debug build, the retry path, the slow disk).
-  3. Consumer-side gaps — for every output or format this plan changes, who
-     reads it? Find the parser, regex, dashboard, or downstream tool that
-     silently stops matching.
-  4. Second-order failures — what does a partial success leave behind?
-  5. The one fatal flaw — if this plan has one problem, what is it?
+The two Skeptics' prompt bodies live in the shared source
+`~/.claude/debate-scripts/reviewer-prompts.md` (used by `/debate:all` too — edit
+there once). **Read that file now** and use the `## Fable Skeptic` and
+`## Opus Skeptic` bodies when spawning:
 
-  Verify before you assert: when a claim depends on library, platform, or
-  hardware behavior, check the actual source or docs first. If you cannot
-  verify, mark the concern UNVERIFIED — do not drop it, and do not overstate it.
-```
-
-### The Opus Skeptic (default, pinned to model: opus)
-```
-name: "claude-opus-skeptic"
-model: opus
-prompt: |
-  You are The Skeptic — a senior engineer who challenges plans with exact,
-  checkable analysis. Work the bounded checklist below with precision; do not
-  speculate beyond it. Focus on:
-  1. Arithmetic and limits — worst-case sizes, truncation, overflow,
-     off-by-one. Show the math for every quantitative claim you make.
-  2. Boundary conditions — empty input, max-size input, first/last element,
-     zero, negative.
-  3. Consistency sweeps — every name, label, doc string, and message this plan
-     touches: enumerate each surface that must change, file by file. Never
-     report a sweep "clean" without listing exactly what you checked.
-  4. Test coverage — which behaviors in this plan have no test that would
-     catch a regression?
-  5. Security — does user-controlled content reach a shell string, query,
-     template, or eval?
-
-  Label any claim about emergent system behavior (timing interactions,
-  hardware state, concurrency cascades) as HYPOTHESIS — verify before
-  treating it as a finding.
-```
+- **The Fable Skeptic** (default, `name: claude-fable-skeptic`, pinned `model: fable`) — body: `reviewer-prompts.md` § Fable Skeptic.
+- **The Opus Skeptic** (default, `name: claude-opus-skeptic`, pinned `model: opus`) — body: `reviewer-prompts.md` § Opus Skeptic.
 
 ### The Architect
 ```
@@ -158,18 +117,9 @@ Fable costs roughly 2x Opus, so the Fable Skeptic is opt-in via stored preferenc
 - `true` (or key absent) — defaults include the Fable Skeptic as documented above.
 - `false` — drop the Fable Skeptic from any *default* set and substitute the **Solo Skeptic** below (classic broad prompt, opus) wherever the pair would have run. An explicit positional arg (`fable-skeptic`, or invoking `/debate:fable` / `/debate:mythos`) always wins over the stored preference — the user asked by name.
 
-```
-name: "claude-skeptic"   # Solo Skeptic — used only when fable_reviewer is false
-model: opus
-prompt: |
-  You are The Skeptic — a senior engineer who challenges plans by finding what
-  everyone else missed. Focus on:
-  1. Unstated assumptions — what is assumed true that could be false?
-  2. Unhappy paths — what breaks when the first thing goes wrong?
-  3. Second-order failures — what does a partial success leave behind?
-  4. Security — is any user-controlled content reaching a shell string?
-  5. The one fatal flaw — if this plan has one problem, what is it?
-```
+The **Solo Skeptic** (`name: claude-skeptic`, `model: opus`) — body in the shared
+source `~/.claude/debate-scripts/reviewer-prompts.md` § Solo Skeptic. Used only when
+`fable_reviewer` is false; substitutes for the Fable+Opus pair wherever it would run.
 
 Based on the entry point, determine:
 
@@ -255,7 +205,7 @@ Agent:
   description: "Claude [Personality] reviewer"
   run_in_background: [true if multiple reviewers, false if single]
   prompt: |
-    [personality prompt from Personalities section]
+    [personality prompt body — Skeptics from reviewer-prompts.md, others from the Personalities section]
 
     Review the implementation plan in this conversation. The plan is already in
     your context — do not ask for it.
