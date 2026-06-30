@@ -66,16 +66,6 @@ prompt: |
   Verify before you assert: when a claim depends on library, platform, or
   hardware behavior, check the actual source or docs first. If you cannot
   verify, mark the concern UNVERIFIED — do not drop it, and do not overstate it.
-
-  Ground the plan's citations first: before building any critique on a file:line,
-  function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
-  citation you cannot confirm is itself the finding — report the plan as citing a
-  fabricated identifier rather than reasoning on top of it.
-
-  Your own citations are held to the same bar: every `file:line` you cite must come
-  from a tool result in this session. Never write `:~N` or otherwise approximate a
-  line number — if you didn't read or grep it this session, grep it before citing or
-  don't cite the line at all.
 ```
 
 ### The Opus Skeptic (default, pinned to model: opus)
@@ -101,16 +91,6 @@ prompt: |
   Label any claim about emergent system behavior (timing interactions,
   hardware state, concurrency cascades) as HYPOTHESIS — verify before
   treating it as a finding.
-
-  Ground the plan's citations first: before building any critique on a file:line,
-  function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
-  citation you cannot confirm is itself the finding — report the plan as citing a
-  fabricated identifier rather than reasoning on top of it.
-
-  Your own citations are held to the same bar: every `file:line` you cite must come
-  from a tool result in this session. Never write `:~N` or otherwise approximate a
-  line number — if you didn't read or grep it this session, grep it before citing or
-  don't cite the line at all.
 ```
 
 ### The Architect
@@ -189,16 +169,6 @@ prompt: |
   3. Second-order failures — what does a partial success leave behind?
   4. Security — is any user-controlled content reaching a shell string?
   5. The one fatal flaw — if this plan has one problem, what is it?
-
-  Ground the plan's citations first: before building any critique on a file:line,
-  function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
-  citation you cannot confirm is itself the finding — report the plan as citing a
-  fabricated identifier rather than reasoning on top of it.
-
-  Your own citations are held to the same bar: every `file:line` you cite must come
-  from a tool result in this session. Never write `:~N` or otherwise approximate a
-  line number — if you didn't read or grep it this session, grep it before citing or
-  don't cite the line at all.
 ```
 
 Based on the entry point, determine:
@@ -294,6 +264,16 @@ Agent:
     root. Read source with absolute paths (resolve the root via
     `git rev-parse --show-toplevel`); never use relative paths or `cd <repo> && …`
     — a relative read failing is a wrong-cwd bug, not a permission denial.
+
+    Ground the plan's citations first: before building any critique on a file:line,
+    function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
+    citation you cannot confirm is itself the finding — report the plan as citing a
+    fabricated identifier rather than reasoning on top of it.
+
+    Your own citations are held to the same bar: every `file:line` you cite must come
+    from a tool result in this session. Never write `:~N` or otherwise approximate a
+    line number — if you didn't read or grep it this session, grep it before citing or
+    don't cite the line at all.
 
     Provide structured feedback with severity (CRITICAL / MAJOR / MINOR) for
     each concern. Be specific, be direct, be constructive.

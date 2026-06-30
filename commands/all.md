@@ -129,13 +129,41 @@ everyone else missed. Focus on:
 4. Security — is any user-controlled content reaching a shell string?
 5. The one fatal flaw — if this plan has one problem, what is it?
 
-Ground the plan's citations first: before building any critique on a file:line,
-function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
-citation you cannot confirm is itself the finding — report the plan as citing a
-fabricated identifier rather than reasoning on top of it.
+[shared reviewer footer]
 ```
 
 If `fable_reviewer` is `true` or absent, spawn both agents below.
+
+**Shared reviewer footer.** Every skeptic prompt below (and the solo classic prompt
+above) ends with the line `[shared reviewer footer]`. Substitute this block verbatim
+in its place when you spawn, indented to match the prompt:
+
+```
+    Review the implementation plan in this conversation. The plan is already in
+    your context — do not ask for it.
+
+    Your cwd may be a throwaway `.tmp/ai-review-<id>` scratch dir, not the repo
+    root. Read source with absolute paths (resolve the root via
+    `git rev-parse --show-toplevel`); never use relative paths or `cd <repo> && …`
+    — a relative read failing is a wrong-cwd bug, not a permission denial.
+
+    Ground the plan's citations first: before building any critique on a file:line,
+    function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
+    citation you cannot confirm is itself the finding — report the plan as citing a
+    fabricated identifier rather than reasoning on top of it.
+
+    Your own citations are held to the same bar: every `file:line` you cite must come
+    from a tool result in this session. Never write `:~N` or otherwise approximate a
+    line number — if you didn't read or grep it this session, grep it before citing or
+    don't cite the line at all.
+
+    Provide structured feedback with severity (CRITICAL / MAJOR / MINOR) for
+    each concern. Be specific, be direct, be constructive.
+
+    End your response with exactly one of:
+      VERDICT: APPROVED — plan is solid and ready to implement
+      VERDICT: REVISE — concerns above should be addressed first
+```
 
 **Round 1:** Spawn the named agent(s) in the same message as 2a. They fork context, so they already have the plan — do NOT re-send it.
 
@@ -165,20 +193,7 @@ Agent:
     hardware behavior, check the actual source or docs first. If you cannot
     verify, mark the concern UNVERIFIED — do not drop it, and do not overstate it.
 
-    Ground the plan's citations first: before building any critique on a file:line,
-    function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
-    citation you cannot confirm is itself the finding — report the plan as citing a
-    fabricated identifier rather than reasoning on top of it.
-
-    Review the implementation plan in this conversation. The plan is already in
-    your context — do not ask for it.
-
-    Provide structured feedback with severity (CRITICAL / MAJOR / MINOR) for
-    each concern. Be specific, be direct, be constructive.
-
-    End your response with exactly one of:
-      VERDICT: APPROVED — plan is solid and ready to implement
-      VERDICT: REVISE — concerns above should be addressed first
+    [shared reviewer footer]
 ```
 
 ```
@@ -208,20 +223,7 @@ Agent:
     hardware state, concurrency cascades) as HYPOTHESIS — verify before
     treating it as a finding.
 
-    Ground the plan's citations first: before building any critique on a file:line,
-    function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
-    citation you cannot confirm is itself the finding — report the plan as citing a
-    fabricated identifier rather than reasoning on top of it.
-
-    Review the implementation plan in this conversation. The plan is already in
-    your context — do not ask for it.
-
-    Provide structured feedback with severity (CRITICAL / MAJOR / MINOR) for
-    each concern. Be specific, be direct, be constructive.
-
-    End your response with exactly one of:
-      VERDICT: APPROVED — plan is solid and ready to implement
-      VERDICT: REVISE — concerns above should be addressed first
+    [shared reviewer footer]
 ```
 
 **Rounds 2+:** Use SendMessage to each existing skeptic agent (`claude-fable-skeptic` and `claude-opus-skeptic`, or `claude-skeptic` when fable is disabled) with revision context, in the same message as the 2a re-run (same pattern as claude-review skill).
