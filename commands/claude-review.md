@@ -7,6 +7,23 @@ allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fabl
 
 Run one or more Claude reviewers on the current plan. Iterates until all approve or max 5 rounds reached.
 
+## Working directory (read this first)
+
+This review may run with your cwd inside a throwaway `.tmp/ai-review-<id>` scratch
+dir — it holds `plan.md` and reviewer scratch, **not** the repo source. Never assume
+cwd is the repo root. When reading or grepping source:
+
+- Resolve the repo root once (`git rev-parse --show-toplevel`) and use **absolute
+  paths** for every Read / `grep` / `sed`. A relative path like `src/foo.ts` resolves
+  against the empty scratch dir and fails with "No such file or directory" — which is
+  a wrong cwd, not a permission denial or a missing file. Do not narrate it as one.
+- Do **not** chain `cd <repo> && <cmd>` — compound commands and cd-before-git both
+  trip the permission classifier ("contains multiple operations" / "changes directory
+  before running git"). Run a single command against an absolute path instead.
+- If an absolute-path Read genuinely prompts, the repo isn't on the allowlist — see
+  the preflight in Step 1. That is the only real permission case; everything above is
+  a path/cwd bug, not an allowlist gap.
+
 ## Entry Points
 
 This skill is invoked via three commands that prefill different defaults:
@@ -54,6 +71,11 @@ prompt: |
   function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
   citation you cannot confirm is itself the finding — report the plan as citing a
   fabricated identifier rather than reasoning on top of it.
+
+  Your own citations are held to the same bar: every `file:line` you cite must come
+  from a tool result in this session. Never write `:~N` or otherwise approximate a
+  line number — if you didn't read or grep it this session, grep it before citing or
+  don't cite the line at all.
 ```
 
 ### The Opus Skeptic (default, pinned to model: opus)
@@ -84,6 +106,11 @@ prompt: |
   function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
   citation you cannot confirm is itself the finding — report the plan as citing a
   fabricated identifier rather than reasoning on top of it.
+
+  Your own citations are held to the same bar: every `file:line` you cite must come
+  from a tool result in this session. Never write `:~N` or otherwise approximate a
+  line number — if you didn't read or grep it this session, grep it before citing or
+  don't cite the line at all.
 ```
 
 ### The Architect
@@ -167,6 +194,11 @@ prompt: |
   function, symbol, or identifier the plan cites, confirm it exists (grep/read). A
   citation you cannot confirm is itself the finding — report the plan as citing a
   fabricated identifier rather than reasoning on top of it.
+
+  Your own citations are held to the same bar: every `file:line` you cite must come
+  from a tool result in this session. Never write `:~N` or otherwise approximate a
+  line number — if you didn't read or grep it this session, grep it before citing or
+  don't cite the line at all.
 ```
 
 Based on the entry point, determine:
@@ -257,6 +289,11 @@ Agent:
 
     Review the implementation plan in this conversation. The plan is already in
     your context — do not ask for it.
+
+    Your cwd may be a throwaway `.tmp/ai-review-<id>` scratch dir, not the repo
+    root. Read source with absolute paths (resolve the root via
+    `git rev-parse --show-toplevel`); never use relative paths or `cd <repo> && …`
+    — a relative read failing is a wrong-cwd bug, not a permission denial.
 
     Provide structured feedback with severity (CRITICAL / MAJOR / MINOR) for
     each concern. Be specific, be direct, be constructive.

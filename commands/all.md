@@ -43,6 +43,20 @@ bash ~/.claude/debate-scripts/debate-setup.sh
 
 Note `REVIEW_ID`, `WORK_DIR`, `SCRIPT_DIR`, and `REPO_ROOT` from output.
 
+### 1b-cwd. Working directory
+
+`WORK_DIR` (`.tmp/ai-review-<id>`) is a throwaway scratch dir holding `plan.md`
+and reviewer output — **not** the repo source, and likely your cwd. Whenever you
+(the orchestrator) read or grep source to ground a finding, use **absolute paths
+under `REPO_ROOT`**, never relative paths or `cd <REPO_ROOT> && …`:
+
+- A relative read (`src/foo.ts`) resolves against the empty scratch dir and fails
+  with "No such file or directory" — that's a wrong-cwd bug, not a permission
+  denial or a missing file. Do not narrate it as one or fall back to `sed`.
+- `cd <REPO_ROOT> && <cmd>` and cd-before-git both trip the permission classifier
+  ("contains multiple operations" / "changes directory before running git"). Run a
+  single command against an absolute path instead.
+
 ### 1b-perm. Preflight: repo-read permission
 
 Review subagents read repo source at its absolute path under `REPO_ROOT`. If the
