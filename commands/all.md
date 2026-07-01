@@ -394,7 +394,7 @@ Triggers:
 
 How to run:
 
-1. Write a focused verification prompt for each reviewer that flagged the issue you fixed (or all reviewers if the change is broad). Use the lightest-cost reviewer when one will do — this is verification, not full re-review.
+1. Write a focused verification prompt for each reviewer that flagged the issue you fixed (or all reviewers if the change is broad). Use the lightest-cost reviewer when one will do — this is verification, not full re-review. The `<name>-prompt.txt` file below is the **acpx** convention; a Claude skeptic gets the same prompt text delivered via SendMessage in step 2, not a file.
    ```bash
    cat > <WORK_DIR>/<name>-prompt.txt << 'VERIFY_EOF'
    READ-ONLY: Do not write, edit, or create any file — reply with text only.
@@ -410,11 +410,15 @@ How to run:
    regressions? End with VERDICT: APPROVED or VERDICT: REVISE.
    VERIFY_EOF
    ```
-2. Re-invoke the runner (parallel) or `invoke-acpx.sh` directly (single reviewer):
-   ```bash
-   bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
-   ```
-3. Read each reviewer's full updated output (Read tool, not grep).
+2. **Re-invoke every reviewer that flagged the fixed issue — both channels.** A verification pass that skips a reviewer silently claims that reviewer approved when it was never re-run. This is the highest-leverage failure mode this whole step exists to prevent, so it must cover **acpx CLI reviewers AND Claude skeptic subagents**, exactly like Rounds 2+ (Step 2 re-runs both 2a and 2b).
+   - **acpx CLI reviewers** — re-invoke the runner (parallel) or `invoke-acpx.sh` directly (single reviewer):
+     ```bash
+     bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
+     ```
+   - **Claude skeptic subagents** (`claude-fable-skeptic` / `claude-opus-skeptic`, or `claude-skeptic` when fable is disabled) — these are NOT re-run by the acpx runner. If a skeptic flagged the issue you fixed, you MUST re-invoke it via **SendMessage** with the verification prompt (same mechanism as Rounds 2+, line 189), and wait for its returned result. Do not re-read its stale prior output and treat it as a fresh verdict — that is the silent model-invocation drop. If a skeptic agent no longer exists (e.g. it was cleaned up), re-create it with Agent (§2b pattern) carrying the verification prompt.
+
+   Whether a flagged reviewer is an acpx CLI or a Claude skeptic, it gets re-invoked here — never assume a verdict for a reviewer you did not actually re-run this pass.
+3. Read each reviewer's full updated output (Read tool for acpx `<name>-output.md`; the returned agent result for skeptics — not grep).
 4. Record the verification round:
    ```bash
    bash "<SCRIPT_DIR>/record-round.sh" "<WORK_DIR>" <ROUND_NUM> <VERDICT>
