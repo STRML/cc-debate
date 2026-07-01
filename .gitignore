@@ -1,2 +1,23 @@
+# Debate review scratch / work dirs
 .tmp/
 autoresearch-*/
+
+# Serena MCP local project state
+.serena/
+
+# Claude Code local (machine-specific) state
+.claude/settings.local.json
+.claude/tmp/
+
+# Plugin cache orphan marker
+.orphaned_at
+
+# Personal memory / knowledge base (not plugin source)
+cold-storage/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
