@@ -300,7 +300,11 @@ if [ "$AGENT" = "antigravity" ]; then
   ESC=$(printf '\033')
 
   set +e
-  ( cd "$AGY_WORKSPACE" && "${TIMEOUT_PREFIX[@]}" "$PY_BIN" -c '
+  # Expand the array 3.2-safely: on bash < 4.4 (macOS ships 3.2), "${arr[@]}" of an
+  # EMPTY array under `set -u` throws "unbound variable". The +"${...}" guard yields
+  # nothing when TIMEOUT_PREFIX is empty (no timeout/gtimeout on PATH) and the elements
+  # otherwise — so the agy reviewer runs instead of crashing on timeout-less macOS.
+  ( cd "$AGY_WORKSPACE" && "${TIMEOUT_PREFIX[@]+"${TIMEOUT_PREFIX[@]}"}" "$PY_BIN" -c '
 import os, sys, subprocess
 cmd = [os.environ["AGY_BIN"], "-p", os.environ["AGY_PROMPT"],
        "--sandbox", "--print-timeout", os.environ["AGY_PRINT_TIMEOUT"]]

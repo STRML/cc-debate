@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.2] — 2026-07-01 (agy crash on timeout-less macOS; verification pass skipped skeptics)
+
+### Fixed
+
+- **The `antigravity` (`agy`) reviewer crashed with `TIMEOUT_PREFIX[@]: unbound variable` on any macOS without `timeout`/`gtimeout`.** `invoke-acpx.sh` runs under `set -euo pipefail`, and macOS ships bash 3.2, where expanding an **empty** array (`"${TIMEOUT_PREFIX[@]}"`) under `set -u` is treated as an unbound variable and aborts. When neither `timeout` nor `gtimeout` is on PATH (stock macOS, no coreutils) the array is empty, so the agy path died before invoking the CLI instead of running without a timeout wrapper as intended. Fixed with the bash-3.2-safe `"${TIMEOUT_PREFIX[@]+"${TIMEOUT_PREFIX[@]}"}"` expansion. This was also the cause of the red `macos-latest` CI (the runner has no coreutils `timeout`).
+- **The Step 6.5 verification pass silently skipped Claude skeptic reviewers.** `/debate:all` runs two reviewer channels — acpx CLIs and the Claude skeptic subagents (`claude-opus-skeptic` / `claude-fable-skeptic`) — and Rounds 2+ re-invoke both. But the verification pass only re-ran the acpx runner, so when a skeptic flagged the fixed issue the pass wrote a prompt file, recorded the round, and reported APPROVED **without re-invoking that skeptic's model** — a fabricated verdict. `commands/all.md` Step 6.5 now requires re-invoking every flagged reviewer across both channels (skeptics via SendMessage, same mechanism as Rounds 2+), with an explicit guard against assuming a verdict for a reviewer not actually re-run.
+
 ## [2.4.1] — 2026-06-22 (antigravity reviewer needs an unsandboxed runner)
 
 ### Fixed
