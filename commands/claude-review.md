@@ -83,25 +83,26 @@ Read that file and use the § Simplifier body verbatim.
 
 ## Step 1: Resolve Configuration
 
-### Fable preference
+### Skeptic preference
 
-Fable costs roughly 2x Opus, so the Fable Skeptic is opt-in via stored preference. Check `~/.claude/debate-acpx.json` for the top-level key `fable_reviewer`:
+Fable costs roughly 2x Opus, so the Fable Skeptic is opt-in via the `skeptic` entry in
+the `claude_reviewers` object of `~/.claude/debate-acpx.json`. Read it and interpret:
 
-- `true` (or key absent) — defaults include the Fable Skeptic as documented above.
-- `false` — drop the Fable Skeptic from any *default* set and substitute the **Solo Skeptic** below (classic broad prompt, opus) wherever the pair would have run. An explicit positional arg (`fable-skeptic`, or invoking `/debate:fable` / `/debate:mythos`) always wins over the stored preference — the user asked by name.
+- `["fable","opus"]` (or key absent → treat as the default pair) — defaults include the Fable Skeptic as documented above.
+- `"opus"` (or any spec without `fable`) — drop the Fable Skeptic from any *default* set and substitute the **Solo Skeptic** below (classic broad prompt, opus) wherever the pair would have run. An explicit positional arg (`fable-skeptic`, or invoking `/debate:fable` / `/debate:mythos`) always wins over the stored preference — the user asked by name.
 
 The **Solo Skeptic** (`name: claude-skeptic`, `model: opus`) — body in the shared
-source `~/.claude/debate-scripts/reviewer-prompts.md` § Solo Skeptic. Used only when
-`fable_reviewer` is false; substitutes for the Fable+Opus pair wherever it would run.
+source `~/.claude/debate-scripts/reviewer-prompts.md` § Solo Skeptic. Used when
+`claude_reviewers.skeptic` excludes fable; substitutes for the Fable+Opus pair wherever it would run.
 
 Based on the entry point, determine:
 
-1. **Personalities** — from the entry point defaults (adjusted for the fable preference) + any overrides from args
+1. **Personalities** — from the entry point defaults (adjusted for the skeptic preference) + any overrides from args
 2. **Model** — for non-pinned personalities: `opus` (default) or `sonnet` if `--model sonnet` was passed. The Fable/Opus Skeptics always use their pinned models.
 
 ### Fable availability probe
 
-If the Fable Skeptic is in the selected personalities (either by default with `fable_reviewer: true`, or by explicit positional arg / `/debate:fable` / `/debate:mythos`), probe fable before the parallel Agent spawn:
+If the Fable Skeptic is in the selected personalities (either by default via `claude_reviewers.skeptic`, or by explicit positional arg / `/debate:fable` / `/debate:mythos`), probe fable before the parallel Agent spawn:
 
 ```bash
 claude --model fable --print --output-format json 'ok' 2>&1

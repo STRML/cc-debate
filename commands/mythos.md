@@ -5,4 +5,4 @@ allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fabl
 
 # Mythos (alias)
 
-This is an alias for `/debate:fable`. Execute the `fable` command exactly as written — single Fable Skeptic, model pinned to fable, stored `fable_reviewer` preference skipped (the user asked for fable by name).
+This is an alias for `/debate:fable`. Execute the `fable` command exactly as written — single Fable Skeptic, model pinned to fable, stored `claude_reviewers.skeptic` preference skipped (the user asked for fable by name).

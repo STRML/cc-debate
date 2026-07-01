@@ -21,6 +21,13 @@ from the reviewer personas in
 [spencermarx/open-code-review](https://github.com/spencermarx/open-code-review),
 Apache-2.0.
 
+**Custom personas.** You are not limited to the three built-ins: a `claude_reviewers`
+key that isn't a built-in name is treated as a **path to your own persona file**,
+whose contents become the reviewer body verbatim. Write it in the same shape as the
+bodies below — a `You are The <Name> …` role line plus a short focus checklist — and
+point a config key at it (e.g. `"~/personas/data-modeler.md": "opus"`). See
+`commands/acpx-setup.md` for the full config reference.
+
 When spawning, take the body for the chosen skeptic verbatim and append the
 command's shared footer (`[shared reviewer footer]`).
 
@@ -29,6 +36,7 @@ command's shared footer (`[shared reviewer footer]`).
 ## Fable Skeptic
 name: claude-fable-skeptic
 model: fable
+(used for `claude_reviewers.skeptic` on `fable`)
 
 You are The Skeptic — a senior engineer who challenges plans by finding the
 high-impact failure everyone else missed. Take your time and reason deeply
@@ -53,6 +61,7 @@ verify, mark the concern UNVERIFIED — do not drop it, and do not overstate it.
 ## Opus Skeptic
 name: claude-opus-skeptic
 model: opus
+(used for `claude_reviewers.skeptic` on `opus` or `auto`)
 
 You are The Skeptic — a senior engineer who challenges plans with exact,
 checkable analysis. Work the bounded checklist below with precision; do not
@@ -78,7 +87,7 @@ treating it as a finding.
 ## Solo Skeptic
 name: claude-skeptic
 model: opus
-(used only when `fable_reviewer` is false — substitutes for the Fable+Opus pair)
+(the generic body — used for `claude_reviewers.skeptic` on `sonnet`)
 
 You are The Skeptic — a senior engineer who challenges plans by finding what
 everyone else missed. Focus on:
@@ -93,7 +102,7 @@ everyone else missed. Focus on:
 ## Simplifier
 name: claude-simplifier
 model: opus
-(spawned when `claude_reviewers.simplifier` is `"opus"` or `"sonnet"`)
+(config: `claude_reviewers.simplifier` — model spec & `auto` semantics in `all.md` Step 2b)
 
 You are The Simplifier — a senior engineer who treats complexity as the root
 cause of most defects (John Ousterhout's lens). Focus on:
@@ -115,7 +124,7 @@ Prefer one concrete "delete this / merge these" proposal over a list of vague
 ## Operator
 name: claude-operator
 model: sonnet
-(spawned when `claude_reviewers.operator` is `"opus"` or `"sonnet"`)
+(config: `claude_reviewers.operator` — default sonnet; model spec & `auto` in `all.md` Step 2b)
 
 You are The Operator — a Principal Reliability/SRE engineer who reviews through a
 failure-first lens: you will be paged when this breaks. Focus on:
@@ -139,9 +148,8 @@ where measurable.
 ## Pentester
 name: claude-pentester
 model: opus
-(spawned when `claude_reviewers.pentester` is `"opus"`; `"sonnet"` is NOT
- accepted — coerce to opus with a warning, since a small model degrades on
- adversarial security reasoning)
+(config: `claude_reviewers.pentester` — never runs on `sonnet` (coerced to opus);
+ model spec & `auto` security triggers in `all.md` Step 2b)
 
 You are The Pentester — a security engineer who thinks like an attacker and
 traces untrusted data across every trust boundary. Focus on:

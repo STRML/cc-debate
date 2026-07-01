@@ -116,16 +116,13 @@ If a reviewer subset was specified, pass the comma-separated list as the third a
 
 ### 2b. Claude skeptic subagents (Agent)
 
-The Claude side of the panel is a model-tuned **skeptic pair**: a Fable Skeptic (deep behavioral reasoning — hang paths, consumer-side gaps) and an Opus Skeptic (precision checks — arithmetic, boundaries, consistency sweeps). Same role, complementary strengths; convergent findings between them are the most reliable signal.
-
-The three skeptic prompt bodies live in the shared source
-`~/.claude/debate-scripts/reviewer-prompts.md` (shared with `/debate:claude-review` —
-edit there once). **Read that file now**; each Agent block below references a `##`
-section in it for its `prompt:` body.
-
-**Fable preference:** Fable costs roughly 2x Opus. Check the top-level `fable_reviewer` key in `~/.claude/debate-acpx.json` (already read in Step 1a). If it is `false`, spawn ONLY the Opus-based skeptic — `name: claude-skeptic`, `model: opus`, `prompt:` = `reviewer-prompts.md` § Solo Skeptic + `[shared reviewer footer]` — instead of the pair.
-
-If `fable_reviewer` is `true` or absent, spawn both agents below.
+The Claude side of the panel — the skeptic(s) and any persona reviewers — is driven
+entirely by the `claude_reviewers` object in `~/.claude/debate-acpx.json` (loaded in
+Step 1a). There is no separate `fable_reviewer` flag; the skeptic is just an entry in
+that object. **Read the shared bodies source now:**
+`~/.claude/debate-scripts/reviewer-prompts.md` (shared with `/debate:claude-review`).
+Each entry resolves to one or more background Agent teammates (persona × model), all
+spawned in the same message as 2a — full resolution rules are below the footer.
 
 **Shared reviewer footer.** Every skeptic prompt below (and the solo classic prompt
 above) ends with the line `[shared reviewer footer]`. Substitute this block verbatim
@@ -172,71 +169,83 @@ in its place when you spawn, indented to match the prompt:
       VERDICT: REVISE — concerns above should be addressed first
 ```
 
-**Round 1:** Spawn the named agent(s) in the same message as 2a. Substitute the current plan text for `[CURRENT_PLAN]` in the footer — general-purpose subagents do **not** inherit your conversation, so the plan must be inlined in the prompt or the reviewer has nothing to review (the classic "skeptic finished with no review text" failure).
+**Round 1:** Resolve `claude_reviewers` (rules below) and spawn every resulting teammate
+in the same message as 2a. Inline the current plan for `[CURRENT_PLAN]` in each footer —
+general-purpose subagents do **not** inherit your conversation, so the plan must be
+inlined or the reviewer has nothing to review.
 
-```
-Agent:
-  name: "claude-fable-skeptic"
-  model: "fable"
-  subagent_type: "general-purpose"
-  description: "Claude Fable skeptic reviewer"
-  run_in_background: true
-  prompt: |
-    [reviewer-prompts.md § Fable Skeptic body]
+`claude_reviewers` maps **persona key → model spec**.
 
-    [shared reviewer footer]
-```
+**Persona key** — a built-in name or a path to a custom persona file:
 
-```
-Agent:
-  name: "claude-opus-skeptic"
-  model: "opus"
-  subagent_type: "general-purpose"
-  description: "Claude Opus skeptic reviewer"
-  run_in_background: true
-  prompt: |
-    [reviewer-prompts.md § Opus Skeptic body]
+| key | persona body |
+|-----|--------------|
+| `skeptic` | model-tuned: `fable` → § Fable Skeptic, `opus` → § Opus Skeptic, `sonnet` → § Solo Skeptic |
+| `simplifier` | `reviewer-prompts.md` § Simplifier |
+| `operator`   | `reviewer-prompts.md` § Operator |
+| `pentester`  | `reviewer-prompts.md` § Pentester |
+| anything else | a path to a custom persona file — its contents, verbatim |
 
-    [shared reviewer footer]
-```
+Any key that is **not** one of the four built-in names is treated as a path to a custom
+persona file — read it (absolute, or relative to `REPO_ROOT`); if missing/unreadable,
+print `⚠️ persona <path>: file not found — skipping.` and skip it.
 
-**Config-driven persona reviewers (Round 1, same message as 2a + the skeptic).**
-In addition to the skeptic, read the `claude_reviewers` object in
-`~/.claude/debate-acpx.json` (loaded in Step 1a). For each persona key whose value
-is `"opus"` or `"sonnet"`, spawn one extra Claude teammate:
+Teammate names: skeptic → `claude-fable-skeptic` / `claude-opus-skeptic` /
+`claude-skeptic` (by model); other built-ins → `claude-<key>`; custom →
+`claude-<basename-without-extension>` (sanitized to alphanumeric/dash). When an array
+resolves to multiple teammates for a non-skeptic persona, suffix the model to keep names
+unique (`claude-simplifier-opus`, `claude-simplifier-sonnet`).
 
-| key | persona body (`reviewer-prompts.md`) | teammate name |
-|-----|--------------------------------------|---------------|
-| `simplifier` | § Simplifier | `claude-simplifier` |
-| `operator`   | § Operator   | `claude-operator`   |
-| `pentester`  | § Pentester  | `claude-pentester`  |
+**Model spec** — a single model, or an **array** of models (spawn one teammate per
+model in the list; e.g. `"skeptic": ["fable","opus"]` = the tuned pair). Each model:
+- `false` / `null` / missing → never spawn.
+- `"opus"` / `"sonnet"` / `"fable"` → always spawn on that model. `"fable"` falls back
+  to `"opus"` (with `⚠️ fable unavailable — using opus.`) if fable is deactivated —
+  probe once: `claude --model fable --print --output-format json 'ok'`; non-zero exit
+  or `not available` / `unknown model` / `deactivated` / empty result = unavailable.
+- `"auto"` → spawn **only when the plan is in this persona's domain** (discretion),
+  using the persona's default model (`operator` → `sonnet`, everything else → `opus`).
+- any other value → print `⚠️ persona <key>: invalid model '<v>' — skipping.` and skip.
 
-- The teammate's `model:` is the key's value (`"opus"` or `"sonnet"`).
-- **Pentester guard:** if `pentester` is `"sonnet"`, do NOT spawn on sonnet — print
-  `⚠️ pentester: sonnet rejected (weak at security by design); using opus.` and
-  spawn it on `opus` instead. `pentester` accepts only `"opus"` or `false`.
-- A value of `false`, `null`, or a missing key means that persona is not spawned.
-- Each uses the **same footer as the skeptic** — inline the plan via `[CURRENT_PLAN]`.
+**`"auto"` domain triggers** — under `auto`, spawn only if the plan touches the
+persona's area; when unsure, lean off to stay lean (the skeptic covers the general case):
+- `pentester` → **security-sensitive**: authentication/authorization, parsing or
+  deserializing untrusted input, secrets/credentials/PII, cryptography, shelling out
+  (`exec`/`eval`/shell strings), network endpoints or outbound requests, file
+  uploads/path handling, or permission checks. Lean **on** when security is plausible.
+- `operator` → reliability/ops: deployment, long-running services, failure modes,
+  external dependencies, background jobs, data migrations.
+- `simplifier` → complexity: new abstractions or layers, large or structural diffs.
+- `skeptic` → always in-domain (it's the general reviewer); `auto` = `opus`.
+- custom persona → read its body and judge whether the plan is within the focus it
+  describes.
+A docs-, markdown-, or config-only change is in no persona's `auto` domain (except a
+skeptic set to `auto`, which still runs).
 
-Spawn block (repeat per enabled persona, in the same message as 2a):
+**Pentester model guard (built-in `pentester` only):** never run it on `sonnet` — if a
+value is `"sonnet"`, print `⚠️ pentester: sonnet rejected (weak at security by design);
+using opus.` and use `opus`. Valid `pentester` models: `"opus"`, `"fable"`, `"auto"`,
+`false`. (Custom personas and other built-ins may use `sonnet` freely.)
+
+Each persona uses the **same footer** — inline the plan via `[CURRENT_PLAN]`.
+
+Spawn block (repeat per teammate that resolves to a spawn, in the same message as 2a):
 
 ```
 Agent:
   name: "claude-<persona>"
-  model: "<opus|sonnet from config>"
+  model: "<resolved opus|sonnet|fable>"
   subagent_type: "general-purpose"
   description: "Claude <Persona> reviewer"
   run_in_background: true
   prompt: |
-    [reviewer-prompts.md § <Persona> body]
+    [built-in § body from reviewer-prompts.md, OR the custom file's contents verbatim]
 
     [shared reviewer footer]
 ```
 
-**Rounds 2+:** Use SendMessage to **each existing Claude teammate** — the skeptic(s)
-(`claude-fable-skeptic` and `claude-opus-skeptic`, or `claude-skeptic` when fable is
-disabled) **and every enabled persona** (`claude-simplifier` / `claude-operator` /
-`claude-pentester`) — in the same message as the 2a re-run. The teammate persists
+**Rounds 2+:** Use SendMessage to **every Claude teammate you spawned in Round 1**
+(the skeptic(s) and every persona teammate) in the same message as the 2a re-run. The teammate persists
 with its Round-1 context, but the plan has been **revised**, so the SendMessage body
 MUST carry the change summary AND the full revised plan (same `--- PLAN --- /
 --- END PLAN ---` delimited block as Round 1) — do not send only "revision context",
@@ -317,12 +326,17 @@ For each Claude teammate — the skeptic(s) AND every enabled persona reviewer
 [FULL agent response — do not truncate or summarize]
 
 ---
-## Claude Pentester Review — Round N         (only if enabled)
+## Claude Pentester Review — Round N         (only if enabled or auto-triggered)
+
+[FULL agent response — do not truncate or summarize]
+
+---
+## Claude <Custom Persona> Review — Round N   (one section per spawned custom persona)
 
 [FULL agent response — do not truncate or summarize]
 ```
 
-(When `fable_reviewer` is `false`, there is a single `## Claude (Skeptic) Review — Round N` section.)
+(Show one `## Claude … Skeptic` section per skeptic that spawned — Fable + Opus for `"skeptic": ["fable","opus"]`, or a single section for a single skeptic model. Include a section only for personas that actually spawned this round.)
 
 For failed/timed-out reviewers:
 ```text
@@ -602,11 +616,11 @@ addressable teammates, accumulating across `/debate:all` runs until the session 
 Close every one you spawned once the review is over (after the final report, or in the
 abort Cleanup path above):
 
-- For each teammate you spawned this run — `claude-fable-skeptic`,
-  `claude-opus-skeptic`, `claude-skeptic`, `claude-simplifier`, `claude-operator`,
-  `claude-pentester` — send a **shutdown request via SendMessage** (NOT `TaskStop`;
-  teammates are agents, not background commands, so `TaskStop` returns "No task
-  found"):
+- For **every teammate you spawned this run** — the skeptic(s), every built-in persona
+  (`claude-simplifier` / `claude-operator` / `claude-pentester`, incl. an
+  `auto`-triggered pentester), and every custom `claude-<name>` — send a **shutdown
+  request via SendMessage** (NOT `TaskStop`; teammates are agents, not background
+  commands, so `TaskStop` returns "No task found"):
   ```
   SendMessage:
     to: "<teammate name>"
@@ -622,7 +636,7 @@ abort Cleanup path above):
 ## Rules
 
 - **acpx handles everything** — except `antigravity` and `opus`, which have no native acpx ACP support and use direct CLI invocation. `invoke-acpx.sh` detects `agent: antigravity` and runs the Antigravity CLI: `agy -p "<plan>" --sandbox` under a Python PTY (because `agy -p` drops its output when stdout is not a TTY), with OAuth or `ANTIGRAVITY_API_KEY` auth. The prompt is a positional argument (agy ignores stdin in print mode). Note: `invoke-acpx.sh` still *supports* an `agent: opus` CLI reviewer (nested `claude --print`), but it is not in the default config — the Claude side of the panel is the in-session skeptic/persona teammates (§2b), not an acpx opus reviewer. The `opus`/`claude` read-only notes below describe that standing capability, not a reviewer that runs by default.
-- **Parallel via bash + Agent.** `run-parallel-acpx.sh` runs external reviewers as background processes. The Claude skeptic subagents (Fable + Opus pair, or solo when `fable_reviewer` is false) run in parallel via Agent with `run_in_background: true`. **The Bash runner call and every skeptic Agent call must use `run_in_background: true` and be issued in the same tool-call message** — otherwise a blocking foreground runner serializes the skeptics behind the full acpx wait (~8 min wasted). Step 2c waits for all of them.
+- **Parallel via bash + Agent.** `run-parallel-acpx.sh` runs external reviewers as background processes. The Claude teammates (skeptic(s) plus any persona reviewers, per `claude_reviewers`) run in parallel via Agent with `run_in_background: true`. **The Bash runner call and every Claude Agent call must use `run_in_background: true` and be issued in the same tool-call message** — otherwise a blocking foreground runner serializes the teammates behind the full acpx wait (~8 min wasted). Step 2c waits for all of them.
 - **Reviewers are read-only.** Every reviewer is invoked with write access denied: acpx agents get `--approve-reads --non-interactive-permissions deny` (reads auto-approved, writes auto-denied), opus/claude gets `--permission-mode plan`, and each prompt carries an explicit read-only directive. `antigravity` has no hard read-only flag, so it runs from a throwaway workspace with the plan supplied in-prompt (it never needs repo access) plus `--sandbox` to block terminal commands. A reviewer cannot edit `plan.md` or any repo file while reviewing — its review text is the only deliverable. Don't add write permissions to work around a reviewer that "wants to fix it inline."
 - **Debate via direct invoke.** Debate rounds call `invoke-acpx.sh` directly from the main agent (not subagents). Prompt files are picked up automatically.
 - **No session resume needed.** acpx manages sessions internally. Each round injects full context via prompt files.
@@ -635,6 +649,6 @@ abort Cleanup path above):
 - **Don't substitute self-analysis for review.** If you Edit/Write `plan.md` after the last reviewer round, you MUST run Step 6.5 (verification pass) before claiming APPROVED. Phrases like "I applied the fix and it resolves the concern" are the exact failure mode the SHA self-check exists to prevent. Verification passes are unbounded — they don't burn revision-budget rounds. Use them.
 - **SHA-gated cleanup.** Step 9 uses `safe-cleanup.sh`, not `rm -rf`. It refuses to delete the work dir unless (a) `plan.md` still matches the last APPROVED state and (b) `--saved` points to a durable, byte-identical copy of the plan. A refusal is your signal to verify or to save the plan — not to add `--force`. The work dir is the only copy of the final plan until Step 8 persists it.
 - **Close every teammate you open.** Named skeptic/persona teammates persist after they return and pile up across runs. Step 10 shuts down each spawned teammate (SendMessage `shutdown_request`, not `TaskStop`) on success AND on abort. Never leave a review's teammates running.
-- **Persona reviewers are config-driven.** `claude_reviewers` in `~/.claude/debate-acpx.json` maps `simplifier`/`operator`/`pentester` → `"opus" | "sonnet" | false`. `pentester` never runs on sonnet (coerce to opus + warn). Bodies live in `reviewer-prompts.md`.
+- **The Claude side is config-driven.** `claude_reviewers` maps each persona key — `skeptic`, `simplifier`, `operator`, `pentester`, or a custom persona file path — to a model spec (`false` | `"opus"` | `"sonnet"` | `"fable"` | `"auto"`, or an array). Full resolution rules and the pentester-never-sonnet guard are in Step 2b (the authority); bodies live in `reviewer-prompts.md`.
 - **Revision discipline:** Make real improvements, not cosmetic changes.
 - **User control:** If a revision would contradict the user's explicit requirements, skip it and note it.

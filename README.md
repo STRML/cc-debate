@@ -251,6 +251,12 @@ Reviewers live in `~/.claude/debate-acpx.json`. This is the only file you need t
 
 ```json
 {
+  "claude_reviewers": {
+    "skeptic": ["fable", "opus"],
+    "simplifier": "opus",
+    "operator": "sonnet",
+    "pentester": "auto"
+  },
   "reviewers": {
     "codex": {
       "agent": "codex",
@@ -281,6 +287,39 @@ Reviewers live in `~/.claude/debate-acpx.json`. This is the only file you need t
 | `model` | No | For the `antigravity` agent — model display name from `agy models` (e.g. `Gemini 3.1 Pro (High)`). For the `opus` agent — the Claude model id. Omit to use the agent's default. |
 | `model_id` | No | For OpenRouter agents — the underlying model ID (e.g. `inception/mercury-2`). Shown in the summary. |
 
+### Claude-side reviewers (top-level keys)
+
+The `reviewers` object above is the acpx CLI panel. The optional `claude_reviewers`
+object adds in-session **Claude teammate** reviewers that run alongside it, mapping
+**persona key → model spec**:
+
+| Field | Values | Description |
+|-------|--------|-------------|
+| persona key | built-in name or file path | Built-ins: `skeptic`, `simplifier` (accidental complexity / YAGNI), `operator` (reliability / failure modes / 3 AM), `pentester` (security / attack surface) — bodies in `scripts/reviewer-prompts.md`. Any key that isn't a built-in name is treated as a **path to a custom persona file**, whose contents become the reviewer body. |
+| model spec | model or array of models | Each model is `false` (off), `"opus"`, `"sonnet"`, `"fable"`, or `"auto"`. An array spawns one teammate per model — e.g. `"skeptic": ["fable","opus"]` runs the tuned pair. |
+
+The **skeptic** is model-tuned: `fable` → Fable Skeptic, `opus` → Opus Skeptic,
+`sonnet` → the generic Solo Skeptic. (This replaces the old `fable_reviewer` flag —
+`"skeptic": ["fable","opus"]` is the former `fable_reviewer: true`; `"skeptic": "opus"`
+is the former `false`.)
+
+**`"fable"`** falls back to `"opus"` (with a warning) if fable is deactivated for the account.
+
+**`"auto"` discretion.** Under `"auto"`, a persona spawns only when the plan touches its
+area — `pentester` for security-sensitive changes (auth, untrusted input, secrets/crypto,
+shelling out, network, file uploads, permissions), `operator` for reliability/ops changes,
+`simplifier` for complexity/structural changes, and a custom persona per the focus its
+body describes. Routine (docs/config-only) changes stay lean.
+
+**`pentester` never runs on `sonnet`** (weak at adversarial security reasoning — coerced
+to `opus` with a warning); valid values `"opus"`, `"fable"`, `"auto"`, `false`. `"auto"`
+is the recommended default: security-relevant plans get a security lens, routine ones
+don't. (The guard applies only to the built-in `pentester`; custom personas may use `sonnet`.)
+
+**Custom personas.** Point a key at your own file — e.g. `"~/personas/data-modeler.md": "opus"`.
+Write it like the built-in bodies (a `You are The <Name> …` role line + a short focus
+checklist); its contents are used verbatim as the reviewer prompt.
+
 ### Good reviewer personas
 
 The value of multiple reviewers is getting genuinely different lenses. Some ideas:
@@ -306,7 +345,7 @@ The value of multiple reviewers is getting genuinely different lenses. Some idea
 | `/debate:fable` | Single Fable Skeptic — deep behavioral reasoning (hang paths, consumer-side gaps). Alias: `/debate:mythos`. |
 | `/debate:opus` | Single Opus Skeptic — precision checks (arithmetic, boundaries, consistency sweeps, test coverage). |
 
-**The skeptic pair.** Fable 5 and Opus 4.8 fail differently: in panel comparisons, Fable's unique confirmed findings were behavioral (blocking/hang paths, consumer-side parser gaps) and it self-corrects by verifying library behavior; Opus wins on exact worst-case arithmetic, boundary nits, and labeling consistency, but its emergent-behavior claims get refuted more often. The two skeptic prompts are tuned to those strengths, and convergent findings between them are the strongest signal. Fable costs roughly **2x Opus**, so `/debate:setup` asks once whether to enable it and stores `"fable_reviewer": true|false` in `~/.claude/debate-acpx.json`; when disabled, reviews fall back to a solo Opus Skeptic. `/debate:fable` and `/debate:mythos` ignore the preference — invoking them by name is explicit consent.
+**The skeptic pair.** Fable 5 and Opus 4.8 fail differently: in panel comparisons, Fable's unique confirmed findings were behavioral (blocking/hang paths, consumer-side parser gaps) and it self-corrects by verifying library behavior; Opus wins on exact worst-case arithmetic, boundary nits, and labeling consistency, but its emergent-behavior claims get refuted more often. The two skeptic prompts are tuned to those strengths, and convergent findings between them are the strongest signal. Fable costs roughly **2x Opus**, so the pair is opt-in: set `"skeptic": ["fable","opus"]` in `claude_reviewers` for both, or `"skeptic": "opus"` for a solo Opus Skeptic. `/debate:fable` and `/debate:mythos` ignore config — invoking them by name is explicit consent to fable's cost.
 
 ### `/debate:all` options
 

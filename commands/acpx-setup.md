@@ -204,6 +204,13 @@ Write `~/.claude/debate-acpx.json` with all selected reviewers. For OpenRouter r
 
 ```json
 {
+  "claude_reviewers": {
+    "skeptic": ["fable", "opus"],
+    "simplifier": "opus",
+    "operator": "sonnet",
+    "pentester": "auto",
+    "~/personas/data-modeler.md": "opus"
+  },
   "reviewers": {
     "codex": { "agent": "codex", "timeout": 120, "system_prompt": "..." },
     "mercury": { "agent": "mercury", "timeout": 120, "model_id": "inception/mercury-2", "system_prompt": "..." }
@@ -211,7 +218,36 @@ Write `~/.claude/debate-acpx.json` with all selected reviewers. For OpenRouter r
 }
 ```
 
-**Fable reviewer preference:** before writing the file, ask the user (AskUserQuestion) whether to enable the Fable Skeptic alongside the Opus Skeptic for the Claude side of reviews — Fable finds more high-impact behavioral issues but costs roughly **2x Opus** per review. Store the answer as a top-level `"fable_reviewer": true|false` key in the same file. If the file already has the key, keep it and skip the question.
+**Claude persona reviewers (`claude_reviewers`) — CALL THIS OUT to the user.** An
+optional top-level object that is the entire Claude side of the panel (skeptic +
+personas), alongside the acpx CLI reviewers. It maps **persona key → model spec**, and
+it is the main way to tailor the Claude side, so explain it during setup rather than
+writing it silently.
+
+- **Model spec** — a model or an **array** of models. Each model is `false` (off) ·
+  `"opus"` · `"sonnet"` · `"fable"` · `"auto"`. `"auto"` spawns the persona **only when
+  the plan is in its domain** (discretion), using its default model; an array spawns one
+  teammate per model. `"fable"` falls back to `"opus"` if fable is deactivated.
+- **Skeptic** — `skeptic` is a built-in key, model-tuned: `"fable"` → Fable Skeptic,
+  `"opus"` → Opus Skeptic, `"sonnet"` → Solo Skeptic. Ask the user (AskUserQuestion)
+  whether they want the **tuned pair** `["fable","opus"]` (Fable finds more high-impact
+  behavioral issues but costs ~2x Opus) or a solo `"opus"`. This replaces the old
+  `fable_reviewer` flag.
+- **Other built-in keys** — `simplifier` (accidental complexity / YAGNI, default opus),
+  `operator` (reliability / failure modes / 3 AM, default sonnet), `pentester`
+  (security / attack surface, default opus). Bodies live in `reviewer-prompts.md`.
+- **Custom personas** — any key that isn't a built-in name is treated as a **path to
+  your own persona file**; its contents become the reviewer body verbatim. Tell
+  the user they can drop a `You are The <Name> …` file anywhere and point a key at it
+  (e.g. `"~/personas/data-modeler.md": "opus"`). `"auto"` works for custom personas too
+  — the orchestrator reads the body and judges relevance.
+- **Pentester guard** — `pentester` **never** runs on `sonnet` (weak at adversarial
+  security reasoning → coerced to `opus` with a warning); valid values `"opus"`,
+  `"fable"`, `"auto"`, `false`. Recommend `"auto"` as the default so security-relevant
+  plans always get a security lens without noise on routine changes. (The guard applies
+  only to the built-in `pentester`; custom personas may use `sonnet`.)
+
+If the file already has the `claude_reviewers` key, keep it and skip the question.
 
 Built-in agents do not need `model_id`. OpenRouter agents (created via Step 2c) must have it set to the OpenRouter model ID (e.g., `inception/mercury-2`). LiteLLM agents (created via Step 2d) should set it to a descriptive string like `"deepseek-r1 via LiteLLM"` so the summary can display the underlying model.
 

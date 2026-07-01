@@ -175,26 +175,26 @@ Read `~/.claude/debate-acpx.json`. Report:
   ```
 - File missing → suggest running `/debate:acpx-setup` to create it interactively
 
-### 5b. Fable reviewer preference
+### 5b. Skeptic preference (`claude_reviewers.skeptic`)
 
-The Claude skeptic side of `/debate:all` and `/debate:claude-review` defaults to a model-tuned pair: a Fable Skeptic (deep behavioral reasoning) + an Opus Skeptic (precision checks). Fable costs roughly **2x Opus**, so this is a stored opt-in.
+The Claude skeptic side of `/debate:all` and `/debate:claude-review` can run a model-tuned **pair** — a Fable Skeptic (deep behavioral reasoning) + an Opus Skeptic (precision checks). Fable costs roughly **2x Opus**, so the pair is an opt-in stored as the `skeptic` entry in the `claude_reviewers` object.
 
-Check `~/.claude/debate-acpx.json` for the top-level `fable_reviewer` key:
+Check `~/.claude/debate-acpx.json` for `claude_reviewers.skeptic`:
 
-- Key present (`true` or `false`) → report it and move on:
+- Present → report it and move on:
   ```text
-  Fable reviewer: ✅ enabled (skeptic pair: Fable + Opus)
+  Skeptic: ✅ tuned pair (Fable + Opus)      # "skeptic": ["fable","opus"]
   ```
   or
   ```text
-  Fable reviewer: ⬜ disabled (solo Opus Skeptic) — re-run /debate:setup to change
+  Skeptic: ⬜ solo Opus — re-run /debate:setup to change      # "skeptic": "opus"
   ```
-- Key absent → ask the user with AskUserQuestion:
+- Absent → ask the user with AskUserQuestion:
   - **Question:** "Use a Fable 5 skeptic alongside the Opus skeptic? Fable finds more high-impact behavioral issues (hang paths, consumer-side gaps) but costs roughly 2x Opus per review."
   - Options: "Yes — skeptic pair (Recommended)" / "No — Opus only"
-  - Then persist the answer: Read `~/.claude/debate-acpx.json`, add the top-level `"fable_reviewer": true` (or `false`) key, and Write the file back (the Write tool is allowlisted for this path — do not shell out to jq/mv). If the config file doesn't exist yet, note the preference and have `/debate:acpx-setup` write it when creating the file.
+  - Then persist: Read `~/.claude/debate-acpx.json`, set `claude_reviewers.skeptic` to `["fable","opus"]` (pair) or `"opus"` (solo), and Write the file back (the Write tool is allowlisted for this path — do not shell out to jq/mv). If the config file doesn't exist yet, note the preference and have `/debate:acpx-setup` write it when creating the file.
 
-The preference is read at review time by `/debate:all`, `/debate:claude-review`, and its shortcuts. `/debate:fable` and `/debate:mythos` always run Fable regardless — invoking them by name is explicit consent.
+The `skeptic` entry is read at review time by `/debate:all`, `/debate:claude-review`, and its shortcuts. `/debate:fable` and `/debate:mythos` always run Fable regardless — invoking them by name is explicit consent.
 
 ## Step 6: Create stable scripts symlink
 

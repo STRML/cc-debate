@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.5.0] — 2026-07-01 (team-mode delivery fix; configurable persona reviewers; `claude_reviewers` schema)
+
+### Fixed
+
+- **Team-mode skeptics never delivered their reviews.** Named `run_in_background` Agent teammates are persistent — they finish, go idle awaiting messages, never auto-return a result, and their plain-text output is not visible to the orchestrator. The Round-1 footer now (a) inlines the plan via `[CURRENT_PLAN]` (general-purpose subagents start fresh and do not inherit context) and (b) requires delivery via `SendMessage` to `main`. This is the root cause of the "skeptic finished with no review text" symptom.
+- **Reviewer teammates lingered across runs.** `commands/all.md` Step 10 / `claude-review.md` Step 7 now shut down every spawned teammate via a `SendMessage` `shutdown_request` (not `TaskStop`, which errors on agents) on success and on abort.
+
+### Added
+
+- **Configurable Claude persona reviewers (`claude_reviewers`).** Maps a persona key → model spec. Built-in personas: `skeptic`, `simplifier`, `operator`, `pentester` (bodies in `scripts/reviewer-prompts.md`, the Simplifier/Operator/Pentester adapted from [spencermarx/open-code-review](https://github.com/spencermarx/open-code-review), Apache-2.0). A key can also be a **path to a custom persona file**.
+- **Model spec: `false` | `"opus"` | `"sonnet"` | `"fable"` | `"auto"`, or an array.** An array spawns one teammate per model (e.g. `"skeptic": ["fable","opus"]` = the tuned pair). `"fable"` falls back to `"opus"` if fable is deactivated. `"auto"` spawns a persona only when the plan is in its domain (e.g. pentester on security-sensitive changes).
+- **Pentester guard:** the built-in `pentester` never runs on `sonnet` (weak at adversarial security reasoning → coerced to `opus` with a warning).
+
+### Changed
+
+- **`fable_reviewer` removed — folded into `claude_reviewers.skeptic`.** `"skeptic": ["fable","opus"]` is the former `fable_reviewer: true`; `"skeptic": "opus"` is the former `false`. The skeptic body is model-tuned (fable → Fable Skeptic, opus → Opus Skeptic, sonnet → Solo Skeptic).
+- Reviewer-facing plan delimiters hardened (first/last marker; inner `VERDICT:`/markers treated as plan text). `/debate:all` Rounds 2+ now re-send the full revised plan, not just "revision context".
+
 ## [2.4.2] — 2026-07-01 (agy crash on timeout-less macOS; verification pass skipped skeptics)
 
 ### Fixed
