@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.5.1] — 2026-07-06 (multi-round reviewer wedge fix)
+
+### Fixed
+
+- **Multi-round reviewers wedged: SendMessage to idle teammates never woke them.** In Rounds 2+, the Step 6.5 verification pass, and Step 10 shutdown, the orchestrator SendMessage'd the Round-1 teammates. An idle background teammate is never re-scheduled to read its inbox, so every SendMessage returned success ("Message sent to X's inbox") but the teammate never ran — the orchestrator waited ~50 min on dead mailboxes (observed in production, raw-parts 2026-07-06). Rounds 2+ and the verification pass now **spawn fresh Agent teammates each round** (`claude-<persona>-r<N>` / `claude-<persona>-verify`) with the revision summary + full revised plan inlined, same footer + `SendMessage`-to-`main` delivery as Round 1. Applies to both `commands/all.md` and `commands/claude-review.md` (Step 5).
+- **No fallback when a teammate died silently.** Added a wedge detector at every teammate wait point: if ~10 min pass with no result, inspect the per-agent session transcripts' mtimes — none touched since dispatch = dead → respawn fresh instead of waiting or re-pinging.
+- **Shutdowns could block completion.** Step 10 / Step 7 shutdown requests to idle teammates may never be read, so they are now **best-effort** — the run finishes without waiting on `shutdown_response`. The cleanup enumeration now also covers every per-round `-r<N>` and `-verify` respawn.
+
+The acpx side (prompt-file + `run-parallel-acpx.sh` re-runs) is unchanged; only the Claude-teammate re-invocation transport changed. Round/SHA bookkeeping (`record-round.sh`, verification-pass budget semantics) is unchanged.
+
 ## [2.5.0] — 2026-07-01 (team-mode delivery fix; configurable persona reviewers; `claude_reviewers` schema)
 
 ### Fixed

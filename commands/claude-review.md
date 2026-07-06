@@ -265,26 +265,49 @@ If multiple reviewers, add a synthesis:
 - [What changed and why, one bullet per concern addressed]
 ```
 
-3. Increment `ROUND`. Send revisions to **all** agents in parallel (same message):
+3. Increment `ROUND`. Do **NOT** SendMessage the Round-1 teammates. An idle background
+teammate is never re-scheduled to read its inbox — the SendMessage returns success but
+the teammate never wakes, and you wait forever on a dead mailbox. Instead **spawn a
+fresh Agent teammate per reviewer**, named `<reviewer>-r<ROUND>` (e.g.
+`claude-fable-skeptic-r2`, `claude-architect-r2`), all in **one message**, each with the
+same model/`subagent_type`/footer/delivery rule as Round 1 (Step 3). Because a
+general-purpose subagent does not inherit context, inline the change summary AND the full
+revised plan:
 
 ```
-SendMessage:
-  to: [agent name]
-  summary: "Round [ROUND] revised plan"
-  message: |
-    I've revised the plan based on feedback. Here is what changed:
+Agent:
+  name: "<reviewer>-r<ROUND>"
+  model: [reviewer's pinned/selected model, as Round 1]
+  subagent_type: "general-purpose"
+  description: "Claude [Personality] reviewer (round <ROUND>)"
+  run_in_background: [true if multiple reviewers, false if single]
+  prompt: |
+    [personality prompt body — same as Round 1]
 
+    This is a re-review. The plan was revised based on your prior-round feedback.
+    What changed:
     [REVISION_SUMMARY]
 
-    Updated plan:
+    Re-review the full revised plan below. If prior concerns were addressed,
+    acknowledge it; call out any new issues introduced.
 
-    ---
+    --- PLAN ---
     [CURRENT_PLAN]
-    ---
+    --- END PLAN ---
 
-    Re-review. Focus on whether prior concerns were addressed and any new
-    issues introduced. End with VERDICT: APPROVED or VERDICT: REVISE.
+    [rest of the Round-1 footer verbatim: cwd/grounding/citation rules, the
+    DELIVERY (SendMessage to `main`) requirement, and the VERDICT line]
 ```
+
+The fresh teammate delivers via SendMessage to `main` exactly like Round 1 and, being
+freshly spawned, actually runs and returns a completion notification.
+
+**Wedge fallback:** if ~10 min pass with no result from a spawned teammate, do not keep
+waiting or re-ping — check whether it is alive by inspecting per-agent transcript mtimes
+(`find ~/.claude/projects -name '*.jsonl' 2>/dev/null -exec ls -lt {} + | head`, and
+compare the top mtimes against dispatch time, ignoring your own session's file). No
+teammate transcript touched since dispatch = wedged → respawn a fresh
+`<reviewer>-r<ROUND>` and wait on that instead.
 
 Go to **Step 4**.
 
@@ -327,27 +350,32 @@ Remaining concerns:
 
 Reviewers are named background Agent teammates; they do NOT auto-terminate when they
 return a verdict and pile up across runs. After the final result (or if the run is
-aborted/interrupted), shut down **every reviewer teammate you spawned this run**
-(e.g. `claude-fable-skeptic`, `claude-opus-skeptic`, `claude-architect`,
-`claude-pentester`, …) with a **SendMessage shutdown request** (NOT `TaskStop` —
-teammates are agents, not background commands):
+aborted/interrupted), shut down **every reviewer teammate you spawned this run, across
+all rounds** — the Round-1 base names (e.g. `claude-fable-skeptic`, `claude-opus-skeptic`,
+`claude-architect`, `claude-pentester`) **plus every per-round respawn**
+`<reviewer>-r2`, `<reviewer>-r3`, … — with a **SendMessage shutdown request** (NOT
+`TaskStop` — teammates are agents, not background commands):
 ```
 SendMessage:
   to: "<teammate name>"
   message: { "type": "shutdown_request", "reason": "review complete" }
 ```
-Only shut down teammates from THIS review. Confirm with `Closed N reviewer teammate(s).`
+**Best-effort — do not block on `shutdown_response`.** An idle teammate never wakes to
+read its inbox, so its shutdown request may go unread and no response will arrive. Send
+the requests, then finish; unacknowledged shutdowns are fine (teammates are reaped at
+session end). Only shut down teammates from THIS review. Confirm with
+`Sent shutdown to N reviewer teammate(s) (best-effort).`
 
 ---
 
 ## Rules
 
-- General-purpose subagents do NOT inherit context — inline the plan (`[CURRENT_PLAN]`) in every Round-1 prompt
-- Always launch/message all agents in parallel when multiple
-- SendMessage continues each agent with full context across rounds
+- General-purpose subagents do NOT inherit context — inline the plan (`[CURRENT_PLAN]`) in **every** prompt, Round 1 and every respawn
+- Always launch all agents in parallel when multiple
+- **Re-invoke by respawning, never by SendMessage.** An idle background teammate is never re-scheduled to read its inbox, so a SendMessage to it succeeds silently but never wakes it. Each round spawns fresh `<reviewer>-r<N>` teammates with the revised plan + change summary inlined (Step 5). Guard waits with the wedge fallback: no transcript activity in ~10 min = dead → respawn, don't wait or re-ping
 - Claude actively revises between rounds — not just passing messages
 - When reviewers contradict, note the disagreement and resolve or ask the user
-- Close every teammate you open — Step 7 shuts down each spawned reviewer (SendMessage `shutdown_request`, not `TaskStop`) on success AND on abort
+- Close every teammate you open (best-effort) — Step 7 sends a shutdown request (SendMessage `shutdown_request`, not `TaskStop`) to each spawned reviewer, including every `-r<N>` respawn, on success AND on abort, without blocking on `shutdown_response`
 - Never run the Pentester on `sonnet` — small models degrade on adversarial security reasoning; use `opus`
 - Max 5 rounds
 - Never interpolate AI-generated text directly into shell strings

@@ -244,17 +244,61 @@ Agent:
     [shared reviewer footer]
 ```
 
-**Rounds 2+:** Use SendMessage to **every Claude teammate you spawned in Round 1**
-(the skeptic(s) and every persona teammate) in the same message as the 2a re-run. The teammate persists
-with its Round-1 context, but the plan has been **revised**, so the SendMessage body
-MUST carry the change summary AND the full revised plan (same `--- PLAN --- /
---- END PLAN ---` delimited block as Round 1) — do not send only "revision context",
-or the teammate re-reviews the stale plan. It must still deliver its new review via
-SendMessage to `main` (same delivery rule as Round 1).
+**Rounds 2+:** Do **NOT** SendMessage the Round-1 teammates. An idle background
+teammate is never re-scheduled to read its inbox — the SendMessage returns success
+("Message sent to X's inbox") but the teammate never wakes, and you wait forever on a
+dead mailbox. This was the production wedge (raw-parts, 2026-07-06): four idle
+teammates, zero activity after their Round-1 delivery, ~50 min lost.
+
+Instead, **spawn a fresh Agent teammate per persona each round**, named
+`claude-<persona>-r<N>` (e.g. `claude-fable-skeptic-r2`, `claude-opus-skeptic-r2`,
+`claude-simplifier-r2`, `claude-pentester-r2`, `claude-<custom>-r2`). Spawn the same
+set of personas that ran in Round 1, in the same message as the 2a re-run, each with
+`run_in_background: true`. Use the **same §2b spawn block, footer, and delivery rule**
+as Round 1 — the only differences are the `-r<N>` name suffix and that the footer's
+`[CURRENT_PLAN]` now carries the **revised** plan. Because a general-purpose subagent
+does not inherit context, prepend a one-paragraph change summary above the
+`--- PLAN ---` block so the reviewer knows what was revised:
+
+```
+    This is a re-review. The plan was revised based on prior-round feedback.
+    What changed: [revision summary — the same bullets you show the user].
+    Re-review the full revised plan below; if prior concerns were addressed,
+    acknowledge it. [shared reviewer footer, with the REVISED plan inlined]
+```
+
+The fresh teammate delivers its new review via SendMessage to `main`, exactly like
+Round 1, and (being freshly spawned) will actually run and return a completion
+notification. Wait on the `-r<N>` spawns in Step 2c.
 
 ### 2c. Wait for all to finish
 
 2a (the acpx runner) and 2b (the skeptic + every enabled persona teammate) are now running in the background, concurrently. Wait for **all** of them to complete before proceeding — you'll receive a task-completion notification for the acpx runner and an agent result per Claude teammate. Do not read reviewer outputs until the acpx runner has signaled done (its exit files aren't all written until then). Once everything has returned, continue to "Check results".
+
+### 2c-wedge. Wedge detector (fallback for stuck Claude teammates)
+
+A background Agent that dies on a terminal error — or an idle teammate you mistakenly
+SendMessage'd — will never deliver, and you can wait indefinitely on it. Guard every
+wait on Claude teammates with this check:
+
+Note the wall-clock dispatch time when you spawn a round. If **~10 minutes** pass with
+no SendMessage result from one or more spawned Claude teammates, do **not** keep waiting
+and do **not** re-ping (a re-ping lands in the same dead mailbox). Instead check whether
+those teammates are actually alive by inspecting their per-agent session transcripts'
+mtimes — a teammate doing work updates its transcript; a dead/idle one does not:
+
+```bash
+# Per-agent transcripts, most-recently-modified first (portable on BSD/GNU find).
+# Compare the top mtimes against your dispatch time; ignore your own session's file.
+find ~/.claude/projects -name '*.jsonl' 2>/dev/null -exec ls -lt {} + 2>/dev/null | head
+```
+
+If no teammate transcript has been modified since the dispatch time (all mtimes predate
+it, or the only fresh file is your own session), the teammates are wedged —
+**respawn fresh** `claude-<persona>-r<N>` Agent teammates (the same §2b spawn block +
+footer, plan inlined) and wait on the new spawns. Never satisfy the wait by re-reading a
+stale prior output as if it were a fresh result. This detector applies at every teammate
+wait point: Step 2c, the Step 6.5 verification pass, and Rounds 2+.
 
 ### Cleanup
 
@@ -481,7 +525,7 @@ Triggers:
 
 How to run:
 
-1. Write a focused verification prompt for each reviewer that flagged the issue you fixed (or all reviewers if the change is broad). Use the lightest-cost reviewer when one will do — this is verification, not full re-review. The `<name>-prompt.txt` file below is the **acpx** convention; a Claude skeptic gets the same prompt text delivered via SendMessage in step 2, not a file.
+1. Write a focused verification prompt for each reviewer that flagged the issue you fixed (or all reviewers if the change is broad). Use the lightest-cost reviewer when one will do — this is verification, not full re-review. The `<name>-prompt.txt` file below is the **acpx** convention; a Claude skeptic gets the same prompt text inlined into a freshly-spawned `claude-<persona>-verify` Agent (see item 2), not a file and not a SendMessage.
    ```bash
    cat > <WORK_DIR>/<name>-prompt.txt << 'VERIFY_EOF'
    READ-ONLY: Do not write, edit, or create any file — reply with text only.
@@ -502,7 +546,7 @@ How to run:
      ```bash
      bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
      ```
-   - **Claude skeptic subagents** (`claude-fable-skeptic` / `claude-opus-skeptic`, or `claude-skeptic` when fable is disabled) — these are NOT re-run by the acpx runner. If a skeptic flagged the issue you fixed, you MUST re-invoke it via **SendMessage** with the verification prompt (same mechanism as Rounds 2+, line 189), and wait for its returned result. Do not re-read its stale prior output and treat it as a fresh verdict — that is the silent model-invocation drop. If a skeptic agent no longer exists (e.g. it was cleaned up), re-create it with Agent (§2b pattern) carrying the verification prompt.
+   - **Claude skeptic/persona teammates** (`claude-fable-skeptic` / `claude-opus-skeptic`, or `claude-skeptic` when fable is disabled, plus any persona that flagged the issue) — these are NOT re-run by the acpx runner. Do **NOT** SendMessage the existing teammate — an idle teammate never wakes to read its inbox (the Rounds-2+ wedge; see Step 2b). Instead **spawn a fresh Agent teammate**, named `claude-<persona>-verify`, using the same §2b spawn block + footer, with the verification prompt above as the change-summary paragraph and the updated `plan.md` inlined for `[CURRENT_PLAN]`. It delivers its verdict via SendMessage to `main` exactly like Round 1. Wait on the fresh spawn (guarded by the 2c-wedge detector). Do not re-read a teammate's stale prior output and treat it as a fresh verdict — that is the silent model-invocation drop this pass exists to prevent.
 
    Whether a flagged reviewer is an acpx CLI or a Claude skeptic, it gets re-invoked here — never assume a verdict for a reviewer you did not actually re-run this pass.
 3. Read each reviewer's full updated output (Read tool for acpx `<name>-output.md`; the returned agent result for skeptics — not grep).
@@ -616,20 +660,28 @@ addressable teammates, accumulating across `/debate:all` runs until the session 
 Close every one you spawned once the review is over (after the final report, or in the
 abort Cleanup path above):
 
-- For **every teammate you spawned this run** — the skeptic(s), every built-in persona
-  (`claude-simplifier` / `claude-operator` / `claude-pentester`, incl. an
-  `auto`-triggered pentester), and every custom `claude-<name>` — send a **shutdown
-  request via SendMessage** (NOT `TaskStop`; teammates are agents, not background
-  commands, so `TaskStop` returns "No task found"):
+- Enumerate **every teammate you spawned this run, across all rounds**: the Round-1
+  base names (the skeptic(s), every built-in persona `claude-simplifier` /
+  `claude-operator` / `claude-pentester` incl. an `auto`-triggered pentester, and every
+  custom `claude-<name>`), **plus every per-round respawn** `claude-<persona>-r2`,
+  `claude-<persona>-r3`, … **and every** `claude-<persona>-verify` from a verification
+  pass. Send each a **shutdown request via SendMessage** (NOT `TaskStop`; teammates are
+  agents, not background commands, so `TaskStop` returns "No task found"):
   ```
   SendMessage:
     to: "<teammate name>"
     message: { "type": "shutdown_request", "reason": "debate review complete" }
   ```
-  The teammate replies with a `shutdown_response` and terminates.
+  A live teammate replies with a `shutdown_response` and terminates.
+- **Shutdowns are best-effort — do NOT block completion on `shutdown_response`.** An
+  idle teammate never wakes to read its inbox (the same wedge as Rounds 2+), so its
+  `shutdown_request` may go unread and no `shutdown_response` will ever arrive. Send the
+  requests, then finish — do not wait on acknowledgements, do not re-ping, and do not
+  treat missing responses as a failure. Untracked idle teammates are harmless; they are
+  reaped when the session ends.
 - Only shut down teammates from THIS review. Never shut down an unrelated agent.
 - Do this even on abort/interrupt — a failed run must not leave teammates running.
-- Confirm with a one-line note: `Closed N reviewer teammate(s).`
+- Confirm with a one-line note: `Sent shutdown to N reviewer teammate(s) (best-effort).`
 
 ---
 
@@ -648,7 +700,8 @@ abort Cleanup path above):
 - **Read fully, never grep-skim.** You MUST read each reviewer's complete output with the Read tool. Never use `grep -A`, `grep -iE`, or keyword extraction to summarize reviews — this reliably misses 50%+ of findings. If you catch yourself reaching for grep on reviewer output, stop and use Read instead.
 - **Don't substitute self-analysis for review.** If you Edit/Write `plan.md` after the last reviewer round, you MUST run Step 6.5 (verification pass) before claiming APPROVED. Phrases like "I applied the fix and it resolves the concern" are the exact failure mode the SHA self-check exists to prevent. Verification passes are unbounded — they don't burn revision-budget rounds. Use them.
 - **SHA-gated cleanup.** Step 9 uses `safe-cleanup.sh`, not `rm -rf`. It refuses to delete the work dir unless (a) `plan.md` still matches the last APPROVED state and (b) `--saved` points to a durable, byte-identical copy of the plan. A refusal is your signal to verify or to save the plan — not to add `--force`. The work dir is the only copy of the final plan until Step 8 persists it.
-- **Close every teammate you open.** Named skeptic/persona teammates persist after they return and pile up across runs. Step 10 shuts down each spawned teammate (SendMessage `shutdown_request`, not `TaskStop`) on success AND on abort. Never leave a review's teammates running.
+- **Re-invoke teammates by respawning, never by SendMessage.** An idle background teammate is never re-scheduled to read its inbox, so a SendMessage to it returns success but never wakes it (the production wedge). Rounds 2+ and the Step 6.5 verification pass therefore spawn **fresh** `claude-<persona>-r<N>` / `claude-<persona>-verify` Agent teammates with the revised plan inlined — same footer + SendMessage-to-`main` delivery as Round 1. Guard every teammate wait with the Step 2c-wedge detector: no transcript activity within ~10 min = dead → respawn, don't wait or re-ping.
+- **Close every teammate you open (best-effort).** Named skeptic/persona teammates — Round-1 base names plus every `-r<N>` respawn and `-verify` teammate — persist after they return and pile up across runs. Step 10 sends a shutdown request (SendMessage `shutdown_request`, not `TaskStop`) to each on success AND on abort, but does **not** block completion on `shutdown_response`: an idle teammate may never read the request, and unacknowledged shutdowns are fine (teammates are reaped at session end). Never leave a review's teammates running that you can reach.
 - **The Claude side is config-driven.** `claude_reviewers` maps each persona key — `skeptic`, `simplifier`, `operator`, `pentester`, or a custom persona file path — to a model spec (`false` | `"opus"` | `"sonnet"` | `"fable"` | `"auto"`, or an array). Full resolution rules and the pentester-never-sonnet guard are in Step 2b (the authority); bodies live in `reviewer-prompts.md`.
 - **Revision discipline:** Make real improvements, not cosmetic changes.
 - **User control:** If a revision would contradict the user's explicit requirements, skip it and note it.
