@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`codex-exec` direct-CLI agent — restores the codex reviewer.** codex-cli >= 0.14x removed its ACP mode, so the acpx → `@agentclientprotocol/codex-acp` → codex chain now dies instantly with "Codex process has exited with code 1" regardless of acpx/adapter versions (verified against acpx 0.12.0 + codex-acp 1.1.0 + codex-cli 0.142.5; `codex acp` no longer exists as a subcommand). Following the antigravity/opus precedent, `agent: "codex-exec"` invokes `codex exec --sandbox read-only --skip-git-repo-check --color never -` directly: prompt via stdin, final message captured with `-o/--output-last-message` (full transcript kept as `<name>-transcript.log` for debugging), optional `.model` passed as `-m`. Read-only is enforced by codex's own OS-level sandbox plus the prompt directive. Config change: `"codex": { "agent": "codex-exec", ... }`. The `codex` built-in remains for whenever the upstream adapter catches up.
+
 ## [2.5.1] — 2026-07-06 (multi-round reviewer wedge fix)
 
 ### Fixed

@@ -82,6 +82,10 @@ Built-in acpx agents (need the agent CLI installed):
 Direct-CLI agents (no acpx ACP support — invoke-acpx.sh calls them directly):
   antigravity — Google Gemini via Antigravity CLI (install https://antigravity.google,
              run `agy` once to sign in) — runs `agy -p` under a Python PTY
+  codex-exec — OpenAI Codex via `codex exec` (npm install -g @openai/codex).
+             Use this instead of the `codex` built-in: codex-cli >= 0.14x removed
+             its ACP mode, so the acpx → codex-acp bridge dies with "Codex process
+             has exited with code 1". `codex exec` runs with --sandbox read-only.
   claude   — Claude Code         (already installed) ⚠️  requires CLAUDECODE to be
              unset — invoke-acpx.sh handles this automatically
   opus     — Claude Opus 4.6    (already installed) direct CLI invocation, bypasses
@@ -266,7 +270,7 @@ For system prompts, suggest unique review personas for each reviewer. Examples:
 
 For each configured reviewer:
 
-- **Non-antigravity, non-opus agents:** ensure a session exists and run a quick test via acpx:
+- **Non-antigravity, non-opus, non-codex-exec agents:** ensure a session exists and run a quick test via acpx:
   ```bash
   $ACPX_CMD <agent> sessions ensure 2>&1
   echo "Reply with only the word PONG." | $ACPX_CMD --format quiet --approve-reads <agent>
@@ -274,6 +278,10 @@ For each configured reviewer:
 - **antigravity agent:** probe using the Antigravity CLI directly (see below):
   ```bash
   agy models 2>&1 | head -1
+  ```
+- **codex-exec agent:** probe the codex CLI directly:
+  ```bash
+  echo "Reply with only the word PONG." | timeout 60 codex exec --skip-git-repo-check --color never -
   ```
 - **opus agent:** probe using direct Claude CLI:
   ```bash

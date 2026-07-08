@@ -120,8 +120,8 @@ fi
 # Skip if SKIP_SESSION_CHECK is set (for testing with mock acpx)
 
 if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
-  # Antigravity and Opus use direct CLI invocation — skip acpx session check.
-  if [ "$AGENT" != "antigravity" ] && [ "$AGENT" != "opus" ]; then
+  # Antigravity, Opus, and codex-exec use direct CLI invocation — skip acpx session check.
+  if [ "$AGENT" != "antigravity" ] && [ "$AGENT" != "opus" ] && [ "$AGENT" != "codex-exec" ]; then
     echo "[$REVIEWER] Ensuring acpx session for '$AGENT'..." >&2
     if ! "${ACPX_BIN[@]}" "$AGENT" sessions ensure > /dev/null 2>&1; then
       echo "[$REVIEWER] Failed to ensure acpx session for '$AGENT'." >&2
@@ -377,6 +377,54 @@ if [ "$AGENT" = "opus" ]; then
   set -e
 
   handle_invocation_result "Claude Opus"
+fi
+
+# --- Codex: direct CLI invocation (codex exec) ---
+# codex-cli >= 0.14x removed its ACP mode, which kills the acpx →
+# @agentclientprotocol/codex-acp → codex chain with "Codex process has exited
+# with code 1" no matter how current acpx and the adapter are. `codex exec`
+# still works, so `agent: "codex-exec"` invokes it directly, mirroring the
+# antigravity/opus direct paths:
+#   - Prompt via stdin: `codex exec -` reads the full prompt from stdin.
+#   - Read-only enforcement: `--sandbox read-only` (codex's own OS-level
+#     sandbox for model-run commands) plus the read-only directive baked into
+#     the prompt. No write/exec escalation is possible without a prompt, and
+#     exec mode auto-denies.
+#   - Output: `-o/--output-last-message` captures ONLY the agent's final
+#     message; stdout carries the full transcript (kept as a debug log).
+#   - `--skip-git-repo-check` lets it run from non-repo cwds (the debate
+#     runner's cwd varies); `--color never` keeps the capture ANSI-free.
+
+if [ "$AGENT" = "codex-exec" ]; then
+  if ! command -v codex > /dev/null 2>&1; then
+    echo "[$REVIEWER] codex CLI not found. Install: npm install -g @openai/codex" >&2
+    echo "codex CLI not installed. Run: npm install -g @openai/codex" > "$WORK_DIR/${REVIEWER}-output.md"
+    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    trap - EXIT
+    exit 1
+  fi
+
+  echo "[$REVIEWER] Submitting plan to codex exec directly (timeout: ${TIMEOUT}s)..." >&2
+
+  CODEX_CMD=()
+  if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
+    CODEX_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
+  fi
+  CODEX_CMD+=(codex exec --sandbox read-only --skip-git-repo-check --color never
+    -o "$WORK_DIR/${REVIEWER}-output.md")
+  if [ -n "$CONFIG_MODEL" ]; then
+    CODEX_CMD+=(-m "$CONFIG_MODEL")
+  fi
+  CODEX_CMD+=(-)
+
+  set +e
+  "${CODEX_CMD[@]}" < "$PROMPT_FILE" > "$WORK_DIR/${REVIEWER}-transcript.log" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+  EXIT_CODE=$?
+  set -e
+
+  # -o writes only on success; on failure fall through with an empty output so
+  # handle_invocation_result surfaces stderr as the review body.
+  handle_invocation_result "codex exec"
 fi
 
 # --- acpx call ---
