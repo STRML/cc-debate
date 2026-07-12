@@ -126,7 +126,10 @@ spawned in the same message as 2a — full resolution rules are below the footer
 
 **Shared reviewer footer.** Every skeptic prompt below (and the solo classic prompt
 above) ends with the line `[shared reviewer footer]`. Substitute this block verbatim
-in its place when you spawn, indented to match the prompt:
+in its place when you spawn, indented to match the prompt. Substitute two placeholders
+per teammate: `[CURRENT_PLAN]` with the plan text, and `[OUTPUT_PATH]` with that
+teammate's output file — `<WORK_DIR>/claude-<persona>-r<N>-output.md` (N = the round
+number, so Round 1 → `-r1-`; the verification pass uses `-verify-` in place of `-r<N>-`).
 
 ```
     Review the implementation plan below. Everything between the FIRST
@@ -157,14 +160,23 @@ in its place when you spawn, indented to match the prompt:
     Provide structured feedback with severity (CRITICAL / MAJOR / MINOR) for
     each concern. Be specific, be direct, be constructive.
 
-    DELIVERY (required): you run as a background teammate. Your plain-text output is
-    NOT visible to the orchestrator, and you will NOT auto-return a result when you
-    finish — you simply go idle awaiting further messages. You MUST deliver your
-    complete review by calling SendMessage to `main`, with all findings and the
-    final VERDICT line in the message body. A review you print but never SendMessage
-    is lost (this is the "skeptic finished with no review text" failure).
+    DELIVERY (required): you run as a background reviewer. Your plain-text output is
+    NOT visible to the orchestrator. Deliver your review by WRITING it to a file:
 
-    End your review (the SendMessage body) with exactly one of:
+      Write your complete review — all findings plus the final VERDICT line — to:
+        [OUTPUT_PATH]
+
+    That file is your authoritative deliverable: the orchestrator reads it directly,
+    so delivery never depends on a message surfacing in a mailbox. Writing this one
+    output file is the ONLY write you may make — do NOT edit plan.md, repo source, or
+    any other file. A review you print but never write to [OUTPUT_PATH] is lost.
+
+    After the file is written, ALSO SendMessage to `main` a one-line status
+    (e.g. `done — VERDICT: REVISE — review at [OUTPUT_PATH]`). This message is only a
+    liveness ping so the orchestrator knows you finished; your full review lives in the
+    file, not the message, so a dropped ping does not lose the review.
+
+    End the file (and the ping) with exactly one of:
       VERDICT: APPROVED — plan is solid and ready to implement
       VERDICT: REVISE — concerns above should be addressed first
 ```
@@ -229,7 +241,9 @@ using opus.` and use `opus`. Valid `pentester` models: `"opus"`, `"fable"`, `"au
 
 Each persona uses the **same footer** — inline the plan via `[CURRENT_PLAN]`.
 
-Spawn block (repeat per teammate that resolves to a spawn, in the same message as 2a):
+Spawn block (repeat per teammate that resolves to a spawn, in the same message as 2a).
+When you substitute the footer, fill its `[OUTPUT_PATH]` with this teammate's Round-1
+output file — `<WORK_DIR>/claude-<persona>-r1-output.md`:
 
 ```
 Agent:
@@ -241,7 +255,7 @@ Agent:
   prompt: |
     [built-in § body from reviewer-prompts.md, OR the custom file's contents verbatim]
 
-    [shared reviewer footer]
+    [shared reviewer footer — [OUTPUT_PATH] = <WORK_DIR>/claude-<persona>-r1-output.md]
 ```
 
 **Rounds 2+:** Do **NOT** SendMessage the Round-1 teammates. An idle background
@@ -255,50 +269,57 @@ Instead, **spawn a fresh Agent teammate per persona each round**, named
 `claude-simplifier-r2`, `claude-pentester-r2`, `claude-<custom>-r2`). Spawn the same
 set of personas that ran in Round 1, in the same message as the 2a re-run, each with
 `run_in_background: true`. Use the **same §2b spawn block, footer, and delivery rule**
-as Round 1 — the only differences are the `-r<N>` name suffix and that the footer's
-`[CURRENT_PLAN]` now carries the **revised** plan. Because a general-purpose subagent
-does not inherit context, prepend a one-paragraph change summary above the
-`--- PLAN ---` block so the reviewer knows what was revised:
+as Round 1 — the only differences are the `-r<N>` name suffix, the footer's
+`[CURRENT_PLAN]` now carrying the **revised** plan, and the footer's `[OUTPUT_PATH]`
+pointing at this round's file, `<WORK_DIR>/claude-<persona>-r<N>-output.md`. Because a
+general-purpose subagent does not inherit context, prepend a one-paragraph change
+summary above the `--- PLAN ---` block so the reviewer knows what was revised:
 
 ```
     This is a re-review. The plan was revised based on prior-round feedback.
     What changed: [revision summary — the same bullets you show the user].
     Re-review the full revised plan below; if prior concerns were addressed,
-    acknowledge it. [shared reviewer footer, with the REVISED plan inlined]
+    acknowledge it. [shared reviewer footer, REVISED plan inlined,
+    [OUTPUT_PATH] = <WORK_DIR>/claude-<persona>-r<N>-output.md]
 ```
 
-The fresh teammate delivers its new review via SendMessage to `main`, exactly like
-Round 1, and (being freshly spawned) will actually run and return a completion
-notification. Wait on the `-r<N>` spawns in Step 2c.
+The fresh teammate writes its new review to `<WORK_DIR>/claude-<persona>-r<N>-output.md`
+(and sends the liveness ping), exactly like Round 1, and (being freshly spawned) will
+actually run and return a completion notification. Wait on the `-r<N>` spawns in Step 2c.
 
 ### 2c. Wait for all to finish
 
-2a (the acpx runner) and 2b (the skeptic + every enabled persona teammate) are now running in the background, concurrently. Wait for **all** of them to complete before proceeding — you'll receive a task-completion notification for the acpx runner and an agent result per Claude teammate. Do not read reviewer outputs until the acpx runner has signaled done (its exit files aren't all written until then). Once everything has returned, continue to "Check results".
+2a (the acpx runner) and 2b (the skeptic + every enabled persona teammate) are now running in the background, concurrently. Wait for **all** of them to complete before proceeding — you'll receive a task-completion notification for the acpx runner and a completion notification (plus a liveness ping) per Claude teammate. Both channels now converge on files: the acpx reviewers write `<name>-output.md`, and each Claude teammate writes `<WORK_DIR>/claude-<persona>-r<N>-output.md`. Do not read reviewer outputs until the acpx runner has signaled done (its exit files aren't all written until then). Once everything has returned, continue to "Check results" — where you read every reviewer's file, Claude and acpx alike, uniformly.
 
 ### 2c-wedge. Wedge detector (fallback for stuck Claude teammates)
 
-A background Agent that dies on a terminal error — or an idle teammate you mistakenly
-SendMessage'd — will never deliver, and you can wait indefinitely on it. Guard every
-wait on Claude teammates with this check:
+A background Agent that dies on a terminal error will never deliver, and you can wait
+indefinitely on it. Because delivery is now file-based, "did this teammate deliver" has a
+deterministic, run-scoped answer — its output file exists and is non-empty — so you no
+longer grep transcripts to reconstruct a lost review. Guard every wait on Claude teammates
+with this check:
 
-Note the wall-clock dispatch time when you spawn a round. If **~10 minutes** pass with
-no SendMessage result from one or more spawned Claude teammates, do **not** keep waiting
-and do **not** re-ping (a re-ping lands in the same dead mailbox). Instead check whether
-those teammates are actually alive by inspecting their per-agent session transcripts'
-mtimes — a teammate doing work updates its transcript; a dead/idle one does not:
+Note the wall-clock dispatch time when you spawn a round. A teammate is **delivered** the
+moment `<WORK_DIR>/claude-<persona>-r<N>-output.md` exists and is non-empty (`[ -s … ]`) —
+regardless of whether its liveness ping surfaced. If **~10 minutes** pass and one or more
+spawned teammates still have no such file, do **not** keep waiting and do **not** re-ping
+(a re-ping lands in the same dead mailbox). Those teammates are wedged: **respawn fresh**
+`claude-<persona>-r<N>` Agent teammates (the same §2b spawn block + footer, plan inlined,
+`[OUTPUT_PATH]` pointed at the same file) and wait on the new spawns. A respawn simply
+overwrites the missing file when it delivers.
 
 ```bash
-# Per-agent transcripts, most-recently-modified first (portable on BSD/GNU find).
-# Compare the top mtimes against your dispatch time; ignore your own session's file.
-find ~/.claude/projects -name '*.jsonl' 2>/dev/null -exec ls -lt {} + 2>/dev/null | head
+# Which spawned teammates have NOT delivered yet (missing or empty output file).
+# List the files you expect this round, one per spawned persona.
+for f in <WORK_DIR>/claude-<persona-a>-r<N>-output.md <WORK_DIR>/claude-<persona-b>-r<N>-output.md; do
+  [ -s "$f" ] || echo "UNDELIVERED: $f"
+done
 ```
 
-If no teammate transcript has been modified since the dispatch time (all mtimes predate
-it, or the only fresh file is your own session), the teammates are wedged —
-**respawn fresh** `claude-<persona>-r<N>` Agent teammates (the same §2b spawn block +
-footer, plan inlined) and wait on the new spawns. Never satisfy the wait by re-reading a
-stale prior output as if it were a fresh result. This detector applies at every teammate
-wait point: Step 2c, the Step 6.5 verification pass, and Rounds 2+.
+Never satisfy the wait by re-reading a stale prior-round file as if it were a fresh
+result — each round writes its own `-r<N>-` file, so a fresh round's file cannot collide
+with a prior round's. This detector applies at every teammate wait point: Step 2c, the
+Step 6.5 verification pass, and Rounds 2+.
 
 ### Cleanup
 
@@ -308,7 +329,9 @@ If the run fails or the user interrupts, clean up before stopping. At this point
 
 ### Check results
 
-For each configured reviewer, read:
+Every reviewer — acpx CLI and Claude teammate — now delivers to a file in `<WORK_DIR>`.
+
+For each configured **acpx** reviewer, read:
 - `<WORK_DIR>/<name>-exit.txt` — exit code
 - `<WORK_DIR>/<name>-output.md` — review text
 
@@ -317,6 +340,17 @@ Exit code meanings:
 - `4` — session creation failed (agent not installed or not authenticated)
 - `124` — timed out
 - Other — error (check `<name>-stderr.log` and `<name>-invoke.log` for details)
+
+For each **Claude teammate** you spawned this round, read its output file:
+- `<WORK_DIR>/claude-<persona>-r<N>-output.md` — review text (no exit file; a Claude
+  teammate has "delivered" iff this file exists and is non-empty).
+
+**Reconciliation gate (before you synthesize or record the round).** Assert that the
+number of non-empty Claude output files equals the number of Claude teammates you
+spawned this round. A missing/empty file is a teammate whose review dropped — do **not**
+proceed with a silently-shrunk panel and do **not** record the round. Instead run the
+§2c-wedge respawn for exactly the undelivered personas, wait on the respawn, then re-check.
+Only once every spawned teammate has a non-empty output file do you continue.
 
 **If all reviewers failed:**
 ```text
@@ -334,7 +368,7 @@ Then clean up and exit.
 
 ## Step 3: Present Reviewer Outputs
 
-**CRITICAL: You MUST use the Read tool to read each `<name>-output.md` file IN FULL.** Do NOT use grep, awk, sed, head, tail, or any other tool to extract snippets or search for keywords. Do NOT summarize without reading. Each reviewer catches different issues — skimming loses findings. Read every word.
+**CRITICAL: You MUST use the Read tool to read each `-output.md` file IN FULL** — acpx `<name>-output.md` and Claude `claude-<persona>-r<N>-output.md` alike. Do NOT use grep, awk, sed, head, tail, or any other tool to extract snippets or search for keywords. Do NOT summarize without reading. Each reviewer catches different issues — skimming loses findings. Read every word.
 
 For each completed acpx reviewer:
 
@@ -345,39 +379,40 @@ For each completed acpx reviewer:
 [FULL content of <name>-output.md — do not truncate or summarize]
 ```
 
-For each Claude teammate — the skeptic(s) AND every enabled persona reviewer
-(results are returned directly — no file to read):
+For each Claude teammate — the skeptic(s) AND every enabled persona reviewer — read its
+`<WORK_DIR>/claude-<persona>-r<N>-output.md` file in full (the liveness ping is not the
+review; the file is):
 
 ```text
 ---
 ## Claude Fable (Skeptic) Review — Round N
 
-[FULL agent response — do not truncate or summarize]
+[FULL content of claude-<persona>-r<N>-output.md — do not truncate or summarize]
 
 ---
 ## Claude Opus (Skeptic) Review — Round N
 
-[FULL agent response — do not truncate or summarize]
+[FULL content of claude-<persona>-r<N>-output.md — do not truncate or summarize]
 
 ---
 ## Claude Simplifier Review — Round N       (only if enabled)
 
-[FULL agent response — do not truncate or summarize]
+[FULL content of claude-<persona>-r<N>-output.md — do not truncate or summarize]
 
 ---
 ## Claude Operator Review — Round N          (only if enabled)
 
-[FULL agent response — do not truncate or summarize]
+[FULL content of claude-<persona>-r<N>-output.md — do not truncate or summarize]
 
 ---
 ## Claude Pentester Review — Round N         (only if enabled or auto-triggered)
 
-[FULL agent response — do not truncate or summarize]
+[FULL content of claude-<persona>-r<N>-output.md — do not truncate or summarize]
 
 ---
 ## Claude <Custom Persona> Review — Round N   (one section per spawned custom persona)
 
-[FULL agent response — do not truncate or summarize]
+[FULL content of claude-<persona>-r<N>-output.md — do not truncate or summarize]
 ```
 
 (Show one `## Claude … Skeptic` section per skeptic that spawned — Fable + Opus for `"skeptic": ["fable","opus"]`, or a single section for a single skeptic model. Include a section only for personas that actually spawned this round.)
@@ -525,7 +560,7 @@ Triggers:
 
 How to run:
 
-1. Write a focused verification prompt for each reviewer that flagged the issue you fixed (or all reviewers if the change is broad). Use the lightest-cost reviewer when one will do — this is verification, not full re-review. The `<name>-prompt.txt` file below is the **acpx** convention; a Claude skeptic gets the same prompt text inlined into a freshly-spawned `claude-<persona>-verify` Agent (see item 2), not a file and not a SendMessage.
+1. Write a focused verification prompt for each reviewer that flagged the issue you fixed (or all reviewers if the change is broad). Use the lightest-cost reviewer when one will do — this is verification, not full re-review. The `<name>-prompt.txt` file below is the **acpx** convention (its `READ-ONLY: do not write any file` line is for the acpx reviewer, whose output the runner captures). A Claude teammate instead gets the same *substance* — the "plan was edited to address X" summary and the updated plan — inlined into a freshly-spawned `claude-<persona>-verify` Agent under the standard §2b footer (see item 2); do not carry the acpx `READ-ONLY: do not write any file` line into a Claude teammate's prompt — it must write its own `-verify-output.md` file.
    ```bash
    cat > <WORK_DIR>/<name>-prompt.txt << 'VERIFY_EOF'
    READ-ONLY: Do not write, edit, or create any file — reply with text only.
@@ -546,10 +581,10 @@ How to run:
      ```bash
      bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
      ```
-   - **Claude skeptic/persona teammates** (`claude-fable-skeptic` / `claude-opus-skeptic`, or `claude-skeptic` when fable is disabled, plus any persona that flagged the issue) — these are NOT re-run by the acpx runner. Do **NOT** SendMessage the existing teammate — an idle teammate never wakes to read its inbox (the Rounds-2+ wedge; see Step 2b). Instead **spawn a fresh Agent teammate**, named `claude-<persona>-verify`, using the same §2b spawn block + footer, with the verification prompt above as the change-summary paragraph and the updated `plan.md` inlined for `[CURRENT_PLAN]`. It delivers its verdict via SendMessage to `main` exactly like Round 1. Wait on the fresh spawn (guarded by the 2c-wedge detector). Do not re-read a teammate's stale prior output and treat it as a fresh verdict — that is the silent model-invocation drop this pass exists to prevent.
+   - **Claude skeptic/persona teammates** (`claude-fable-skeptic` / `claude-opus-skeptic`, or `claude-skeptic` when fable is disabled, plus any persona that flagged the issue) — these are NOT re-run by the acpx runner. Do **NOT** SendMessage the existing teammate — an idle teammate never wakes to read its inbox (the Rounds-2+ wedge; see Step 2b). Instead **spawn a fresh Agent teammate**, named `claude-<persona>-verify`, using the same §2b spawn block + footer, with the verification summary as the change-summary paragraph and the updated `plan.md` inlined for `[CURRENT_PLAN]`, and `[OUTPUT_PATH]` = `<WORK_DIR>/claude-<persona>-verify-output.md`. It delivers its verdict by writing that file (and the liveness ping) exactly like Round 1. Wait on the fresh spawn (guarded by the 2c-wedge detector — the `-verify-output.md` file existing and non-empty is the delivery signal). Do not re-read a teammate's stale prior output and treat it as a fresh verdict — that is the silent model-invocation drop this pass exists to prevent.
 
    Whether a flagged reviewer is an acpx CLI or a Claude skeptic, it gets re-invoked here — never assume a verdict for a reviewer you did not actually re-run this pass.
-3. Read each reviewer's full updated output (Read tool for acpx `<name>-output.md`; the returned agent result for skeptics — not grep).
+3. Read each reviewer's full updated output with the Read tool — acpx `<name>-output.md` and Claude `claude-<persona>-verify-output.md` alike (not grep). Apply the same reconciliation gate as "Check results": every teammate you re-spawned this pass must have a non-empty `-verify-output.md` file before you record the verification round; respawn any that didn't.
 4. Record the verification round:
    ```bash
    bash "<SCRIPT_DIR>/record-round.sh" "<WORK_DIR>" <ROUND_NUM> <VERDICT>
@@ -689,7 +724,8 @@ abort Cleanup path above):
 
 - **acpx handles everything** — except `antigravity` and `opus`, which have no native acpx ACP support and use direct CLI invocation. `invoke-acpx.sh` detects `agent: antigravity` and runs the Antigravity CLI: `agy -p "<plan>" --sandbox` under a Python PTY (because `agy -p` drops its output when stdout is not a TTY), with OAuth or `ANTIGRAVITY_API_KEY` auth. The prompt is a positional argument (agy ignores stdin in print mode). Note: `invoke-acpx.sh` still *supports* an `agent: opus` CLI reviewer (nested `claude --print`), but it is not in the default config — the Claude side of the panel is the in-session skeptic/persona teammates (§2b), not an acpx opus reviewer. The `opus`/`claude` read-only notes below describe that standing capability, not a reviewer that runs by default.
 - **Parallel via bash + Agent.** `run-parallel-acpx.sh` runs external reviewers as background processes. The Claude teammates (skeptic(s) plus any persona reviewers, per `claude_reviewers`) run in parallel via Agent with `run_in_background: true`. **The Bash runner call and every Claude Agent call must use `run_in_background: true` and be issued in the same tool-call message** — otherwise a blocking foreground runner serializes the teammates behind the full acpx wait (~8 min wasted). Step 2c waits for all of them.
-- **Reviewers are read-only.** Every reviewer is invoked with write access denied: acpx agents get `--approve-reads --non-interactive-permissions deny` (reads auto-approved, writes auto-denied), opus/claude gets `--permission-mode plan`, and each prompt carries an explicit read-only directive. `antigravity` has no hard read-only flag, so it runs from a throwaway workspace with the plan supplied in-prompt (it never needs repo access) plus `--sandbox` to block terminal commands. A reviewer cannot edit `plan.md` or any repo file while reviewing — its review text is the only deliverable. Don't add write permissions to work around a reviewer that "wants to fix it inline."
+- **Reviewers are read-only — with one scoped exception for Claude teammates.** acpx agents get `--approve-reads --non-interactive-permissions deny` (reads auto-approved, writes auto-denied) and never write anything — the runner captures their stdout to `<name>-output.md`. `antigravity` has no hard read-only flag, so it runs from a throwaway workspace with the plan in-prompt plus `--sandbox`. Claude teammates have no runner to capture their output, so they deliver by writing their **own** output file, `<WORK_DIR>/claude-<persona>-r<N>-output.md` (allowlisted via `Write(.tmp/ai-review*)`) — that single write is their only permitted one. No reviewer, acpx or Claude, may edit `plan.md` or repo source: the review is the deliverable, not a fix. Don't grant a reviewer any write beyond its own output file to work around one that "wants to fix it inline."
+- **Delivery is file-based for every reviewer.** acpx and Claude teammates alike write `<WORK_DIR>/…-output.md`; the orchestrator reads files uniformly and never depends on a mailbox message surfacing. A Claude teammate also sends a one-line SendMessage liveness ping, but the ping's body is not the review — a dropped ping loses nothing. This converged the two channels: the acpx side was always file-based and reliable; the mailbox-based Claude side was lossy (a teammate's SendMessage'd review could drop silently) until this change.
 - **Debate via direct invoke.** Debate rounds call `invoke-acpx.sh` directly from the main agent (not subagents). Prompt files are picked up automatically.
 - **No session resume needed.** acpx manages sessions internally. Each round injects full context via prompt files.
 - **Config is king.** Adding a reviewer = adding an entry to `~/.claude/debate-acpx.json`.
@@ -700,7 +736,7 @@ abort Cleanup path above):
 - **Read fully, never grep-skim.** You MUST read each reviewer's complete output with the Read tool. Never use `grep -A`, `grep -iE`, or keyword extraction to summarize reviews — this reliably misses 50%+ of findings. If you catch yourself reaching for grep on reviewer output, stop and use Read instead.
 - **Don't substitute self-analysis for review.** If you Edit/Write `plan.md` after the last reviewer round, you MUST run Step 6.5 (verification pass) before claiming APPROVED. Phrases like "I applied the fix and it resolves the concern" are the exact failure mode the SHA self-check exists to prevent. Verification passes are unbounded — they don't burn revision-budget rounds. Use them.
 - **SHA-gated cleanup.** Step 9 uses `safe-cleanup.sh`, not `rm -rf`. It refuses to delete the work dir unless (a) `plan.md` still matches the last APPROVED state and (b) `--saved` points to a durable, byte-identical copy of the plan. A refusal is your signal to verify or to save the plan — not to add `--force`. The work dir is the only copy of the final plan until Step 8 persists it.
-- **Re-invoke teammates by respawning, never by SendMessage.** An idle background teammate is never re-scheduled to read its inbox, so a SendMessage to it returns success but never wakes it (the production wedge). Rounds 2+ and the Step 6.5 verification pass therefore spawn **fresh** `claude-<persona>-r<N>` / `claude-<persona>-verify` Agent teammates with the revised plan inlined — same footer + SendMessage-to-`main` delivery as Round 1. Guard every teammate wait with the Step 2c-wedge detector: no transcript activity within ~10 min = dead → respawn, don't wait or re-ping.
+- **Re-invoke teammates by respawning, never by SendMessage.** An idle background teammate is never re-scheduled to read its inbox, so a SendMessage to it returns success but never wakes it (the production wedge). Rounds 2+ and the Step 6.5 verification pass therefore spawn **fresh** `claude-<persona>-r<N>` / `claude-<persona>-verify` Agent teammates with the revised plan inlined — same footer + file-write delivery as Round 1 (`[OUTPUT_PATH]` pointed at this round's `-r<N>-`/`-verify-output.md`). Guard every teammate wait with the Step 2c-wedge detector: no non-empty output file within ~10 min = dead → respawn, don't wait or re-ping. **Reconcile before recording a round:** every spawned teammate must have a non-empty output file, or the panel silently shrank — respawn the missing ones first.
 - **Close every teammate you open (best-effort).** Named skeptic/persona teammates — Round-1 base names plus every `-r<N>` respawn and `-verify` teammate — persist after they return and pile up across runs. Step 10 sends a shutdown request (SendMessage `shutdown_request`, not `TaskStop`) to each on success AND on abort, but does **not** block completion on `shutdown_response`: an idle teammate may never read the request, and unacknowledged shutdowns are fine (teammates are reaped at session end). Never leave a review's teammates running that you can reach.
 - **The Claude side is config-driven.** `claude_reviewers` maps each persona key — `skeptic`, `simplifier`, `operator`, `pentester`, or a custom persona file path — to a model spec (`false` | `"opus"` | `"sonnet"` | `"fable"` | `"auto"`, or an array). Full resolution rules and the pentester-never-sonnet guard are in Step 2b (the authority); bodies live in `reviewer-prompts.md`.
 - **Revision discipline:** Make real improvements, not cosmetic changes.

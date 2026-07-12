@@ -176,6 +176,20 @@ test_gitignore_updated() {
   grep -q "^\.tmp/" "$PROJECT_DIR/.gitignore" || return 1
 }
 
+test_claude_delivery_is_file_based() {
+  # v2.6.0: Claude teammates must deliver to <WORK_DIR>/claude-<persona>-r<N>-output.md,
+  # not depend on the mailbox. Guard the file-delivery contract in both command files.
+  local bad=0
+  for f in commands/all.md commands/claude-review.md; do
+    grep -q "output.md" "$PROJECT_DIR/$f" || { echo "  $f: no output-file delivery reference"; bad=1; }
+  done
+  # The old lossy claim ("SendMessage is the ONLY way your review reaches") must be gone.
+  local stale
+  stale=$(grep -rl "SendMessage is the ONLY way" "$PROJECT_DIR/commands" 2>/dev/null || true)
+  [ -z "$stale" ] || { echo "  stale mailbox-only delivery claim in: $stale"; bad=1; }
+  [ "$bad" -eq 0 ]
+}
+
 test_version_consistent() {
   local pv mv
   pv=$(jq -r '.version' "$PROJECT_DIR/.claude-plugin/plugin.json")
@@ -200,6 +214,7 @@ run_test "new files exist" test_new_files_exist
 run_test "new scripts executable" test_new_scripts_executable
 run_test "all scripts parse" test_scripts_parse
 run_test "skeptic bodies single-source" test_skeptic_bodies_single_source
+run_test "claude delivery is file-based" test_claude_delivery_is_file_based
 run_test ".gitignore updated" test_gitignore_updated
 run_test "version consistent" test_version_consistent
 

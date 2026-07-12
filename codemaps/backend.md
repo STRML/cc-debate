@@ -1,5 +1,5 @@
 # Backend — debate plugin
-_Updated: 2026-03-17_
+_Updated: 2026-07-11_
 
 ## Commands (`commands/`)
 
@@ -38,6 +38,13 @@ _Updated: 2026-03-17_
 - `<name>-exit.txt` — exit code (0 = success, 124 = timeout)
 - `<name>-acpx-prompt.txt` — generated initial prompt (debugging)
 
+### Claude teammate outputs (v2.6.0 — no script; written by the teammate itself)
+The Claude skeptic/persona teammates spawned by `all.md` / `claude-review.md` deliver
+file-based like acpx, but without a runner. Each writes its own review to
+`<WORK_DIR>/claude-<persona>-r<N>-output.md` (verification pass: `-verify-output.md`).
+No exit file — a teammate has delivered iff its output file exists and is non-empty.
+`SendMessage` is a liveness ping only. See `codemaps/architecture.md` § Delivery.
+
 ## Config (`~/.claude/debate-acpx.json`)
 
 ```json
@@ -59,4 +66,4 @@ Available acpx agents: codex, claude, cursor, copilot, kimi, kiro, qwen, opencod
 - `plugin.json` — name, version, description, author, license
 - `marketplace.json` — marketplace listing with install instructions
 
-Current version: **2.0.2**
+Current version: **2.6.0**

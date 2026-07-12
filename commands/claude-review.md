@@ -1,6 +1,6 @@
 ---
 description: Run Claude reviewer(s) on the current plan. Defaults to a Skeptic pair (Fable + Opus, model-tuned prompts). Use claude-double-review to add the Architect, claude-custom-review for interactive picker.
-allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet), Read(~/.claude/debate-acpx.json), Read(~/.claude/settings.json), Read(~/.claude/debate-scripts/reviewer-prompts.md), Bash(git rev-parse --show-toplevel:*)
+allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet), Read(~/.claude/debate-acpx.json), Read(~/.claude/settings.json), Read(~/.claude/debate-scripts/reviewer-prompts.md), Bash(git rev-parse --show-toplevel:*), Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Read(.tmp/ai-review*)
 ---
 
 # Claude Plan Review
@@ -157,9 +157,21 @@ covering `<repo-root>/**` — `Read(<repo-root>/**)` exactly, a broader ancestor
 
 ---
 
-## Step 2: Capture the Plan
+## Step 2: Capture the Plan & Establish a Work Dir
 
 If there is no plan in the current context, ask the user what they want reviewed.
+
+Reviewers deliver to files (not the mailbox), so establish a scratch work dir first:
+
+```bash
+bash ~/.claude/debate-scripts/debate-setup.sh
+```
+
+Note `WORK_DIR` (`.tmp/ai-review-<id>`, resolved against the git toplevel so it's
+stable regardless of cwd) from the output. Each reviewer will write its review to
+`<WORK_DIR>/<reviewer>-r<N>-output.md`, and you'll read those files — delivery never
+depends on a SendMessage surfacing in your mailbox. (If `~/.claude/debate-scripts` is
+missing, tell the user to run `/debate:setup` first, then stop.)
 
 Set `ROUND = 1`. Set `MAX_ROUNDS = 5`.
 
@@ -169,7 +181,9 @@ Set `ROUND = 1`. Set `MAX_ROUNDS = 5`.
 
 Launch all selected reviewers. General-purpose subagents do **not** inherit your conversation — substitute the current plan text for `[CURRENT_PLAN]` in each prompt's footer. A reviewer spawned without the plan inlined has nothing to review and finishes with empty output.
 
-For each personality, spawn an Agent **in a single message** (parallel if multiple):
+For each personality, spawn an Agent **in a single message** (parallel if multiple).
+Substitute `[OUTPUT_PATH]` in the footer with this reviewer's Round-1 output file,
+`<WORK_DIR>/<reviewer>-r1-output.md` (`<reviewer>` = the teammate's `name`):
 
 ```
 Agent:
@@ -209,14 +223,20 @@ Agent:
     Provide structured feedback with severity (CRITICAL / MAJOR / MINOR) for
     each concern. Be specific, be direct, be constructive.
 
-    DELIVERY (required): deliver your complete review (all findings + the final
-    VERDICT line) by calling SendMessage to `main`. If you were spawned as a
-    background teammate (parallel review), your plain-text output is NOT visible to
-    the orchestrator — SendMessage is the ONLY way your review reaches them, and a
-    review you merely print is lost. Also end your final message with the VERDICT
-    line so a single-reviewer (foreground) run still captures it.
+    DELIVERY (required): deliver your review by WRITING it to a file. Write your
+    complete review — all findings plus the final VERDICT line — to:
+      [OUTPUT_PATH]
+    That file is your authoritative deliverable: the orchestrator reads it directly, so
+    delivery never depends on a message surfacing in a mailbox. Writing this one output
+    file is the ONLY write you may make — do NOT edit the plan, repo source, or any other
+    file. A review you print but never write to [OUTPUT_PATH] is lost.
 
-    End your review with exactly one of:
+    After the file is written, ALSO SendMessage to `main` a one-line status
+    (e.g. `done — VERDICT: REVISE — review at [OUTPUT_PATH]`). This is only a liveness
+    ping so the orchestrator knows you finished; your full review lives in the file, not
+    the message, so a dropped ping loses nothing.
+
+    End the file (and the ping) with exactly one of:
       VERDICT: APPROVED — plan is solid and ready to implement
       VERDICT: REVISE — concerns above should be addressed first
 ```
@@ -227,13 +247,21 @@ Go to **Step 4**.
 
 ## Step 4: Present Reviews & Check Verdicts
 
+**Read each reviewer's output file in full** with the Read tool —
+`<WORK_DIR>/<reviewer>-r[ROUND]-output.md` — not grep, not the liveness ping. The ping
+signals "done"; the file is the review.
+
+**Reconciliation gate:** every reviewer you spawned this round must have a non-empty
+output file. If one is missing/empty after ~10 min, the reviewer wedged — respawn it
+(Step 5 wedge fallback) before synthesizing; do not proceed with a silently-shrunk panel.
+
 Display each review:
 
 ```text
 ---
 ## [Personality] Review — Round [ROUND]
 
-[review text]
+[FULL content of <reviewer>-r[ROUND]-output.md — do not truncate or summarize]
 ```
 
 If multiple reviewers, add a synthesis:
@@ -270,7 +298,8 @@ teammate is never re-scheduled to read its inbox — the SendMessage returns suc
 the teammate never wakes, and you wait forever on a dead mailbox. Instead **spawn a
 fresh Agent teammate per reviewer**, named `<reviewer>-r<ROUND>` (e.g.
 `claude-fable-skeptic-r2`, `claude-architect-r2`), all in **one message**, each with the
-same model/`subagent_type`/footer/delivery rule as Round 1 (Step 3). Because a
+same model/`subagent_type`/footer/delivery rule as Round 1 (Step 3). Point the footer's
+`[OUTPUT_PATH]` at this round's file, `<WORK_DIR>/<reviewer>-r<ROUND>-output.md`. Because a
 general-purpose subagent does not inherit context, inline the change summary AND the full
 revised plan:
 
@@ -296,18 +325,20 @@ Agent:
     --- END PLAN ---
 
     [rest of the Round-1 footer verbatim: cwd/grounding/citation rules, the
-    DELIVERY (SendMessage to `main`) requirement, and the VERDICT line]
+    file-write DELIVERY requirement (with [OUTPUT_PATH] =
+    <WORK_DIR>/<reviewer>-r<ROUND>-output.md) + liveness ping, and the VERDICT line]
 ```
 
-The fresh teammate delivers via SendMessage to `main` exactly like Round 1 and, being
-freshly spawned, actually runs and returns a completion notification.
+The fresh teammate writes its review to `<WORK_DIR>/<reviewer>-r<ROUND>-output.md` (and
+sends the liveness ping) exactly like Round 1 and, being freshly spawned, actually runs
+and returns a completion notification.
 
-**Wedge fallback:** if ~10 min pass with no result from a spawned teammate, do not keep
-waiting or re-ping — check whether it is alive by inspecting per-agent transcript mtimes
-(`find ~/.claude/projects -name '*.jsonl' 2>/dev/null -exec ls -lt {} + | head`, and
-compare the top mtimes against dispatch time, ignoring your own session's file). No
-teammate transcript touched since dispatch = wedged → respawn a fresh
-`<reviewer>-r<ROUND>` and wait on that instead.
+**Wedge fallback:** a teammate has delivered iff `<WORK_DIR>/<reviewer>-r<ROUND>-output.md`
+exists and is non-empty (`[ -s … ]`) — a run-scoped, deterministic signal, so you no
+longer grep transcripts to find a lost review. If ~10 min pass and that file is still
+missing/empty, the teammate wedged → do not keep waiting or re-ping; respawn a fresh
+`<reviewer>-r<ROUND>` (same footer, same `[OUTPUT_PATH]`) and wait on that instead. Each
+round writes its own `-r<ROUND>-` file, so a respawn cannot collide with a prior round.
 
 Go to **Step 4**.
 
@@ -372,7 +403,8 @@ session end). Only shut down teammates from THIS review. Confirm with
 
 - General-purpose subagents do NOT inherit context — inline the plan (`[CURRENT_PLAN]`) in **every** prompt, Round 1 and every respawn
 - Always launch all agents in parallel when multiple
-- **Re-invoke by respawning, never by SendMessage.** An idle background teammate is never re-scheduled to read its inbox, so a SendMessage to it succeeds silently but never wakes it. Each round spawns fresh `<reviewer>-r<N>` teammates with the revised plan + change summary inlined (Step 5). Guard waits with the wedge fallback: no transcript activity in ~10 min = dead → respawn, don't wait or re-ping
+- **Delivery is file-based.** Each reviewer writes its review to `<WORK_DIR>/<reviewer>-r<N>-output.md` (its one permitted write, allowlisted via `Write(.tmp/ai-review*)`); the orchestrator reads that file and never depends on the mailbox. The SendMessage is only a liveness ping — a dropped ping loses nothing. Reconcile before synthesizing: every spawned reviewer must have a non-empty output file, or the panel silently shrank
+- **Re-invoke by respawning, never by SendMessage.** An idle background teammate is never re-scheduled to read its inbox, so a SendMessage to it succeeds silently but never wakes it. Each round spawns fresh `<reviewer>-r<N>` teammates with the revised plan + change summary inlined (Step 5). Guard waits with the wedge fallback: no non-empty output file in ~10 min = dead → respawn, don't wait or re-ping
 - Claude actively revises between rounds — not just passing messages
 - When reviewers contradict, note the disagreement and resolve or ask the user
 - Close every teammate you open (best-effort) — Step 7 sends a shutdown request (SendMessage `shutdown_request`, not `TaskStop`) to each spawned reviewer, including every `-r<N>` respawn, on success AND on abort, without blocking on `shutdown_response`

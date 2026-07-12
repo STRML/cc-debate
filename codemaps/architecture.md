@@ -1,5 +1,5 @@
 # Architecture — debate plugin
-_Updated: 2026-03-17_
+_Updated: 2026-07-11_
 
 ## Overview
 
@@ -27,12 +27,16 @@ cc-debate/
          ├── 1d. Write plan.md to WORK_DIR
          ├── 1e. Detect EXEC_MODE (team / agent)
          │
-         ├── Round N: Parallel review
-         │    ├── team   → TeamCreate once + SendMessage for rounds 2+
-         │    └── agent  → Agent tool with run_in_background: true
-         │    Each reviewer agent calls invoke-acpx.sh → acpx <agent>
+         ├── Round N: Parallel review (acpx reviewers + Claude teammates)
+         │    ├── acpx reviewers → run-parallel-acpx.sh → invoke-acpx.sh → acpx <agent>
+         │    │    writes <WORK_DIR>/<name>-output.md
+         │    └── Claude teammates → Agent tool, run_in_background: true
+         │         each writes <WORK_DIR>/claude-<persona>-r<N>-output.md
+         │         (SendMessage retained only as a liveness ping)
+         │    Rounds 2+/verify respawn fresh teammates (idle ones never wake)
          │
-         ├── Step 3: Read output files (<name>-output.md)
+         ├── Step 3: Read ALL output files uniformly (acpx + Claude), reconcile
+         │           (every spawned teammate must have a non-empty output file)
          ├── Step 4: Synthesize + check for APPROVED
          ├── Step 5: Debate (targeted per-reviewer questions)
          ├── Step 6: Final report + revision loop
@@ -55,3 +59,23 @@ All command files call `bash ~/.claude/debate-scripts/<script>.sh` — literal, 
 ## acpx Agent Invocation
 
 All reviewers are invoked through `acpx --format quiet --approve-reads <agent> --file <prompt>`. The `invoke-acpx.sh` script wraps this with timeout handling, config resolution, and output file management. Reviewer configuration (agent name, timeout, system prompt) is stored in `~/.claude/debate-acpx.json`.
+
+## Delivery — file-based for every reviewer (v2.6.0)
+
+Both reviewer channels converge on files in `<WORK_DIR>`, so the orchestrator reads
+outputs uniformly and never depends on a mailbox message surfacing:
+
+- **acpx reviewers** — the `invoke-acpx.sh` runner captures the agent's stdout to
+  `<WORK_DIR>/<name>-output.md`. The agent itself is write-denied.
+- **Claude teammates** (skeptic/persona, spawned via the Agent tool) — no runner to
+  capture output, so each teammate writes its **own** review to
+  `<WORK_DIR>/claude-<persona>-r<N>-output.md`. That single write is its only permitted
+  one (allowlisted via `Write(.tmp/ai-review*)`); plan.md and repo source stay read-only.
+  `SendMessage` to `main` is retained only as a one-line liveness ping — its body is not
+  parsed, so a dropped ping loses nothing.
+
+Before v2.6.0 the Claude side was mailbox-based and lossy: a teammate's SendMessage'd
+review could drop silently, shrinking the panel. A reconciliation gate now asserts every
+spawned teammate produced a non-empty output file before a round is recorded, and wedge
+detection keys on file existence (`[ -s … ]`, run-scoped) rather than a cross-run
+transcript grep.
