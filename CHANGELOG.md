@@ -2,16 +2,10 @@
 
 ## [2.6.0] — 2026-07-11 (file-based Claude-teammate delivery)
 
-### Fixed
-
-- **Claude-teammate reviews could drop silently (lossy mailbox delivery).** Claude skeptic/persona teammates delivered their review by `SendMessage` to `main`; the acpx reviewers wrote `<WORK_DIR>/<name>-output.md` and never dropped. Twice in one production run a teammate demonstrably called SendMessage (an `idle_notification` carried its `[to main] … REVISE` summary) but the review body never surfaced in the orchestrator's mailbox — the review was generated and lost, silently shrinking the panel. The documented recovery (grep per-agent transcripts) made it worse: no teammate→file mapping, the inbound prompt matched the same keywords as the outbound review, and the unscoped `find ~/.claude/projects` pulled a review from a different/prior run.
-- **Root cause and fix — converge both channels on files.** Claude teammates now deliver exactly like acpx: each writes its complete review to `<WORK_DIR>/claude-<persona>-r<N>-output.md` (a scoped, allowlisted write via `Write(.tmp/ai-review*)` — plan.md and repo source stay read-only), and the orchestrator reads every reviewer's file uniformly. Delivery never depends on a mailbox message surfacing. `SendMessage` is retained only as a one-line liveness ping; its body is no longer parsed, so a dropped ping loses nothing.
-- **Reconciliation gate before recording a round.** The orchestrator now asserts that every spawned teammate produced a non-empty output file before synthesizing or calling `record-round.sh`. A missing/empty file triggers a targeted respawn instead of silently recording a shrunk panel.
-- **Wedge detection is now run-scoped and deterministic.** "Did this teammate deliver" is answered by `[ -s <WORK_DIR>/claude-<persona>-r<N>-output.md ]` — inherently scoped to this run's WORK_DIR — replacing the cross-run/self-polluting `find ~/.claude/projects` transcript-mtime grep. Applies at every wait point: Round 1, Rounds 2+, and the Step 6.5 verification pass.
-
-### Changed
-
-- `/debate:claude-review` (and its `/debate:fable` / `/debate:opus` / `/debate:mythos` / `claude-double-review` / `claude-custom-review` shortcuts) now establishes a `WORK_DIR` via `debate-setup.sh` and uses the same file-based delivery + reconciliation as `/debate:all`.
+- Claude reviewer teammates now write their review to a file, `<WORK_DIR>/claude-<persona>-r<N>-output.md`, the same way the acpx reviewers do. They used to deliver over `SendMessage`, which could drop a review silently and shrink the panel without anyone noticing. `SendMessage` is now just a liveness ping; nobody reads its body.
+- A round isn't recorded until every teammate that was spawned has a non-empty output file. Any that are missing get respawned first.
+- Wedge detection now checks whether the output file exists (`[ -s … ]`, scoped to this run) instead of grepping `~/.claude/projects` transcripts.
+- `/debate:claude-review` and its shortcuts got a `WORK_DIR` and use the same file delivery.
 
 ## [2.5.1] — 2026-07-06 (multi-round reviewer wedge fix)
 
