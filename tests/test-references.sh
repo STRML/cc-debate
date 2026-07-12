@@ -180,7 +180,7 @@ test_claude_delivery_is_file_based() {
   # v2.6.0: Claude teammates must deliver to <WORK_DIR>/claude-<persona>-r<N>-output.md,
   # not depend on the mailbox. Guard the file-delivery contract in both command files.
   local bad=0
-  for f in commands/all.md commands/claude-review.md; do
+  for f in commands/run.md commands/claude-review.md; do
     grep -q "output.md" "$PROJECT_DIR/$f" || { echo "  $f: no output-file delivery reference"; bad=1; }
   done
   # The old lossy claim ("SendMessage is the ONLY way your review reaches") must be gone.
@@ -195,6 +195,37 @@ test_version_consistent() {
   pv=$(jq -r '.version' "$PROJECT_DIR/.claude-plugin/plugin.json")
   mv=$(jq -r '.plugins[0].version' "$PROJECT_DIR/.claude-plugin/marketplace.json")
   [ "$pv" = "$mv" ] || { echo "  plugin.json=$pv marketplace.json=$mv"; return 1; }
+}
+
+test_run_is_canonical_orchestrator() {
+  # After the /debate:all -> /debate:run rename, run.md is the master orchestrator
+  # and must carry the preset resolver + the load-bearing empty-list guard.
+  local f="$PROJECT_DIR/commands/run.md"
+  [ -f "$f" ] || { echo "  commands/run.md missing"; return 1; }
+  grep -q "Resolve the panel" "$f" || { echo "  run.md: no preset resolver"; return 1; }
+  grep -q "## Step 2: Parallel Review" "$f" || { echo "  run.md: not the full orchestrator"; return 1; }
+  # The empty-preset-list footgun guard must be present (Codex CRITICAL, 2026-07-12):
+  # an empty reviewer-subset arg makes the runner run ALL reviewers, so the orchestrator
+  # must skip the runner instead of passing it an empty list.
+  grep -q "run ALL reviewers from config" "$f" || { echo "  run.md: missing empty-acpx-list guard"; return 1; }
+}
+
+test_all_is_alias_to_run() {
+  # commands/all.md must be a thin alias, NOT a second copy of the orchestrator.
+  local f="$PROJECT_DIR/commands/all.md"
+  [ -f "$f" ] || { echo "  commands/all.md missing"; return 1; }
+  grep -q "alias for \`/debate:run\`" "$f" || { echo "  all.md: does not declare itself an alias"; return 1; }
+  ! grep -q "## Step 2: Parallel Review" "$f" || { echo "  all.md: contains full orchestrator (should be alias only)"; return 1; }
+}
+
+test_alias_allowed_tools_parity() {
+  # The alias inherits sandbox permissions from its own frontmatter, so all.md's
+  # allowed-tools line must match run.md's exactly or the alias runs under-permissioned.
+  local run_line all_line
+  run_line=$(grep -m1 '^allowed-tools:' "$PROJECT_DIR/commands/run.md" || true)
+  all_line=$(grep -m1 '^allowed-tools:' "$PROJECT_DIR/commands/all.md" || true)
+  [ -n "$run_line" ] || { echo "  run.md: no allowed-tools line"; return 1; }
+  [ "$run_line" = "$all_line" ] || { echo "  allowed-tools mismatch between all.md and run.md"; return 1; }
 }
 
 # --- Run ---
@@ -217,6 +248,9 @@ run_test "skeptic bodies single-source" test_skeptic_bodies_single_source
 run_test "claude delivery is file-based" test_claude_delivery_is_file_based
 run_test ".gitignore updated" test_gitignore_updated
 run_test "version consistent" test_version_consistent
+run_test "run.md is canonical orchestrator" test_run_is_canonical_orchestrator
+run_test "all.md is alias to run" test_all_is_alias_to_run
+run_test "alias allowed-tools parity" test_alias_allowed_tools_parity
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="

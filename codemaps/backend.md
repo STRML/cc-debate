@@ -5,7 +5,7 @@ _Updated: 2026-07-11_
 
 | File | Slash Command | Purpose |
 |------|--------------|---------|
-| `all.md` | `/debate:all [reviewers] [skip-debate]` | Master: parallel review + synthesis + debate (up to 3 rounds) via acpx |
+| `run.md` | `/debate:run [reviewers\|preset] [skip-debate]` | Master: parallel review + synthesis + debate (up to 3 rounds) via acpx. Alias: `/debate:all` (`all.md`) |
 | `claude-review.md` | `/debate:claude-review` | Consolidated Claude review — 6 personalities (Fable + Opus skeptic pair default), plan inlined into subagent prompt, `claude_reviewers.skeptic` preference |
 | `claude-double-review.md` | `/debate:claude-double-review` | Shortcut: skeptic pair + Architect |
 | `claude-custom-review.md` | `/debate:claude-custom-review` | Shortcut: interactive personality + model picker |
@@ -39,7 +39,7 @@ _Updated: 2026-07-11_
 - `<name>-acpx-prompt.txt` — generated initial prompt (debugging)
 
 ### Claude teammate outputs (v2.6.0 — no script; written by the teammate itself)
-The Claude skeptic/persona teammates spawned by `all.md` / `claude-review.md` deliver
+The Claude skeptic/persona teammates spawned by `run.md` / `claude-review.md` deliver
 file-based like acpx, but without a runner. Each writes its own review to
 `<WORK_DIR>/claude-<persona>-r<N>-output.md` (verification pass: `-verify-output.md`).
 No exit file — a teammate has delivered iff its output file exists and is non-empty.

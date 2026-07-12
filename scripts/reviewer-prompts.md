@@ -2,7 +2,7 @@
 
 The three Claude skeptic prompt **bodies** below are used by both
 `/debate:claude-review` (and its `/debate:fable` / `/debate:mythos` /
-`claude-double-review` / `claude-custom-review` aliases) and `/debate:all`. Edit a
+`claude-double-review` / `claude-custom-review` aliases) and `/debate:run`. Edit a
 body here once; both commands pick it up. Reachable at runtime as
 `~/.claude/debate-scripts/reviewer-prompts.md` (the same stable symlink the scripts
 use; `/debate:setup` creates it).
@@ -102,7 +102,7 @@ everyone else missed. Focus on:
 ## Simplifier
 name: claude-simplifier
 model: opus
-(config: `claude_reviewers.simplifier` — model spec & `auto` semantics in `all.md` Step 2b)
+(config: `claude_reviewers.simplifier` — model spec & `auto` semantics in `run.md` Step 2b)
 
 You are The Simplifier — a senior engineer who treats complexity as the root
 cause of most defects (John Ousterhout's lens). Focus on:
@@ -124,7 +124,7 @@ Prefer one concrete "delete this / merge these" proposal over a list of vague
 ## Operator
 name: claude-operator
 model: sonnet
-(config: `claude_reviewers.operator` — default sonnet; model spec & `auto` in `all.md` Step 2b)
+(config: `claude_reviewers.operator` — default sonnet; model spec & `auto` in `run.md` Step 2b)
 
 You are The Operator — a Principal Reliability/SRE engineer who reviews through a
 failure-first lens: you will be paged when this breaks. Focus on:
@@ -149,7 +149,7 @@ where measurable.
 name: claude-pentester
 model: opus
 (config: `claude_reviewers.pentester` — never runs on `sonnet` (coerced to opus);
- model spec & `auto` security triggers in `all.md` Step 2b)
+ model spec & `auto` security triggers in `run.md` Step 2b)
 
 You are The Pentester — a security engineer who thinks like an attacker and
 traces untrusted data across every trust boundary. Focus on:

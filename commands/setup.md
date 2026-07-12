@@ -341,8 +341,8 @@ regression keeps recurring. Patch the file directly.
   Scripts: ✅ symlinked
 
 You are ready to run:
-  /debate:all            — parallel review with synthesis and debate
-  /debate:all codex      — single-reviewer via acpx
+  /debate:run            — parallel review with synthesis and debate (alias: /debate:all)
+  /debate:run codex      — single-reviewer via acpx
   /debate:claude-review  — Claude review (default: Fable + Opus skeptic pair)
   /debate:claude-double-review — skeptic pair + Architect
   /debate:claude-custom-review — interactive personality + model picker

@@ -10,8 +10,9 @@ This is a Claude Code CLI plugin — there is no web frontend. "Frontend" here m
 ```
 /debate:setup               Check prerequisites; create stable symlink; print settings.json snippet
 /debate:acpx-setup          Interactive reviewer config + agent probe
-/debate:all                 Full parallel review + synthesis + debate (recommended)
-/debate:all skip-debate     Skip targeted debate phase
+/debate:run                 Full parallel review + synthesis + debate (recommended; alias /debate:all)
+/debate:run tight           Run a named preset panel from the `presets` config object
+/debate:run skip-debate     Skip targeted debate phase
 /debate:claude-review       Claude review (Fable + Opus skeptic pair default) — Agent context fork + SendMessage
 /debate:claude-double-review  Skeptic pair + Architect in parallel
 /debate:claude-custom-review  Interactive personality + model picker
@@ -21,7 +22,7 @@ This is a Claude Code CLI plugin — there is no web frontend. "Frontend" here m
 
 ## Output Format
 
-### Prerequisite Summary (`/debate:all` Step 1)
+### Prerequisite Summary (`/debate:run` Step 1)
 ```
 ## AI Review — Prerequisite Check
 Reviewers found:  ✅ codex  ✅ antigravity  ✅ claude

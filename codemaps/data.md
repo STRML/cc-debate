@@ -7,7 +7,7 @@ Created per review session at `.claude/tmp/ai-review-<REVIEW_ID>/` (8-char hex I
 
 ```
 ai-review-<REVIEW_ID>/
-├── plan.md                  # Current plan being reviewed (written by all.md, overwritten on revision)
+├── plan.md                  # Current plan being reviewed (written by run.md, overwritten on revision)
 ├── config.env               # Model overrides: CODEX_MODEL, GEMINI_MODEL, OPUS_MODEL
 │
 ├── codex-output.md          # Codex review text

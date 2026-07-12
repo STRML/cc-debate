@@ -18,7 +18,7 @@ npm install -g acpx@latest
 /debate:acpx-setup
 
 # 4. Run a review
-/debate:all
+/debate:run
 ```
 
 Restart Claude Code after installing the plugin.
@@ -28,7 +28,7 @@ Restart Claude Code after installing the plugin.
 ## How it works
 
 ```text
-You: /debate:all
+You: /debate:run
 
 Claude: Running parallel review via acpx...
 
@@ -275,6 +275,13 @@ Reviewers live in `~/.claude/debate-acpx.json`. This is the only file you need t
       "model_id": "inception/mercury-2",
       "system_prompt": "You are The Contrarian — question everything. Focus on hidden assumptions, overlooked alternatives, failure modes under load."
     }
+  },
+  "presets": {
+    "tight": {
+      "description": "Gemini + Codex only, no Claude teammates — for when tokens are tight",
+      "reviewers": ["codex", "antigravity"],
+      "claude_reviewers": {}
+    }
   }
 }
 ```
@@ -320,6 +327,34 @@ don't. (The guard applies only to the built-in `pentester`; custom personas may 
 Write it like the built-in bodies (a `You are The <Name> …` role line + a short focus
 checklist); its contents are used verbatim as the reviewer prompt.
 
+### Presets (named panels)
+
+An optional top-level `presets` object lets you save named panel configurations and
+switch between them by name, instead of editing `reviewers` / `claude_reviewers` in place
+each time. Each preset is a **complete panel definition** that overrides both selectors
+for that run:
+
+```json
+"presets": {
+  "tight": {
+    "description": "Gemini + Codex only, no Claude teammates — for when tokens are tight",
+    "reviewers": ["codex", "antigravity"],
+    "claude_reviewers": {}
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `reviewers` | Array of acpx reviewer names to run (each must be a key in the top-level `reviewers` object). Omit or `[]` to run no acpx reviewers (Claude-only panel). |
+| `claude_reviewers` | Persona→model map that **replaces** the top-level `claude_reviewers` for this run. `{}` spawns **no** Claude teammates — the non-Claude, tokens-tight case. Omit to fall back to the top-level default. |
+| `description` | Optional one-liner, echoed when the preset is selected. |
+
+Select a preset by name: `/debate:run tight`. A bare argument that matches a preset key
+wins over a same-named reviewer, so don't name a preset after a reviewer. Anything with a
+comma is still parsed as a reviewer subset, so existing `codex,antigravity` usage is
+unaffected.
+
 ### Good reviewer personas
 
 The value of multiple reviewers is getting genuinely different lenses. Some ideas:
@@ -338,7 +373,7 @@ The value of multiple reviewers is getting genuinely different lenses. Some idea
 |---------|-------------|
 | `/debate:setup` | Check prerequisites, create `~/.claude/debate-scripts` symlink, detect v1.x configs and migrate, print permission allowlist |
 | `/debate:acpx-setup` | Interactive reviewer configuration: pick agents, set up OpenRouter models, probe connectivity |
-| `/debate:all [reviewers] [skip-debate]` | Run all (or specific) reviewers in parallel, synthesize, debate, iterate up to 3 rounds |
+| `/debate:run [reviewers\|preset] [skip-debate]` | Run all (or a subset, or a named `presets` panel) of reviewers in parallel, synthesize, debate, iterate up to 3 rounds. Alias: `/debate:all`. |
 | `/debate:claude-review` | Claude review — model-tuned skeptic pair by default (Fable Skeptic + Opus Skeptic). Up to 5 rounds. |
 | `/debate:claude-double-review` | Skeptic pair + Architect in parallel. |
 | `/debate:claude-custom-review` | Interactive picker — choose personalities and model. |
@@ -347,13 +382,16 @@ The value of multiple reviewers is getting genuinely different lenses. Some idea
 
 **The skeptic pair.** Fable 5 and Opus 4.8 fail differently: in panel comparisons, Fable's unique confirmed findings were behavioral (blocking/hang paths, consumer-side parser gaps) and it self-corrects by verifying library behavior; Opus wins on exact worst-case arithmetic, boundary nits, and labeling consistency, but its emergent-behavior claims get refuted more often. The two skeptic prompts are tuned to those strengths, and convergent findings between them are the strongest signal. Fable costs roughly **2x Opus**, so the pair is opt-in: set `"skeptic": ["fable","opus"]` in `claude_reviewers` for both, or `"skeptic": "opus"` for a solo Opus Skeptic. `/debate:fable` and `/debate:mythos` ignore config — invoking them by name is explicit consent to fable's cost.
 
-### `/debate:all` options
+### `/debate:run` options
 
 ```bash
-/debate:all                    # all configured reviewers
-/debate:all codex,mercury      # specific subset only
-/debate:all skip-debate        # skip debate phase, straight to final report
+/debate:run                    # all configured reviewers
+/debate:run codex,mercury      # specific acpx subset only
+/debate:run tight              # a named preset from the `presets` object (see Config reference)
+/debate:run skip-debate        # skip debate phase, straight to final report
 ```
+
+`/debate:all` is a permanent alias for `/debate:run` — same arguments, same behavior.
 
 ---
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.7.0] — 2026-07-12 (config presets + /debate:run)
+
+- **Presets.** New optional `presets` object in `debate-acpx.json`. Each preset is a named panel that, for one run, overrides both halves of your config at once — which acpx `reviewers` run and the entire `claude_reviewers` map. Run one by name: `/debate:run tight`. A preset with `"claude_reviewers": {}` runs a Codex/Gemini-only panel with no Claude teammates, which is the case that prompted this — a way to switch to non-Claude reviewers when tokens are tight without hand-editing the config each time. Preset names win over same-named reviewers, and anything with a comma is still read as a reviewer subset, so `codex,antigravity` and every other existing invocation behaves exactly as before.
+- **`/debate:all` is now `/debate:run`.** Once a bare argument could be a preset, `all` stopped fitting — `/debate:all tight` reads like a contradiction. `/debate:run` works across all three cases: no argument (every reviewer), a subset, or a preset. `/debate:all` stays as a permanent alias, so existing habits and docs keep working.
+- `/debate:acpx-setup` preserves an existing `presets` key when it rewrites the config, the same way it already leaves `claude_reviewers` alone.
+
 ## [2.6.0] — 2026-07-11 (file-based Claude-teammate delivery)
 
 - Claude reviewer teammates now write their review to a file, `<WORK_DIR>/claude-<persona>-r<N>-output.md`, the same way the acpx reviewers do. They used to deliver over `SendMessage`, which could drop a review silently and shrink the panel without anyone noticing. `SendMessage` is now just a liveness ping; nobody reads its body.

@@ -19,8 +19,8 @@ cc-debate/
 ## Execution Flow
 
 ```
-/debate:all
-    └── commands/all.md         # Master orchestrator
+/debate:run  (alias: /debate:all)
+    └── commands/run.md         # Master orchestrator
          ├── 1a. Read ~/.claude/debate-acpx.json
          ├── 1b. Generate REVIEW_ID, WORK_DIR via debate-setup.sh
          ├── 1c. Announce reviewers

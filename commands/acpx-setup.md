@@ -248,6 +248,9 @@ writing it silently.
   only to the built-in `pentester`; custom personas may use `sonnet`.)
 
 If the file already has the `claude_reviewers` key, keep it and skip the question.
+Likewise, if it already has a `presets` key, **preserve it verbatim** when rewriting —
+presets are user-authored named panels (see the README Config reference) and setup must
+never drop them.
 
 Built-in agents do not need `model_id`. OpenRouter agents (created via Step 2c) must have it set to the OpenRouter model ID (e.g., `inception/mercury-2`). LiteLLM agents (created via Step 2d) should set it to a descriptive string like `"deepseek-r1 via LiteLLM"` so the summary can display the underlying model.
 
@@ -395,8 +398,9 @@ For each reviewer from the config loaded above — built-in agents show `built-i
     deepseek ✅ litellm     (120s timeout) — deepseek-r1 via LiteLLM
 
 You are ready to run:
-  /debate:all                     — parallel review via acpx
-  /debate:all codex,mercury       — specific reviewers only
+  /debate:run                     — parallel review via acpx (alias: /debate:all)
+  /debate:run codex,mercury       — specific reviewers only
+  /debate:run <preset>            — a named panel from the `presets` object (if configured)
 ```
 
 If anything is missing, list remaining actions.
