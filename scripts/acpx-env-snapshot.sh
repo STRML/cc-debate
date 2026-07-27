@@ -29,8 +29,16 @@ else
   echo "opencode: not found"
 fi
 
-if [ -L ~/.claude/debate-scripts/invoke-acpx.sh ]; then
-  echo "debate-scripts: symlinked"
+# -L on invoke-acpx.sh is always false — the link is the *directory*, and the
+# script inside it is a regular file. Test that the path resolves, and report
+# which version it resolves to so a link left behind by an older install shows.
+DEBATE_LINK="$HOME/.claude/debate-scripts"
+if [ -e "$DEBATE_LINK" ] && [ ! -L "$DEBATE_LINK" ]; then
+  # A real directory here can hold a copy of the scripts and look healthy, but
+  # nothing refreshes it — create-links.sh cannot replace it.
+  echo "debate-scripts: not a symlink (real path at $DEBATE_LINK)"
+elif [ -e "$DEBATE_LINK/invoke-acpx.sh" ]; then
+  echo "debate-scripts: symlinked -> $(cd "$DEBATE_LINK" && pwd -P)"
 else
   echo "debate-scripts: not found"
 fi
