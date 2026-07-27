@@ -329,7 +329,11 @@ For custom agents with no acpx session: try `$ACPX_CMD <agent> sessions ensure` 
 
 ## Step 4: Check debate-scripts symlink
 
-From the snapshot: `debate-scripts: symlinked` → ✅ ready; `not found` → ❌ run `/debate:setup`.
+From the snapshot: `debate-scripts: symlinked -> <path>` → ✅ ready; `not found` → ❌ run
+`/debate:setup`. The `SessionStart` hook refreshes this link at the start of every
+session, so `not found` here means the hook could not create it — usually a sandbox
+that blocks `ln`. Check that the version in `<path>` matches the plugin version
+reported above it; a mismatch means the hook did not run.
 
 ## Step 5: Patch permission allowlist in ~/.claude/settings.json
 

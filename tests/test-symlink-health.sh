@@ -1,7 +1,7 @@
 #!/bin/bash
 # Tests for the ~/.claude/debate-scripts symlink: that create-links.sh repairs a
-# link left behind by a removed plugin version, and repoints one left behind by
-# an older one.
+# link left behind by a removed plugin version, and that acpx-env-snapshot.sh
+# reports a healthy link as healthy.
 #
 # Every test runs against a throwaway $HOME so the developer's real link is
 # never touched.
@@ -82,6 +82,38 @@ test_repoints_link_from_older_version() {
   return $out
 }
 
+# The snapshot must not report a healthy link as missing.
+test_snapshot_reports_healthy_link() {
+  local root; root="$(make_fake_home)"
+  local out=0
+  (
+    export HOME="$root/home"
+    local cache="$HOME/.claude/plugins/cache/cc-debate/debate"
+    bash "$cache/2.7.0/scripts/create-links.sh" >/dev/null
+    # Capture, don't pipe: grep -q closes the pipe early and pipefail then
+    # reports the snapshot's SIGPIPE (141) as a failure.
+    snapshot="$(bash "$cache/2.7.0/scripts/acpx-env-snapshot.sh" 2>/dev/null)"
+    case "$snapshot" in *"debate-scripts: symlinked"*) ;; *) exit 1 ;; esac
+  ) || out=1
+  rm -rf "$root"
+  return $out
+}
+
+test_snapshot_reports_dangling_link() {
+  local root; root="$(make_fake_home)"
+  local out=0
+  (
+    export HOME="$root/home"
+    local cache="$HOME/.claude/plugins/cache/cc-debate/debate"
+    bash "$cache/2.6.0/scripts/create-links.sh" >/dev/null
+    cp "$cache/2.7.0/scripts/acpx-env-snapshot.sh" "$root/snapshot.sh"
+    rm -rf "$cache/2.6.0"
+    snapshot="$(bash "$root/snapshot.sh" 2>/dev/null)"
+    case "$snapshot" in *"debate-scripts: not found"*) ;; *) exit 1 ;; esac
+  ) || out=1
+  rm -rf "$root"
+  return $out
+}
 
 # The SessionStart hook is what keeps the link fresh without the user
 # remembering to re-run /debate:setup after every update.
@@ -99,6 +131,8 @@ test_hook_declares_session_start() {
 echo "symlink health tests"
 run_test "repairs a link to a removed version" test_repairs_link_to_removed_version
 run_test "repoints a link from an older version" test_repoints_link_from_older_version
+run_test "snapshot reports a healthy link" test_snapshot_reports_healthy_link
+run_test "snapshot reports a dangling link" test_snapshot_reports_dangling_link
 run_test "SessionStart hook runs create-links.sh" test_hook_declares_session_start
 
 echo ""

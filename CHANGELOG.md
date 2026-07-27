@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - **The `~/.claude/debate-scripts` link now follows plugin updates.** It pinned one version directory, and Claude Code deletes version directories nothing is using — so an update left it dangling and every `/debate:*` command died on its first step, `bash ~/.claude/debate-scripts/debate-setup.sh`, with "No such file or directory". The error names a path, not a plugin, which sends you debugging acpx and `debate-acpx.json` instead. A `SessionStart` hook now re-runs `create-links.sh` from `${CLAUDE_PLUGIN_ROOT}`, so the link tracks the installed version without anyone remembering to re-run `/debate:setup`. It also fixes the quieter half: a link to an older version that still exists resolves fine, and commands from the new version were calling the old version's scripts.
+- **`/debate:acpx-setup` stopped reporting a healthy link as missing.** The probe was `[ -L ~/.claude/debate-scripts/invoke-acpx.sh ]` — but the symlink is the directory; `invoke-acpx.sh` inside it is a regular file, so `-L` was false whatever the link's state. It now tests that the path resolves and prints where it resolves to, so a link left behind by an older install is visible rather than merely absent.
 
 ## [2.7.0] — 2026-07-12 (config presets + /debate:run)
 
