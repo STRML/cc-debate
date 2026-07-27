@@ -205,11 +205,20 @@ This symlink lets the main debate commands invoke scripts without version interp
 bash ~/.claude/plugins/cache/cc-debate/debate/*/scripts/create-links.sh
 ```
 
+With more than one version still in the cache the glob expands to every match and
+bash runs whichever sorts first — lexically, so `2.10.0` beats `2.7.0`. Check the
+`->` target in the output against the installed version reported above; if it names
+an older one, re-run with that version's path spelled out in full.
+
 Report:
 - Exit 0 → `✅ ~/.claude/debate-scripts created`
-- Exit 1 (sandbox error) → show the exact `ln -sfn` command from the script output and tell the user to run it from their regular terminal (outside Claude Code), since the Claude Code sandbox restricts writes to `~/.claude/`
+- Exit 1, output names a sandbox block → show the exact `ln -sfn` command from the script output and tell the user to run it from their regular terminal (outside Claude Code), since the Claude Code sandbox restricts writes to `~/.claude/`
+- Exit 1, output says the path is not a symlink → a real directory is sitting at `~/.claude/debate-scripts`, and nothing can refresh it. Show the `mv` command from the output, then re-run this step.
 
-Note: Re-run `/debate:setup` after updating the plugin to refresh this symlink.
+Note: the `SessionStart` hook re-runs `create-links.sh` at the start of every
+session, so the link follows plugin updates on its own. Re-running `/debate:setup`
+is only needed when the hook cannot create the link — a sandbox block, or a real
+directory in the way.
 
 ## Step 7: Patch permission allowlist in ~/.claude/settings.json
 
