@@ -213,12 +213,12 @@ an older one, re-run with that version's path spelled out in full.
 Report:
 - Exit 0 → `✅ ~/.claude/debate-scripts created`
 - Exit 1, output names a sandbox block → show the exact `ln -sfn` command from the script output and tell the user to run it from their regular terminal (outside Claude Code), since the Claude Code sandbox restricts writes to `~/.claude/`
-- Exit 1, output says the path is not a symlink → a real directory is sitting at `~/.claude/debate-scripts`, and nothing can refresh it. Show the `mv` command from the output, then re-run this step.
+- Exit 1, output says the path is not a symlink → a real file or directory is sitting at `~/.claude/debate-scripts`, and nothing can refresh it. Show the `mv` command from the output, then re-run this step.
 
 Note: the `SessionStart` hook re-runs `create-links.sh` at the start of every
 session, so the link follows plugin updates on its own. Re-running `/debate:setup`
-is only needed when the hook cannot create the link — a sandbox block, or a real
-directory in the way.
+is only needed when the hook cannot create the link: a sandbox block, or a real
+file or directory in the way.
 
 ## Step 7: Patch permission allowlist in ~/.claude/settings.json
 

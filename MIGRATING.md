@@ -195,7 +195,7 @@ Run `/debate:setup` to get the complete updated allowlist.
 
 ## Refreshing the symlink
 
-A `SessionStart` hook re-runs `create-links.sh` at the start of every session, so `~/.claude/debate-scripts` follows plugin updates on its own — after an update it already points at the new scripts (`invoke-acpx.sh`, `run-parallel-acpx.sh`). Re-run `/debate:setup` only if `/debate:acpx-setup` reports the link as `not found` or `not a symlink`, which means the hook could not create it.
+A `SessionStart` hook re-runs `create-links.sh` at the start of every session, so `~/.claude/debate-scripts` follows plugin updates on its own — after an update it already points at the new scripts (`invoke-acpx.sh`, `run-parallel-acpx.sh`). Re-run `/debate:setup` only if `/debate:acpx-setup` reports the link as `not found`, which means the hook could not create it. If it reports `not a symlink`, a real file or directory is in the way and `create-links.sh` refuses to touch it: move that path aside first (the script prints the `mv`), then re-run `/debate:setup` or just start a new session.
 
 ## Available acpx agents
 

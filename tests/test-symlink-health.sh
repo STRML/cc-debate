@@ -98,8 +98,10 @@ test_refuses_real_directory_at_link_path() {
     local cache="$HOME/.claude/plugins/cache/cc-debate/debate"
     local link="$HOME/.claude/debate-scripts"
     mkdir -p "$link"
+    touch "$link/keep-me"
     bash "$cache/2.7.0/scripts/create-links.sh" >/dev/null 2>&1 && exit 1
     [ -L "$link" ] && exit 1                # must be left alone, not converted
+    [ -f "$link/keep-me" ] || exit 1        # with its contents intact
     [ -e "$link/scripts" ] && exit 1        # and no nested link dropped inside
     snapshot="$(bash "$cache/2.7.0/scripts/acpx-env-snapshot.sh" 2>/dev/null)"
     case "$snapshot" in *"debate-scripts: not a symlink"*) ;; *) exit 1 ;; esac
@@ -157,7 +159,11 @@ test_hook_declares_session_start() {
     timeout="$(jq -r '.hooks.SessionStart[0].hooks[0].timeout' "$hooks")"
     [ "$timeout" = "5" ] || return 1
   else
-    grep -q 'SessionStart' "$hooks" && grep -q 'create-links.sh' "$hooks"
+    # Same contract, minus jq: a hard-coded path or a missing timeout must fail
+    # here too, or the check is only as strong as the machine running it.
+    grep -q 'SessionStart' "$hooks" || return 1
+    grep -Fq '${CLAUDE_PLUGIN_ROOT}/scripts/create-links.sh' "$hooks" || return 1
+    grep -Eq '"timeout"[[:space:]]*:[[:space:]]*5' "$hooks" || return 1
   fi
 }
 
