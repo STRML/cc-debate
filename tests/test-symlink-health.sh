@@ -53,6 +53,10 @@ test_repairs_link_to_removed_version() {
   local out=0
   (
     export HOME="$root/home"
+    # debate-setup.sh puts its work dir under the cwd's git toplevel, or the cwd
+    # when there is none. Run from the throwaway root so the .tmp/ai-review-<id>
+    # dirs below land there and not in this repo.
+    cd "$root"
     local cache="$HOME/.claude/plugins/cache/cc-debate/debate"
     bash "$cache/2.6.0/scripts/create-links.sh" >/dev/null
     rm -rf "$cache/2.6.0"
@@ -143,12 +147,15 @@ test_hook_declares_session_start() {
   local hooks="$PROJECT_DIR/hooks/hooks.json"
   [ -f "$hooks" ] || return 1
   if command -v jq >/dev/null 2>&1; then
-    local cmd
+    local cmd timeout
     cmd="$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$hooks")"
     [ "$cmd" != "null" ] || return 1
     # The ${CLAUDE_PLUGIN_ROOT} root is the contract: it is version-correct by
     # construction, which a hard-coded path would not be.
     case "$cmd" in *'${CLAUDE_PLUGIN_ROOT}/scripts/create-links.sh'*) ;; *) return 1 ;; esac
+    # A slow or missing `ln` must not hold up session startup.
+    timeout="$(jq -r '.hooks.SessionStart[0].hooks[0].timeout' "$hooks")"
+    [ "$timeout" = "5" ] || return 1
   else
     grep -q 'SessionStart' "$hooks" && grep -q 'create-links.sh' "$hooks"
   fi
