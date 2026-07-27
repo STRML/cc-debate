@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **The `~/.claude/debate-scripts` link now follows plugin updates.** It pinned one version directory, and Claude Code deletes version directories nothing is using — so an update left it dangling and every `/debate:*` command died on its first step, `bash ~/.claude/debate-scripts/debate-setup.sh`, with "No such file or directory". The error names a path, not a plugin, which sends you debugging acpx and `debate-acpx.json` instead. A `SessionStart` hook now re-runs `create-links.sh` from `${CLAUDE_PLUGIN_ROOT}`, so the link tracks the installed version without anyone remembering to re-run `/debate:setup`. It also fixes the quieter half: a link to an older version that still exists resolves fine, and commands from the new version were calling the old version's scripts.
+
 ## [2.7.0] — 2026-07-12 (config presets + /debate:run)
 
 - **Presets.** New optional `presets` object in `debate-acpx.json`. Each preset is a named panel that, for one run, overrides both halves of your config at once — which acpx `reviewers` run and the entire `claude_reviewers` map. Run one by name: `/debate:run tight`. A preset with `"claude_reviewers": {}` runs a Codex/Gemini-only panel with no Claude teammates, which is the case that prompted this — a way to switch to non-Claude reviewers when tokens are tight without hand-editing the config each time. Preset names win over same-named reviewers, and anything with a comma is still read as a reviewer subset, so `codex,antigravity` and every other existing invocation behaves exactly as before.

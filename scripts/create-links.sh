@@ -8,7 +8,8 @@ LINK="$HOME/.claude/debate-scripts"
 
 if ln -sfn "$SELF_DIR" "$LINK" 2>/dev/null; then
   echo "✅ Symlink created: $LINK -> $SELF_DIR"
-  echo "   Re-run /debate:setup after updating the plugin to refresh this link."
+  echo "   The SessionStart hook re-runs this on every session, so the link"
+  echo "   follows plugin updates on its own."
 else
   echo "⚠️  Sandbox blocked symlink creation (ln -sfn is restricted to project dir)."
   echo ""

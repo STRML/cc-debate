@@ -1,0 +1,16 @@
+{
+  "description": "Refresh the ~/.claude/debate-scripts symlink so it always points at the installed plugin version.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/create-links.sh\" >/dev/null 2>&1 || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

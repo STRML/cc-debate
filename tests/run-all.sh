@@ -27,13 +27,14 @@ run_suite "invoke-acpx" "$SCRIPT_DIR/test-invoke-acpx.sh" || SUITE_FAIL=$((SUITE
 run_suite "run-parallel-acpx" "$SCRIPT_DIR/test-parallel-acpx.sh" || SUITE_FAIL=$((SUITE_FAIL + 1))
 run_suite "cleanup + record-round" "$SCRIPT_DIR/test-cleanup-and-record.sh" || SUITE_FAIL=$((SUITE_FAIL + 1))
 run_suite "reference integrity" "$SCRIPT_DIR/test-references.sh" || SUITE_FAIL=$((SUITE_FAIL + 1))
+run_suite "symlink health" "$SCRIPT_DIR/test-symlink-health.sh" || SUITE_FAIL=$((SUITE_FAIL + 1))
 
 echo ""
 echo "==============================="
 if [ "$SUITE_FAIL" -eq 0 ]; then
-  echo "  All 4 suites passed."
+  echo "  All 5 suites passed."
 else
-  echo "  $SUITE_FAIL of 4 suite(s) FAILED."
+  echo "  $SUITE_FAIL of 5 suite(s) FAILED."
 fi
 echo "==============================="
 
