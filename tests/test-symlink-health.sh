@@ -82,6 +82,28 @@ test_repoints_link_from_older_version() {
   return $out
 }
 
+# `ln -sfn` does not replace a real directory — it drops a nested link inside it
+# and exits 0. Refusing outright is the only way the caller learns the refresh
+# did not happen; otherwise the SessionStart hook reports success forever while
+# commands keep reading the stale directory.
+test_refuses_real_directory_at_link_path() {
+  local root; root="$(make_fake_home)"
+  local out=0
+  (
+    export HOME="$root/home"
+    local cache="$HOME/.claude/plugins/cache/cc-debate/debate"
+    local link="$HOME/.claude/debate-scripts"
+    mkdir -p "$link"
+    bash "$cache/2.7.0/scripts/create-links.sh" >/dev/null 2>&1 && exit 1
+    [ -L "$link" ] && exit 1                # must be left alone, not converted
+    [ -e "$link/scripts" ] && exit 1        # and no nested link dropped inside
+    snapshot="$(bash "$cache/2.7.0/scripts/acpx-env-snapshot.sh" 2>/dev/null)"
+    case "$snapshot" in *"debate-scripts: not a symlink"*) ;; *) exit 1 ;; esac
+  ) || out=1
+  rm -rf "$root"
+  return $out
+}
+
 # The snapshot must not report a healthy link as missing.
 test_snapshot_reports_healthy_link() {
   local root; root="$(make_fake_home)"
@@ -121,8 +143,12 @@ test_hook_declares_session_start() {
   local hooks="$PROJECT_DIR/hooks/hooks.json"
   [ -f "$hooks" ] || return 1
   if command -v jq >/dev/null 2>&1; then
-    [ "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$hooks")" != "null" ] || return 1
-    jq -r '.hooks.SessionStart[0].hooks[0].command' "$hooks" | grep -q 'create-links.sh'
+    local cmd
+    cmd="$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$hooks")"
+    [ "$cmd" != "null" ] || return 1
+    # The ${CLAUDE_PLUGIN_ROOT} root is the contract: it is version-correct by
+    # construction, which a hard-coded path would not be.
+    case "$cmd" in *'${CLAUDE_PLUGIN_ROOT}/scripts/create-links.sh'*) ;; *) return 1 ;; esac
   else
     grep -q 'SessionStart' "$hooks" && grep -q 'create-links.sh' "$hooks"
   fi
@@ -131,6 +157,7 @@ test_hook_declares_session_start() {
 echo "symlink health tests"
 run_test "repairs a link to a removed version" test_repairs_link_to_removed_version
 run_test "repoints a link from an older version" test_repoints_link_from_older_version
+run_test "refuses a real directory at the link path" test_refuses_real_directory_at_link_path
 run_test "snapshot reports a healthy link" test_snapshot_reports_healthy_link
 run_test "snapshot reports a dangling link" test_snapshot_reports_dangling_link
 run_test "SessionStart hook runs create-links.sh" test_hook_declares_session_start

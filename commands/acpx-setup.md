@@ -335,6 +335,10 @@ session, so `not found` here means the hook could not create it — usually a sa
 that blocks `ln`. Check that the version in `<path>` matches the plugin version
 reported above it; a mismatch means the hook did not run.
 
+`not a symlink (real path at …)` → ❌ something created a real directory there.
+Nothing can refresh it, so move it aside (`mv ~/.claude/debate-scripts{,.bak}`)
+and run `/debate:setup`.
+
 ## Step 5: Patch permission allowlist in ~/.claude/settings.json
 
 **DO NOT just print the snippet.** Actively patch `~/.claude/settings.json`
