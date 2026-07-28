@@ -217,11 +217,28 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
   # pointless call that can also fail and kill the reviewer with exit 4.
   if [ "$IS_DIRECT_CLI" -eq 0 ] && [ "$ONE_SHOT" -eq 0 ]; then
     echo "[$REVIEWER] Ensuring acpx session for '$AGENT'..." >&2
-    if ! "${ACPX_BIN[@]}" "$AGENT" sessions ensure > /dev/null 2>&1; then
+    # Keep the probe's stderr — acpx names the precise cause there (unknown agent
+    # name, ACP adapter crash, missing auth), and each needs a different fix.
+    # Discarding it collapsed every startup failure into one generic message.
+    # /debate:acpx-setup already probes with stderr retained; match it here.
+    if ! "${ACPX_BIN[@]}" "$AGENT" sessions ensure \
+        > /dev/null 2>"$WORK_DIR/${REVIEWER}-stderr.log"; then
       echo "[$REVIEWER] Failed to ensure acpx session for '$AGENT'." >&2
+      if [ -s "$WORK_DIR/${REVIEWER}-stderr.log" ]; then
+        echo "[$REVIEWER] stderr: $(head -5 "$WORK_DIR/${REVIEWER}-stderr.log")" >&2
+      fi
       echo "  Check that the agent CLI is installed and authenticated." >&2
       echo "  Run /debate:acpx-setup to diagnose." >&2
-      echo "Failed to ensure acpx session for '$AGENT'. Run /debate:acpx-setup to diagnose." > "$WORK_DIR/${REVIEWER}-output.md"
+      {
+        echo "Failed to ensure acpx session for '$AGENT'. Run /debate:acpx-setup to diagnose."
+        echo ""
+        echo "acpx stderr:"
+        if [ -s "$WORK_DIR/${REVIEWER}-stderr.log" ]; then
+          cat "$WORK_DIR/${REVIEWER}-stderr.log"
+        else
+          echo "(no stderr)"
+        fi
+      } > "$WORK_DIR/${REVIEWER}-output.md"
       publish_exit 4
       trap - EXIT
       exit 4

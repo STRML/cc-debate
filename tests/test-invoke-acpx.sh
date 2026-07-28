@@ -388,6 +388,35 @@ test_session_creation_fails_exits_4() {
   rm -rf "$work_dir"
 }
 
+test_session_failure_surfaces_acpx_stderr() {
+  # The cause of a session failure lives in acpx's stderr (unknown agent name,
+  # adapter crash, missing auth). It must reach output.md and the stderr log,
+  # otherwise every startup failure looks identical to the user.
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  set +e
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_SESSION_ENSURE_EXIT=1 \
+  MOCK_ACPX_SESSION_STDERR="Failed to spawn agent command: codex-exec" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+  local exit_code=$?
+  set -e
+
+  [ "$exit_code" -eq 4 ] || return 1
+
+  # The precise cause must appear in the review output...
+  grep -q "Failed to spawn agent command: codex-exec" \
+    "$work_dir/test-reviewer-output.md" || return 1
+
+  # ...and be preserved in the stderr log for debugging.
+  grep -q "Failed to spawn agent command: codex-exec" \
+    "$work_dir/test-reviewer-stderr.log" || return 1
+
+  rm -rf "$work_dir"
+}
+
 test_session_exists_no_extra_calls() {
   # sessions ensure is idempotent: reuses existing session without creating a new one
   local work_dir config
@@ -1185,6 +1214,7 @@ run_test "unknown reviewer fails" test_unknown_reviewer_fails
 run_test "timeout override" test_timeout_override
 run_test "session auto-created" test_session_auto_created
 run_test "session creation fails exits 4" test_session_creation_fails_exits_4
+run_test "session failure surfaces acpx stderr" test_session_failure_surfaces_acpx_stderr
 run_test "session exists no extra calls" test_session_exists_no_extra_calls
 run_test "skip session check env" test_skip_session_check_env
 run_test "stderr surfaced on failure" test_stderr_surfaced_on_failure
