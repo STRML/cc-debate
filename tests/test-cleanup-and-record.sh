@@ -402,22 +402,26 @@ test_safe_cleanup_refuses_when_changeset_diff_deleted() {
 }
 
 test_safe_cleanup_refuses_unusable_marker() {
-  local d
-  d=$(mktemp -d)
-  echo "plan" > "$d/plan.md"
-  echo "." > "$d/review-target.txt"
+  local d marker rc
+  # Both readers apply the same rule, so both reject a traversal marker as well
+  # as one that degenerates to the work dir itself.
+  for marker in "." "../../etc/hosts"; do
+    d=$(mktemp -d)
+    echo "plan" > "$d/plan.md"
+    echo "$marker" > "$d/review-target.txt"
 
-  set +e
-  bash "$SAFE_CLEANUP" "$d" 2>/dev/null
-  local rc=$?
-  set -e
+    set +e
+    bash "$SAFE_CLEANUP" "$d" 2>/dev/null
+    rc=$?
+    set -e
 
-  [ "$rc" -eq 1 ] || { rm -rf "$d"; return 1; }
-  [ -d "$d" ] || return 1
+    [ "$rc" -eq 1 ] || { rm -rf "$d"; return 1; }
+    [ -d "$d" ] || return 1
 
-  # --force still overrides.
-  bash "$SAFE_CLEANUP" "$d" --force
-  [ ! -d "$d" ]
+    # --force still overrides.
+    bash "$SAFE_CLEANUP" "$d" --force
+    [ ! -d "$d" ] || { rm -rf "$d"; return 1; }
+  done
 }
 
 # The stored base outlives the round: safe-cleanup regenerates against it later.
