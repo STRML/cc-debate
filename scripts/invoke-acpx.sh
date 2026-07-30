@@ -275,7 +275,10 @@ handle_invocation_result() {
         cat "$WORK_DIR/${REVIEWER}-stderr.log" 2>/dev/null || echo "(no stderr)"
       } > "$WORK_DIR/${REVIEWER}-output.md"
     fi
-  else
+  elif ! output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
+    # Only claim a review arrived once we know one did. The blank case is
+    # reported by the guard below, and announcing both reads as a contradiction
+    # in the runner log.
     echo "[$REVIEWER] Review received." >&2
   fi
 
