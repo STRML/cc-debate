@@ -843,6 +843,25 @@ test_short_real_response_still_passes() {
   rm -rf "$work_dir"
 }
 
+# The runner log must not say a review arrived and then say it was empty. An
+# operator scanning stderr for "Review received" would count a seat that failed.
+test_blank_output_does_not_log_review_received() {
+  local work_dir config stderr_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  stderr_out="$work_dir/invoke-stderr.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>"$stderr_out" || true
+
+  grep -q "Empty response" "$stderr_out" || return 1
+  grep -q "Review received" "$stderr_out" && return 1
+
+  rm -rf "$work_dir"
+}
+
 # --- blank-output retry ---
 #
 # kimi-k3 through opencode ends a large share of its turns with no final message,
@@ -1152,6 +1171,7 @@ run_test "codex exec skips the acpx session check" test_codex_exec_skips_session
 run_test "codex exec clears stale output" test_codex_exec_clears_stale_output
 run_test "codex exec prompt travels on stdin" test_codex_exec_prompt_travels_on_stdin
 run_test "codex exec handles an oversized prompt" test_codex_exec_handles_oversized_prompt
+run_test "blank output does not log Review received" test_blank_output_does_not_log_review_received
 run_test "blank output is retried then succeeds" test_blank_output_is_retried_then_succeeds
 run_test "retries are bounded" test_retries_are_bounded
 run_test "no retry when first attempt answers" test_no_retry_when_first_attempt_answers
