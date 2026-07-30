@@ -34,6 +34,22 @@ EOF
   echo "$work_dir"
 }
 
+# A throwaway git repo with one commit on `main`, so the runner's default base
+# resolution (merge-base with the default branch) has something to find.
+setup_git_repo() {
+  local d
+  d=$(mktemp -d)
+  git -C "$d" init -q
+  git -C "$d" config user.email "test@example.com"
+  git -C "$d" config user.name "Test"
+  git -C "$d" config commit.gpgsign false
+  echo "base" > "$d/f.txt"
+  git -C "$d" add f.txt >/dev/null 2>&1
+  git -C "$d" commit -qm "base" >/dev/null 2>&1
+  git -C "$d" branch -M main >/dev/null 2>&1
+  echo "$d"
+}
+
 run_test() {
   local name="$1"
   shift
@@ -104,23 +120,115 @@ test_subset_reviewers() {
   rm -rf "$work_dir" "$tmp_dir"
 }
 
+# No plan AND no changes is the only "nothing to review" case left. Run it in a
+# clean throwaway repo: inside a repo with uncommitted work, changeset mode is
+# supposed to take over, and asserting failure here from the plugin's own dirty
+# tree would pass for the wrong reason.
 test_missing_plan_fails() {
-  local tmp_dir review_id work_dir
+  local tmp_dir review_id repo exit_code
   tmp_dir=$(setup_env)
   review_id="test-$(date +%s)-noplan"
-  work_dir=".tmp/ai-review-${review_id}"
-
-  mkdir -p "$work_dir"
-  # No plan.md
+  repo=$(setup_git_repo)
 
   set +e
-  bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null
-  local exit_code=$?
+  ( cd "$repo" && PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+      bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null )
+  exit_code=$?
   set -e
 
-  [ "$exit_code" -ne 0 ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ "$exit_code" -ne 0 ] || { rm -rf "$repo" "$tmp_dir"; return 1; }
 
-  rm -rf "$work_dir" "$tmp_dir"
+  rm -rf "$repo" "$tmp_dir"
+}
+
+# --- changeset mode ---
+
+test_changeset_generated_when_no_plan() {
+  local tmp_dir review_id repo work_dir
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-diff"
+  repo=$(setup_git_repo)
+  work_dir="$repo/.tmp/ai-review-${review_id}"
+
+  echo "const distinctiveDiffToken = 1;" >> "$repo/f.txt"
+
+  ( cd "$repo" && PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+      MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+      bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null )
+
+  [ -s "$work_dir/changeset.diff" ] || { rm -rf "$repo" "$tmp_dir"; return 1; }
+  grep -q "distinctiveDiffToken" "$work_dir/changeset.diff" || { rm -rf "$repo" "$tmp_dir"; return 1; }
+  # The run must actually proceed, not just leave a diff behind.
+  [ -f "$work_dir/alpha-output.md" ] || { rm -rf "$repo" "$tmp_dir"; return 1; }
+
+  rm -rf "$repo" "$tmp_dir"
+}
+
+# The runner deletes prompt files on cleanup, so the prompt's CONTENT is asserted
+# at the invoke-acpx level (see test_changeset_reviewed_when_no_plan). Here we
+# only prove a prompt was built and handed over.
+test_changeset_reaches_the_reviewer() {
+  local tmp_dir review_id repo work_dir log_file
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-diffprompt"
+  repo=$(setup_git_repo)
+  work_dir="$repo/.tmp/ai-review-${review_id}"
+  log_file="$tmp_dir/acpx-log.txt"
+
+  echo "const tokenInPrompt = 2;" >> "$repo/f.txt"
+
+  ( cd "$repo" && PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+      MOCK_ACPX_LOG="$log_file" \
+      bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null )
+
+  grep -q -- "--file .*alpha-acpx-prompt.txt" "$log_file" || { rm -rf "$repo" "$tmp_dir"; return 1; }
+  grep -q "tokenInPrompt" "$work_dir/changeset.diff" || { rm -rf "$repo" "$tmp_dir"; return 1; }
+
+  rm -rf "$repo" "$tmp_dir"
+}
+
+test_diff_base_override_respected() {
+  local tmp_dir review_id repo work_dir base_sha
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-base"
+  repo=$(setup_git_repo)
+  work_dir="$repo/.tmp/ai-review-${review_id}"
+
+  base_sha=$(git -C "$repo" rev-parse HEAD)
+  echo "const committedToken = 3;" >> "$repo/f.txt"
+  git -C "$repo" add f.txt >/dev/null 2>&1
+  git -C "$repo" commit -qm "committed change" >/dev/null 2>&1
+
+  # Against HEAD the tree is clean; only an explicit base surfaces the commit.
+  ( cd "$repo" && PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+      DEBATE_DIFF_BASE="$base_sha" \
+      bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null )
+
+  grep -q "committedToken" "$work_dir/changeset.diff" || { rm -rf "$repo" "$tmp_dir"; return 1; }
+
+  rm -rf "$repo" "$tmp_dir"
+}
+
+test_plan_beats_changeset() {
+  local tmp_dir review_id repo work_dir
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-planwins"
+  repo=$(setup_git_repo)
+  work_dir="$repo/.tmp/ai-review-${review_id}"
+
+  mkdir -p "$work_dir"
+  echo "A real staged plan" > "$work_dir/plan.md"
+  echo "const shouldNotBeReviewed = 4;" >> "$repo/f.txt"
+
+  ( cd "$repo" && PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+      bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null )
+
+  # A staged plan means no diff is captured at all, and the plan survives the run.
+  [ -f "$work_dir/changeset.diff" ] && { rm -rf "$repo" "$tmp_dir"; return 1; }
+  grep -q "A real staged plan" "$work_dir/plan.md" || { rm -rf "$repo" "$tmp_dir"; return 1; }
+  [ -f "$work_dir/alpha-output.md" ] || { rm -rf "$repo" "$tmp_dir"; return 1; }
+
+  rm -rf "$repo" "$tmp_dir"
 }
 
 test_missing_config_fails() {
@@ -301,7 +409,11 @@ trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/agy" "$SCRIPT_DIR/claude"' EXIT
 
 run_test "parallel happy path" test_parallel_happy_path
 run_test "subset reviewers" test_subset_reviewers
-run_test "missing plan fails" test_missing_plan_fails
+run_test "missing plan and no changes fails" test_missing_plan_fails
+run_test "changeset generated when no plan" test_changeset_generated_when_no_plan
+run_test "changeset reaches the reviewer" test_changeset_reaches_the_reviewer
+run_test "DEBATE_DIFF_BASE respected" test_diff_base_override_respected
+run_test "plan beats changeset" test_plan_beats_changeset
 run_test "missing config fails" test_missing_config_fails
 run_test "prompt files cleaned up" test_prompt_files_cleaned_up
 run_test "invalid review ID rejected" test_invalid_review_id_rejected
