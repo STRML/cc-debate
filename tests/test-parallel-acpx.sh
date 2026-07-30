@@ -209,6 +209,71 @@ test_diff_base_override_respected() {
   rm -rf "$repo" "$tmp_dir"
 }
 
+# A new file is exactly what a reviewer must see, and `git diff` alone misses it.
+test_untracked_files_included_in_changeset() {
+  local tmp_dir review_id repo work_dir
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-untracked"
+  repo=$(setup_git_repo)
+  work_dir="$repo/.tmp/ai-review-${review_id}"
+
+  echo "const brandNewFileToken = 5;" > "$repo/newfile.js"
+
+  ( cd "$repo" && PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+      bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null )
+
+  grep -q "brandNewFileToken" "$work_dir/changeset.diff" || { rm -rf "$repo" "$tmp_dir"; return 1; }
+
+  rm -rf "$repo" "$tmp_dir"
+}
+
+# The work dir sits inside the repo, so its own files are untracked. Without a
+# filter the review reads its own scaffolding and a clean tree looks dirty.
+test_work_dir_excluded_from_changeset() {
+  local tmp_dir review_id repo work_dir
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-selfscan"
+  repo=$(setup_git_repo)
+  work_dir="$repo/.tmp/ai-review-${review_id}"
+
+  echo "const realChange = 6;" >> "$repo/f.txt"
+
+  ( cd "$repo" && PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+      bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null )
+
+  grep -q "realChange" "$work_dir/changeset.diff" || { rm -rf "$repo" "$tmp_dir"; return 1; }
+  grep -q "ai-review-" "$work_dir/changeset.diff" && { rm -rf "$repo" "$tmp_dir"; return 1; }
+
+  rm -rf "$repo" "$tmp_dir"
+}
+
+# In changeset mode the round SHA must cover the diff. plan.md is an empty
+# placeholder, and hashing it would make the mid-round gate pass no matter how
+# far the working tree moved under the review.
+test_round_sha_covers_the_changeset() {
+  local tmp_dir review_id repo work_dir recorded expected
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-sha"
+  repo=$(setup_git_repo)
+  work_dir="$repo/.tmp/ai-review-${review_id}"
+
+  echo "const shaToken = 7;" >> "$repo/f.txt"
+
+  ( cd "$repo" && PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+      bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null )
+
+  recorded=$(cat "$work_dir/round-active-plan-sha.txt")
+  if command -v sha256sum >/dev/null 2>&1; then
+    expected=$(sha256sum "$work_dir/changeset.diff" | cut -d' ' -f1)
+  else
+    expected=$(shasum -a 256 "$work_dir/changeset.diff" | cut -d' ' -f1)
+  fi
+
+  [ "$recorded" = "$expected" ] || { rm -rf "$repo" "$tmp_dir"; return 1; }
+
+  rm -rf "$repo" "$tmp_dir"
+}
+
 test_plan_beats_changeset() {
   local tmp_dir review_id repo work_dir
   tmp_dir=$(setup_env)
@@ -413,6 +478,9 @@ run_test "missing plan and no changes fails" test_missing_plan_fails
 run_test "changeset generated when no plan" test_changeset_generated_when_no_plan
 run_test "changeset reaches the reviewer" test_changeset_reaches_the_reviewer
 run_test "DEBATE_DIFF_BASE respected" test_diff_base_override_respected
+run_test "untracked files included in changeset" test_untracked_files_included_in_changeset
+run_test "work dir excluded from changeset" test_work_dir_excluded_from_changeset
+run_test "round SHA covers the changeset" test_round_sha_covers_the_changeset
 run_test "plan beats changeset" test_plan_beats_changeset
 run_test "missing config fails" test_missing_config_fails
 run_test "prompt files cleaned up" test_prompt_files_cleaned_up

@@ -641,6 +641,48 @@ test_codex_exec_empty_output_is_a_failure() {
   rm -rf "$work_dir"
 }
 
+# codex-exec never gets an acpx session, so the session check must not run for
+# it. Deliberately does NOT set SKIP_SESSION_CHECK — every other codex test does,
+# which is exactly what hid this: acpx would be asked to ensure a session for a
+# "codex-exec" agent it does not have, fail, and exit 4 before the branch ran.
+test_codex_exec_skips_session_check() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_CODEX_RESPONSE="Ran. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || return 1
+  # acpx must never have been called at all for this reviewer.
+  [ -f "$log_file" ] && return 1
+
+  rm -rf "$work_dir"
+}
+
+# codex can exit 0 without writing a final message. A leftover file from an
+# earlier round would then be read as this round's review.
+test_codex_exec_clears_stale_output() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  echo "STALE review from round 1. VERDICT: APPROVED" > "$work_dir/codex-exec-reviewer-output.md"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_RESPONSE="" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null || true
+
+  grep -q "STALE" "$work_dir/codex-exec-reviewer-output.md" && return 1
+  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
 # --- changeset fallback ---
 
 test_changeset_reviewed_when_no_plan() {
@@ -704,6 +746,8 @@ run_test "codex exec closes stdin" test_codex_exec_closes_stdin
 run_test "codex exec read-only + output flags" test_codex_exec_is_read_only_and_uses_output_flag
 run_test "codex exec transcript kept out of output" test_codex_exec_transcript_kept_out_of_output
 run_test "codex exec empty output is a failure" test_codex_exec_empty_output_is_a_failure
+run_test "codex exec skips the acpx session check" test_codex_exec_skips_session_check
+run_test "codex exec clears stale output" test_codex_exec_clears_stale_output
 run_test "changeset reviewed when no plan" test_changeset_reviewed_when_no_plan
 run_test "plan wins over changeset" test_plan_wins_over_changeset
 run_test "happy path" test_happy_path

@@ -123,8 +123,14 @@ fi
 # Skip if SKIP_SESSION_CHECK is set (for testing with mock acpx)
 
 if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
-  # Antigravity and Opus use direct CLI invocation — skip acpx session check.
-  if [ "$AGENT" != "antigravity" ] && [ "$AGENT" != "opus" ]; then
+  # Agents invoked through their own CLI never get an acpx session, so asking
+  # acpx to ensure one fails and kills the reviewer with exit 4 before its
+  # branch runs. Keep this list in step with the direct-CLI branches below.
+  case "$AGENT" in
+    antigravity|opus|codex-exec) IS_DIRECT_CLI=1 ;;
+    *) IS_DIRECT_CLI=0 ;;
+  esac
+  if [ "$IS_DIRECT_CLI" -eq 0 ]; then
     echo "[$REVIEWER] Ensuring acpx session for '$AGENT'..." >&2
     if ! "${ACPX_BIN[@]}" "$AGENT" sessions ensure > /dev/null 2>&1; then
       echo "[$REVIEWER] Failed to ensure acpx session for '$AGENT'." >&2
@@ -438,9 +444,16 @@ if [ "$AGENT" = "codex-exec" ]; then
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
     CODEX_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
   fi
+  # Clear any output from a previous round first. codex can exit 0 without
+  # writing a final message, and a leftover file would let handle_invocation_result
+  # read a stale review as this round's result instead of catching the empty one.
+  rm -f "$WORK_DIR/${REVIEWER}-output.md"
+
   CODEX_CMD+=(codex exec -s read-only -o "$WORK_DIR/${REVIEWER}-output.md")
-  [ -n "$CONFIG_MODEL" ] && CODEX_CMD+=(-m "$CONFIG_MODEL")
-  [ -n "$CONFIG_EFFORT" ] && CODEX_CMD+=(-c "model_reasoning_effort=$CONFIG_EFFORT")
+  # `if` rather than `&&`: under `set -e` a false test on the last command of
+  # the branch would exit the script.
+  if [ -n "$CONFIG_MODEL" ]; then CODEX_CMD+=(-m "$CONFIG_MODEL"); fi
+  if [ -n "$CONFIG_EFFORT" ]; then CODEX_CMD+=(-c "model_reasoning_effort=$CONFIG_EFFORT"); fi
   CODEX_CMD+=("$(cat "$PROMPT_FILE")")
 
   set +e
