@@ -132,37 +132,62 @@ CHANGESET_MODE=""
 
 APPROVED_FILE="$WORK_DIR/last-approved-sha.txt"
 
-# No target present — nothing to save or mismatch against; safe to clean.
-if [ ! -f "$PLAN" ]; then
-  rm -rf "$WORK_DIR"
-  exit 0
-fi
-
-current=$(sha_of "$PLAN")
-
-# A changeset.diff is a snapshot, not the thing under review — the working tree
-# is. Left alone it would match the last approved SHA however far the code moved
-# since, which is the drift the APPROVED gate exists to catch. Regenerate it
-# against the same base and gate on that. If regeneration is not possible (no
-# helper, not a repo), fall back to the stored snapshot.
-if [ -n "$CHANGESET_MODE" ] && [ -f "$SCRIPT_DIR/changeset-diff.sh" ]; then
-  base=""
-  if [ -s "$WORK_DIR/changeset-base.txt" ]; then
-    base=$(tr -d '[:space:]' < "$WORK_DIR/changeset-base.txt")
-  fi
-  fresh=$(mktemp)
-  if bash "$SCRIPT_DIR/changeset-diff.sh" "$WORK_DIR" "$fresh" "$base" >/dev/null 2>&1; then
-    current=$(sha_of "$fresh")
-  fi
-  rm -f "$fresh"
-fi
-
-# --- Gate 1: APPROVED ---
 last_approved=""
 if [ -f "$APPROVED_FILE" ]; then
   last_approved=$(tr -d '[:space:]' < "$APPROVED_FILE" 2>/dev/null || true)
 fi
 
+current=""
+
+if [ -n "$CHANGESET_MODE" ]; then
+  # A changeset.diff is a snapshot, not the thing under review — the working
+  # tree is. Left alone it would match the last approved SHA however far the
+  # code moved since, which is the drift the APPROVED gate exists to catch.
+  # Regenerate against the recorded base and gate on that. Deleting the snapshot
+  # must not be a way out either, so this runs before any missing-target exit.
+  if [ -f "$SCRIPT_DIR/changeset-diff.sh" ]; then
+    base=""
+    if [ -s "$WORK_DIR/changeset-base.txt" ]; then
+      base=$(tr -d '[:space:]' < "$WORK_DIR/changeset-base.txt")
+    fi
+    fresh=$(mktemp)
+    if bash "$SCRIPT_DIR/changeset-diff.sh" "$WORK_DIR" "$fresh" "$base" >/dev/null 2>&1; then
+      current=$(sha_of "$fresh")
+    fi
+    rm -f "$fresh"
+  fi
+  # Regeneration failed (no helper, not a repo, base gone). The stored snapshot
+  # is a weaker check, but it is the only one left.
+  if [ -z "$current" ] && [ -f "$PLAN" ]; then
+    current=$(sha_of "$PLAN")
+  fi
+  if [ -z "$current" ]; then
+    # Nothing to compare against an APPROVED round. With no such round there is
+    # nothing to protect; with one, refuse rather than delete the evidence.
+    if [ -z "$last_approved" ]; then
+      rm -rf "$WORK_DIR"
+      exit 0
+    fi
+    echo "[debate] Refusing to clean up: cannot reconstruct the reviewed changeset." >&2
+    echo "  work_dir:       $WORK_DIR" >&2
+    echo "  last approved:  $last_approved" >&2
+    echo "" >&2
+    echo "  Neither $PLAN nor a regenerated diff is available, so there is no way to" >&2
+    echo "  tell whether the code moved since that round. Re-run the review, or" >&2
+    echo "  override with:" >&2
+    echo "    bash $0 \"$WORK_DIR\" --force" >&2
+    exit 1
+  fi
+else
+  # No plan present — nothing to save or mismatch against; safe to clean.
+  if [ ! -f "$PLAN" ]; then
+    rm -rf "$WORK_DIR"
+    exit 0
+  fi
+  current=$(sha_of "$PLAN")
+fi
+
+# --- Gate 1: APPROVED ---
 # An APPROVED round exists and the target drifted past it — refuse.
 if [ -n "$last_approved" ] && [ "$current" != "$last_approved" ]; then
   if [ -n "$CHANGESET_MODE" ]; then

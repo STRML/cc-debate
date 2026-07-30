@@ -378,6 +378,29 @@ test_safe_cleanup_refuses_when_changeset_moved() {
 # A marker that resolves to the work dir itself used to read as "no target
 # present", which deletes everything with no gate applied at all. A safety gate
 # fails closed on malformed input.
+# Deleting the snapshot must not be a way past the gate: the drift check runs
+# off a regenerated diff, so a missing changeset.diff is not "nothing to check".
+test_safe_cleanup_refuses_when_changeset_diff_deleted() {
+  local repo work
+  repo=$(setup_git_repo)
+  echo "const reviewedToken = 1;" >> "$repo/f.txt"
+  work=$(setup_changeset_work_dir "$repo")
+  bash "$RECORD_ROUND" "$work" 1 APPROVED >/dev/null
+
+  rm -f "$work/changeset.diff"
+  echo "const unreviewedToken = 2;" >> "$repo/f.txt"
+
+  set +e
+  bash "$SAFE_CLEANUP" "$work" 2>/dev/null
+  local rc=$?
+  set -e
+
+  [ "$rc" -eq 1 ] || { rm -rf "$repo"; return 1; }
+  [ -d "$work" ] || { rm -rf "$repo"; return 1; }
+
+  rm -rf "$repo"
+}
+
 test_safe_cleanup_refuses_unusable_marker() {
   local d
   d=$(mktemp -d)
@@ -462,6 +485,7 @@ run_test "safe-cleanup refuses when saved mismatches"  test_safe_cleanup_refuses
 run_test "safe-cleanup refuses saved inside work_dir"  test_safe_cleanup_refuses_saved_inside_workdir
 run_test "safe-cleanup skips SAVED gate on changeset"  test_safe_cleanup_changeset_needs_no_saved_copy
 run_test "safe-cleanup refuses when changeset moved"   test_safe_cleanup_refuses_when_changeset_moved
+run_test "safe-cleanup refuses on deleted changeset"   test_safe_cleanup_refuses_when_changeset_diff_deleted
 run_test "safe-cleanup refuses an unusable marker"     test_safe_cleanup_refuses_unusable_marker
 run_test "changeset base is a frozen SHA"              test_changeset_base_is_a_frozen_sha
 run_test "safe-cleanup usage error on no args"         test_safe_cleanup_usage_error
