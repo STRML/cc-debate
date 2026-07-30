@@ -714,14 +714,16 @@ Then **persist the final plan to a durable location outside `<WORK_DIR>`** — t
 
 Record the path you saved to as `<SAVED_PLAN>`. It must be byte-identical to `plan.md` — Step 9 verifies the SHA before deleting anything.
 
+**In changeset mode there is no plan to persist.** `plan.md` is an empty placeholder and the review target is `changeset.diff`, which git can reproduce at any time. Skip the save; Step 9 does not ask for one.
+
 ## Step 9: Cleanup
 
 Use `safe-cleanup.sh` instead of raw `rm -rf`. It enforces two gates before deleting the work dir:
 
-1. **APPROVED gate** — refuses if `plan.md` was modified after the last APPROVED reviewer pass, so the artifacts needed to verify a post-fix plan aren't wiped first.
-2. **SAVED gate** — refuses unless `--saved` points to a durable copy of `plan.md` with an identical SHA, so a successful review never ends with the only copy of the plan thrown away.
+1. **APPROVED gate** — refuses if the review target moved after the last APPROVED reviewer pass, so the artifacts needed to verify a post-fix state aren't wiped first. The target is named in `<WORK_DIR>/review-target.txt`: `plan.md` in plan mode, `changeset.diff` in changeset mode. In changeset mode the diff is regenerated against the recorded base, so the gate tracks the working tree rather than a stale snapshot.
+2. **SAVED gate** — refuses unless `--saved` points to a durable copy of `plan.md` with an identical SHA, so a successful review never ends with the only copy of the plan thrown away. **Plan mode only** — a diff is reproducible from git, so changeset mode cleans up without `--saved`.
 
-Pass the `<SAVED_PLAN>` path from Step 8:
+Pass the `<SAVED_PLAN>` path from Step 8 (omit it in changeset mode):
 
 ```bash
 bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>" --saved "<SAVED_PLAN>"
@@ -729,7 +731,7 @@ bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>" --saved "<SAVED_PLAN>"
 
 If safe-cleanup refuses:
 
-- **APPROVED-gate (SHA mismatch) message:** the plan was edited after the last APPROVED round and Step 6.5 (verification pass) was skipped. **Do not** rerun with `--force` reflexively. Run Step 6.5 now; if verification returns APPROVED, re-save the plan and re-run cleanup.
+- **APPROVED-gate (SHA mismatch) message:** the target changed after the last APPROVED round and Step 6.5 (verification pass) was skipped — the plan was edited, or in changeset mode the code moved. **Do not** rerun with `--force` reflexively. Run Step 6.5 now; if verification returns APPROVED, re-save the plan and re-run cleanup.
 - **SAVED-gate message** (no `--saved`, saved file not found, divergent SHA, or saved copy inside the work dir): you didn't durably persist the final plan. Complete Step 8 — write `plan.md` to a path outside `<WORK_DIR>` — then re-run with the correct `--saved` path.
 - Only use `bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>" --force` if the user has explicitly directed you to abandon the plan (e.g., aborting the review and wanting the work dir gone).
 
@@ -788,7 +790,7 @@ abort Cleanup path above):
 - **Debate guard:** Skip debate if fewer than 2 reviewers succeeded.
 - **Read fully, never grep-skim.** You MUST read each reviewer's complete output with the Read tool. Never use `grep -A`, `grep -iE`, or keyword extraction to summarize reviews — this reliably misses 50%+ of findings. If you catch yourself reaching for grep on reviewer output, stop and use Read instead.
 - **Don't substitute self-analysis for review.** If you Edit/Write `plan.md` after the last reviewer round, you MUST run Step 6.5 (verification pass) before claiming APPROVED. Phrases like "I applied the fix and it resolves the concern" are the exact failure mode the SHA self-check exists to prevent. Verification passes are unbounded — they don't burn revision-budget rounds. Use them.
-- **SHA-gated cleanup.** Step 9 uses `safe-cleanup.sh`, not `rm -rf`. It refuses to delete the work dir unless (a) `plan.md` still matches the last APPROVED state and (b) `--saved` points to a durable, byte-identical copy of the plan. A refusal is your signal to verify or to save the plan — not to add `--force`. The work dir is the only copy of the final plan until Step 8 persists it.
+- **SHA-gated cleanup.** Step 9 uses `safe-cleanup.sh`, not `rm -rf`. It refuses to delete the work dir unless (a) the review target still matches the last APPROVED state and (b) in plan mode, `--saved` points to a durable, byte-identical copy of the plan. A refusal is your signal to verify or to save the plan — not to add `--force`. The work dir is the only copy of the final plan until Step 8 persists it.
 - **Re-invoke teammates by respawning, never by SendMessage.** An idle background teammate is never re-scheduled to read its inbox, so a SendMessage to it returns success but never wakes it (the production wedge). Rounds 2+ and the Step 6.5 verification pass therefore spawn **fresh** `claude-<persona>-r<N>` / `claude-<persona>-verify` Agent teammates with the revised plan inlined — same footer + file-write delivery as Round 1 (`[OUTPUT_PATH]` pointed at this round's `-r<N>-`/`-verify-output.md`). Guard every teammate wait with the Step 2c-wedge detector: no non-empty output file within ~10 min = dead → respawn, don't wait or re-ping. **Reconcile before recording a round:** every spawned teammate must have a non-empty output file, or the panel silently shrank — respawn the missing ones first.
 - **Close every teammate you open (best-effort).** Named skeptic/persona teammates — Round-1 base names plus every `-r<N>` respawn and `-verify` teammate — persist after they return and pile up across runs. Step 10 sends a shutdown request (SendMessage `shutdown_request`, not `TaskStop`) to each on success AND on abort, but does **not** block completion on `shutdown_response`: an idle teammate may never read the request, and unacknowledged shutdowns are fine (teammates are reaped at session end). Never leave a review's teammates running that you can reach.
 - **The Claude side is config-driven.** `claude_reviewers` maps each persona key — `skeptic`, `simplifier`, `operator`, `pentester`, or a custom persona file path — to a model spec (`false` | `"opus"` | `"sonnet"` | `"fable"` | `"auto"`, or an array). Full resolution rules and the pentester-never-sonnet guard are in Step 2b (the authority); bodies live in `reviewer-prompts.md`.

@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.8.2] — 2026-07-30 (changeset gates hash the diff, not the placeholder)
+
+- **The round SHA and the cleanup gate now follow what was actually reviewed.** `run-parallel-acpx.sh` learned that in 2.8.0. `record-round.sh` and `safe-cleanup.sh` did not, and both kept hashing `plan.md`, which in changeset mode is an empty placeholder. Every changeset round recorded the SHA of the empty string, and `safe-cleanup.sh`'s APPROVED gate compared that constant against itself and passed no matter what had changed. The runner now writes `review-target.txt` and both scripts read it, so one file decides the target instead of three copies of the rule drifting apart.
+- **`safe-cleanup.sh` rebuilds the diff before gating on it.** A changeset review covers the working tree, not the snapshot sitting in the work dir. Left alone, a stale `changeset.diff` matches the last approved SHA however far the code has moved since. It is regenerated against the base recorded at run time, so applying a fix and then cleaning up gets refused the same way an edited plan does.
+- **The SAVED gate no longer applies in changeset mode.** It exists so a review cannot end with the only copy of a plan deleted. A diff comes from git, so there is nothing to lose, and cleanup stopped asking for `--saved` there.
+- Diff generation moved into `scripts/changeset-diff.sh`, shared by the runner and cleanup. It resolves the repo from the work dir rather than the caller's cwd. That also fixes the untracked-file filter, which compared repo-relative paths against an absolute work dir and never matched.
+
 ## [2.8.1] — 2026-07-30 (codex prompt via stdin)
 
 - **The `codex-exec` prompt no longer goes in the argument list.** It was passed positionally, and in changeset mode the prompt carries a whole diff — anything past `ARG_MAX` (1 MiB on macOS) fails with `Argument list too long`, so exactly the large reviews that most need a repo-aware reader were the ones that could not run. The prompt is now fed on stdin via `codex exec ... -` with the prompt file redirected in. That redirect also preserves the hang fix: codex blocks forever on a stdin that never reaches EOF, and a regular file gives EOF where an inherited pipe does not. Caught by CodeRabbit on #15. Two regression tests cover it, including one that builds a prompt past `getconf ARG_MAX`.

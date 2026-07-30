@@ -3,17 +3,20 @@
 #
 # Two safety gates must pass before the work dir is deleted:
 #
-#   1. APPROVED gate — refuses if plan.md was modified after the last APPROVED
-#      reviewer pass. Prevents the failure mode where the orchestrator applies a
-#      fix in response to reviewer feedback, claims APPROVED based on its own
-#      analysis (without re-running reviewers), then wipes the artifacts that
-#      would let it notice the gap.
+#   1. APPROVED gate — refuses if the reviewed target moved after the last
+#      APPROVED reviewer pass. Prevents the failure mode where the orchestrator
+#      applies a fix in response to reviewer feedback, claims APPROVED based on
+#      its own analysis (without re-running reviewers), then wipes the artifacts
+#      that would let it notice the gap. In plan mode the target is plan.md; in
+#      changeset mode it is the diff, which is regenerated here so a stale
+#      changeset.diff cannot hide a working tree that has moved on.
 #
 #   2. SAVED gate — refuses unless --saved points to a durable copy of plan.md
 #      whose contents are byte-identical (same SHA). The work dir is ephemeral;
 #      this forces the final plan to be persisted somewhere robust BEFORE the
 #      only copy is deleted. Without this, a successful review could end with the
-#      plan thrown away.
+#      plan thrown away. This gate does not apply in changeset mode — the diff is
+#      reproducible from git, so there is nothing that only exists here.
 #
 # Both gates are skipped by --force (use only when deliberately abandoning the
 # review — e.g. the user is killing it and wants the work dir gone).
@@ -28,6 +31,8 @@
 #   2 — usage error
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 WORK_DIR=""
 SAVED=""
@@ -99,10 +104,22 @@ if [ -n "$FORCE" ]; then
   exit 0
 fi
 
-PLAN="$WORK_DIR/plan.md"
+# What the review actually gated on. run-parallel-acpx.sh writes
+# review-target.txt; work dirs without one are plan mode. Hardcoding plan.md
+# here made the APPROVED gate compare the empty placeholder against itself in
+# changeset mode, so it passed no matter what changed (#17). basename keeps a
+# hand-edited marker from pointing outside the work dir.
+TARGET_NAME="plan.md"
+if [ -s "$WORK_DIR/review-target.txt" ]; then
+  TARGET_NAME=$(basename "$(tr -d '[:space:]' < "$WORK_DIR/review-target.txt")")
+fi
+PLAN="$WORK_DIR/$TARGET_NAME"
+CHANGESET_MODE=""
+[ "$TARGET_NAME" = "plan.md" ] || CHANGESET_MODE=1
+
 APPROVED_FILE="$WORK_DIR/last-approved-sha.txt"
 
-# No plan present — nothing to save or mismatch against; safe to clean.
+# No target present — nothing to save or mismatch against; safe to clean.
 if [ ! -f "$PLAN" ]; then
   rm -rf "$WORK_DIR"
   exit 0
@@ -110,20 +127,42 @@ fi
 
 current=$(sha_of "$PLAN")
 
+# A changeset.diff is a snapshot, not the thing under review — the working tree
+# is. Left alone it would match the last approved SHA however far the code moved
+# since, which is the drift the APPROVED gate exists to catch. Regenerate it
+# against the same base and gate on that. If regeneration is not possible (no
+# helper, not a repo), fall back to the stored snapshot.
+if [ -n "$CHANGESET_MODE" ] && [ -f "$SCRIPT_DIR/changeset-diff.sh" ]; then
+  base=""
+  if [ -s "$WORK_DIR/changeset-base.txt" ]; then
+    base=$(tr -d '[:space:]' < "$WORK_DIR/changeset-base.txt")
+  fi
+  fresh=$(mktemp)
+  if bash "$SCRIPT_DIR/changeset-diff.sh" "$WORK_DIR" "$fresh" "$base" >/dev/null 2>&1; then
+    current=$(sha_of "$fresh")
+  fi
+  rm -f "$fresh"
+fi
+
 # --- Gate 1: APPROVED ---
 last_approved=""
 if [ -f "$APPROVED_FILE" ]; then
   last_approved=$(tr -d '[:space:]' < "$APPROVED_FILE" 2>/dev/null || true)
 fi
 
-# An APPROVED round exists and the plan drifted past it — refuse.
+# An APPROVED round exists and the target drifted past it — refuse.
 if [ -n "$last_approved" ] && [ "$current" != "$last_approved" ]; then
-  echo "[debate] Refusing to clean up: plan.md was modified after the last APPROVED review." >&2
+  if [ -n "$CHANGESET_MODE" ]; then
+    echo "[debate] Refusing to clean up: the changeset moved after the last APPROVED review." >&2
+  else
+    echo "[debate] Refusing to clean up: plan.md was modified after the last APPROVED review." >&2
+  fi
   echo "  work_dir:       $WORK_DIR" >&2
+  echo "  reviewed:       $TARGET_NAME" >&2
   echo "  current SHA:    $current" >&2
   echo "  last approved:  $last_approved" >&2
   echo "" >&2
-  echo "  The post-fix plan was never reviewed. Run a verification round before claiming APPROVED:" >&2
+  echo "  The post-fix state was never reviewed. Run a verification round before claiming APPROVED:" >&2
   echo "    /debate:all   (or re-invoke the runner directly)" >&2
   echo "" >&2
   echo "  If you have manually verified the fix and accept the risk, override with:" >&2
@@ -132,6 +171,13 @@ if [ -n "$last_approved" ] && [ "$current" != "$last_approved" ]; then
 fi
 
 # --- Gate 2: SAVED ---
+# Changeset mode has nothing to persist: the diff is derived from git and can be
+# regenerated at any time, unlike a plan that exists only in the work dir.
+if [ -n "$CHANGESET_MODE" ]; then
+  rm -rf "$WORK_DIR"
+  exit 0
+fi
+
 # A plan exists, so a durable copy must be proven before deletion.
 if [ -z "$SAVED" ]; then
   echo "[debate] Refusing to clean up: no durable copy of the final plan was provided." >&2

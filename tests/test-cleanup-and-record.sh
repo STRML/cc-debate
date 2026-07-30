@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SAFE_CLEANUP="$PROJECT_DIR/scripts/safe-cleanup.sh"
 RECORD_ROUND="$PROJECT_DIR/scripts/record-round.sh"
+CHANGESET_DIFF="$PROJECT_DIR/scripts/changeset-diff.sh"
 
 PASS=0
 FAIL=0
@@ -30,6 +31,36 @@ sha_of() {
   else
     shasum -a 256 "$1" | cut -d' ' -f1
   fi
+}
+
+# A throwaway git repo with one commit on `main`, matching the fixture in
+# test-parallel-acpx.sh.
+setup_git_repo() {
+  local d
+  d=$(mktemp -d)
+  git -C "$d" init -q
+  git -C "$d" config user.email "test@example.com"
+  git -C "$d" config user.name "Test"
+  git -C "$d" config commit.gpgsign false
+  echo "base" > "$d/f.txt"
+  git -C "$d" add f.txt >/dev/null 2>&1
+  git -C "$d" commit -qm "base" >/dev/null 2>&1
+  git -C "$d" branch -M main >/dev/null 2>&1
+  echo "$d"
+}
+
+# Build a changeset-mode work dir inside $1 with an uncommitted change already
+# diffed into it, exactly as run-parallel-acpx.sh leaves it. Echoes the work dir.
+setup_changeset_work_dir() {
+  local repo="$1"
+  local work base
+  work="$repo/.tmp/ai-review-changeset"
+  mkdir -p "$work"
+  : > "$work/plan.md"
+  base=$(bash "$CHANGESET_DIFF" "$work" "$work/changeset.diff" 2>/dev/null)
+  printf '%s\n' "$base" > "$work/changeset-base.txt"
+  echo "changeset.diff" > "$work/review-target.txt"
+  echo "$work"
 }
 
 # --- record-round.sh ---
@@ -93,6 +124,40 @@ test_record_round_rejects_bad_args() {
 test_record_round_fails_without_plan() {
   local d
   d=$(mktemp -d)
+
+  set +e
+  bash "$RECORD_ROUND" "$d" 1 APPROVED >/dev/null 2>&1
+  local rc=$?
+  set -e
+
+  rm -rf "$d"
+  [ "$rc" -ne 0 ]
+}
+
+# In changeset mode plan.md is an empty placeholder. Recording its SHA logs the
+# hash of the empty string for every round, so the drift check compares a
+# constant against itself and can never fire (#17).
+test_record_round_hashes_the_changeset() {
+  local repo work recorded expected
+  repo=$(setup_git_repo)
+  echo "const movedToken = 1;" >> "$repo/f.txt"
+  work=$(setup_changeset_work_dir "$repo")
+
+  recorded=$(bash "$RECORD_ROUND" "$work" 1 APPROVED)
+  expected=$(sha_of "$work/changeset.diff")
+
+  [ "$recorded" = "$expected" ] || { rm -rf "$repo"; return 1; }
+  [ "$(cat "$work/last-approved-sha.txt")" = "$expected" ] || { rm -rf "$repo"; return 1; }
+  grep -q "\"sha\":\"$expected\"" "$work/rounds.jsonl" || { rm -rf "$repo"; return 1; }
+
+  rm -rf "$repo"
+}
+
+test_record_round_marker_cannot_escape_work_dir() {
+  local d
+  d=$(mktemp -d)
+  echo "plan" > "$d/plan.md"
+  echo "../../etc/hosts" > "$d/review-target.txt"
 
   set +e
   bash "$RECORD_ROUND" "$d" 1 APPROVED >/dev/null 2>&1
@@ -262,6 +327,54 @@ test_safe_cleanup_refuses_saved_inside_workdir() {
   rm -rf "$d"
 }
 
+# A diff is reproducible from git, so changeset mode has nothing that only
+# exists in the work dir — the SAVED gate does not apply there.
+test_safe_cleanup_changeset_needs_no_saved_copy() {
+  local repo work
+  repo=$(setup_git_repo)
+  echo "const cleanToken = 1;" >> "$repo/f.txt"
+  work=$(setup_changeset_work_dir "$repo")
+  bash "$RECORD_ROUND" "$work" 1 APPROVED >/dev/null
+
+  bash "$SAFE_CLEANUP" "$work" || { rm -rf "$repo"; return 1; }
+  [ ! -d "$work" ] || { rm -rf "$repo"; return 1; }
+
+  rm -rf "$repo"
+}
+
+# The reviewed artifact is the working tree, not the snapshot on disk. Gating on
+# the stale changeset.diff would pass however far the code moved after APPROVED.
+test_safe_cleanup_refuses_when_changeset_moved() {
+  local repo work
+  repo=$(setup_git_repo)
+  echo "const reviewedToken = 1;" >> "$repo/f.txt"
+  work=$(setup_changeset_work_dir "$repo")
+  bash "$RECORD_ROUND" "$work" 1 APPROVED >/dev/null
+
+  # The orchestrator "applies a fix" after the approved round.
+  echo "const unreviewedToken = 2;" >> "$repo/f.txt"
+
+  local err
+  err=$(mktemp)
+  set +e
+  bash "$SAFE_CLEANUP" "$work" 2>"$err"
+  local rc=$?
+  set -e
+
+  [ "$rc" -eq 1 ] || { rm -f "$err"; rm -rf "$repo"; return 1; }
+  [ -d "$work" ] || { rm -f "$err"; rm -rf "$repo"; return 1; }
+  # It must refuse on the APPROVED gate, not incidentally on the SAVED gate.
+  grep -q "changeset moved after the last APPROVED" "$err" \
+    || { rm -f "$err"; rm -rf "$repo"; return 1; }
+  rm -f "$err"
+
+  # --force still overrides.
+  bash "$SAFE_CLEANUP" "$work" --force
+  [ ! -d "$work" ] || { rm -rf "$repo"; return 1; }
+
+  rm -rf "$repo"
+}
+
 test_safe_cleanup_usage_error() {
   set +e
   bash "$SAFE_CLEANUP" 2>/dev/null
@@ -293,6 +406,8 @@ run_test "record-round appends to jsonl"               test_record_round_appends
 run_test "record-round writes last-approved on APPROVED" test_record_round_writes_last_approved_only_on_approved
 run_test "record-round rejects bad args"               test_record_round_rejects_bad_args
 run_test "record-round fails without plan.md"          test_record_round_fails_without_plan
+run_test "record-round hashes the changeset"           test_record_round_hashes_the_changeset
+run_test "record-round marker cannot escape work_dir"  test_record_round_marker_cannot_escape_work_dir
 
 run_test "safe-cleanup proceeds without prior record"  test_safe_cleanup_no_record_proceeds
 run_test "safe-cleanup proceeds when SHA matches"      test_safe_cleanup_matching_sha_proceeds
@@ -304,6 +419,8 @@ run_test "safe-cleanup --force bypasses missing saved" test_safe_cleanup_force_b
 run_test "safe-cleanup refuses when saved not found"   test_safe_cleanup_refuses_saved_not_found
 run_test "safe-cleanup refuses when saved mismatches"  test_safe_cleanup_refuses_saved_mismatch
 run_test "safe-cleanup refuses saved inside work_dir"  test_safe_cleanup_refuses_saved_inside_workdir
+run_test "safe-cleanup skips SAVED gate on changeset"  test_safe_cleanup_changeset_needs_no_saved_copy
+run_test "safe-cleanup refuses when changeset moved"   test_safe_cleanup_refuses_when_changeset_moved
 run_test "safe-cleanup usage error on no args"         test_safe_cleanup_usage_error
 run_test "safe-cleanup --saved requires a path"        test_safe_cleanup_saved_requires_path
 
