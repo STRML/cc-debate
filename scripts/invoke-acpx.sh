@@ -107,6 +107,27 @@ CONFIG_TIMEOUT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].timeout // empty'
 CONFIG_SYSTEM_PROMPT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].system_prompt // empty' "$CONFIG_FILE")
 CONFIG_MODEL=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].model // empty' "$CONFIG_FILE")
 CONFIG_EFFORT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].effort // empty' "$CONFIG_FILE")
+CONFIG_MODE=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].mode // empty' "$CONFIG_FILE")
+
+# --- Session vs one-shot ---
+# Default: prompt a persistent acpx session, so a reviewer keeps its context
+# across debate rounds. That is what you want when the agent supports it.
+#
+# `"mode": "exec"` opts out and sends each prompt as a one-shot instead. Some ACP
+# agents go mute on the second prompt into a session: the turn ends immediately
+# with no content and exit 0, which surfaces as an empty review rather than an
+# error. Reproduced with opencode-backed agents (kimi-k3) — run 1 answers, every
+# later run in that session returns nothing. Such a reviewer loses cross-round
+# continuity but actually replies, which is the better trade.
+
+ONE_SHOT=0
+case "$CONFIG_MODE" in
+  exec) ONE_SHOT=1 ;;
+  session | "") ONE_SHOT=0 ;;
+  *)
+    echo "[$REVIEWER] unknown mode '$CONFIG_MODE' (expected 'exec' or 'session'), using session." >&2
+    ;;
+esac
 
 # --- Nested Claude guard ---
 # When the agent is `claude`, Claude Code's nested-session guard (CLAUDECODE=1)
@@ -130,7 +151,9 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
     antigravity|opus|codex-exec) IS_DIRECT_CLI=1 ;;
     *) IS_DIRECT_CLI=0 ;;
   esac
-  if [ "$IS_DIRECT_CLI" -eq 0 ]; then
+  # A one-shot (`mode: exec`) never touches a session, so ensuring one would be a
+  # pointless call that can also fail and kill the reviewer with exit 4.
+  if [ "$IS_DIRECT_CLI" -eq 0 ] && [ "$ONE_SHOT" -eq 0 ]; then
     echo "[$REVIEWER] Ensuring acpx session for '$AGENT'..." >&2
     if ! "${ACPX_BIN[@]}" "$AGENT" sessions ensure > /dev/null 2>&1; then
       echo "[$REVIEWER] Failed to ensure acpx session for '$AGENT'." >&2
@@ -211,6 +234,16 @@ fi
 # Call after running any reviewer command. Uses globals: REVIEWER, WORK_DIR, TIMEOUT, EXIT_CODE.
 # $1: label used in log/error messages (e.g. "agy (Antigravity CLI)" or "acpx")
 
+# A review with no content is not always a zero-byte file. acpx still terminates
+# its (empty) output with a newline, so an agent that ends its turn without a final
+# message leaves 1 byte behind — which `[ -s ]` reports as non-empty, and the round
+# records a blank review as a success. Test for actual characters instead.
+output_is_blank() {
+  local file="$1"
+  [ -s "$file" ] || return 0
+  ! grep -q '[^[:space:]]' "$file"
+}
+
 handle_invocation_result() {
   local label="$1"
   if [ "$EXIT_CODE" -eq 124 ]; then
@@ -220,7 +253,7 @@ handle_invocation_result() {
     if [ -s "$WORK_DIR/${REVIEWER}-stderr.log" ]; then
       echo "[$REVIEWER] stderr: $(head -5 "$WORK_DIR/${REVIEWER}-stderr.log")" >&2
     fi
-    if [ ! -s "$WORK_DIR/${REVIEWER}-output.md" ]; then
+    if output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
       {
         echo "$label error (exit $EXIT_CODE):"
         echo ""
@@ -233,7 +266,7 @@ handle_invocation_result() {
 
   echo "$EXIT_CODE" > "$WORK_DIR/${REVIEWER}-exit.txt"
 
-  if [ "$EXIT_CODE" -eq 0 ] && [ ! -s "$WORK_DIR/${REVIEWER}-output.md" ]; then
+  if [ "$EXIT_CODE" -eq 0 ] && output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
     echo "[$REVIEWER] Empty response from $label." >&2
     {
       echo "Empty response from $label. Stderr:"
@@ -481,18 +514,28 @@ fi
 
 # --- acpx call ---
 
-echo "[$REVIEWER] Submitting plan to $AGENT via acpx (timeout: ${TIMEOUT}s)..." >&2
+if [ "$ONE_SHOT" -eq 1 ]; then
+  echo "[$REVIEWER] Submitting plan to $AGENT via acpx, one-shot (timeout: ${TIMEOUT}s)..." >&2
+else
+  echo "[$REVIEWER] Submitting plan to $AGENT via acpx (timeout: ${TIMEOUT}s)..." >&2
+fi
 
 ACPX_CMD=()
 if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
   ACPX_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
+fi
+# `exec` must land directly after the agent name — it is that agent's subcommand,
+# not a global acpx flag, and acpx rejects it anywhere else.
+AGENT_ARGS=("$AGENT")
+if [ "$ONE_SHOT" -eq 1 ]; then
+  AGENT_ARGS+=(exec)
 fi
 # Read-only enforcement: --approve-reads auto-approves read/search requests;
 # --non-interactive-permissions deny auto-denies any write/edit/exec the agent
 # requests (headless can't prompt, so it denies rather than hangs). This is the
 # hard guarantee that a reviewer (e.g. an over-eager external agent) cannot
 # modify the plan doc or any file in the repo while reviewing.
-ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-permissions deny "$AGENT" --file "$PROMPT_FILE")
+ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-permissions deny "${AGENT_ARGS[@]}" --file "$PROMPT_FILE")
 
 set +e
 "${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"

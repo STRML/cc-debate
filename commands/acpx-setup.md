@@ -256,6 +256,13 @@ Built-in agents do not need `model_id`. OpenRouter agents (created via Step 2c) 
 
 Set timeout to 240-300 for larger/slower agents, 120 for faster ones.
 
+`mode` is optional and defaults to `session`. Set `"mode": "exec"` when an agent
+answers the first prompt into a session and then returns an empty turn for every
+later one — the round records a blank review with exit 0 rather than an error. Seen
+with opencode-backed agents such as `kimi-k3`. The Step 3 probe below only ever sends
+one prompt, so it cannot detect this; the symptom is a reviewer that goes blank on
+round 2 of a real debate.
+
 For system prompts, suggest unique review personas for each reviewer. Examples:
 - **The Executor** — shell correctness, exit codes, race conditions, file I/O
 - **The Architect** — structural integrity, over-engineering, missing phases, graceful degradation

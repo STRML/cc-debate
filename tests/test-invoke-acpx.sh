@@ -50,6 +50,18 @@ setup_config() {
       "model": "gpt-5.6-sol",
       "effort": "high",
       "system_prompt": "You are The Auditor."
+    },
+    "oneshot-reviewer": {
+      "agent": "kimi-k3",
+      "timeout": 60,
+      "mode": "exec",
+      "system_prompt": "You are The Cartographer."
+    },
+    "bad-mode-reviewer": {
+      "agent": "codex",
+      "timeout": 60,
+      "mode": "sesion",
+      "system_prompt": "You have a typo in your mode."
     }
   }
 }
@@ -766,6 +778,168 @@ test_codex_exec_handles_oversized_prompt() {
   rm -rf "$work_dir"
 }
 
+# An agent that ends its turn with no final message still gets a trailing newline
+# from acpx, so the output file is 1 byte and `[ -s ]` calls it non-empty. Before
+# this was caught, the round logged "Review received", wrote exit 0, and handed the
+# synthesizer a blank review.
+test_whitespace_only_response_is_empty() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="   " \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "1" ] || return 1
+  grep -q "Empty response" "$work_dir/test-reviewer-output.md" || return 1
+
+  rm -rf "$work_dir"
+}
+
+# Same trap for a response that is only newlines.
+test_newline_only_response_is_empty() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE=$'\n\n' \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# The blank check must not swallow a real one-line review.
+test_short_real_response_still_passes() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="OK" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "^OK$" "$work_dir/test-reviewer-output.md" || return 1
+
+  rm -rf "$work_dir"
+}
+
+# --- one-shot (mode: exec) ---
+#
+# Some ACP agents go mute on the second prompt into a persistent session: the turn
+# ends immediately with no content, exit 0, empty output file. Reproduced against
+# opencode-backed agents (kimi-k3), where run 1 answers and every later run in the
+# same session returns nothing. `mode: "exec"` opts a reviewer out of the session.
+
+test_exec_mode_uses_exec_subcommand() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_RESPONSE="One-shot. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "oneshot-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/oneshot-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "VERDICT: APPROVED" "$work_dir/oneshot-reviewer-output.md" || return 1
+
+  # `exec` must sit immediately after the agent name, before --file.
+  grep -q "kimi-k3 exec --file" "$log_file" || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_exec_mode_skips_session_ensure() {
+  # A one-shot needs no session, so a failing `sessions ensure` must not sink it.
+  # Deliberately does NOT set SKIP_SESSION_CHECK.
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_SESSION_ENSURE_EXIT=1 \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_RESPONSE="One-shot. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "oneshot-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/oneshot-reviewer-exit.txt")" = "0" ] || return 1
+  ! grep -q "sessions ensure" "$log_file" 2>/dev/null || return 1
+
+  rm -rf "$work_dir"
+}
+
+# Two successive runs must both produce a review. Under the session path the
+# second one comes back empty for opencode-backed agents; the mock cannot
+# reproduce that, so this asserts the invariant that matters: neither run
+# touches a shared session.
+test_exec_mode_repeatable_across_runs() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  for _ in 1 2; do
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_ACPX_SESSION_ENSURE_EXIT=1 \
+    MOCK_ACPX_LOG="$log_file" \
+    MOCK_ACPX_RESPONSE="Round output. VERDICT: REVISE" \
+      bash "$INVOKE" "$config" "$work_dir" "oneshot-reviewer" 2>/dev/null
+
+    [ "$(cat "$work_dir/oneshot-reviewer-exit.txt")" = "0" ] || return 1
+    [ -s "$work_dir/oneshot-reviewer-output.md" ] || return 1
+  done
+
+  [ "$(grep -c "kimi-k3 exec --file" "$log_file")" = "2" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# Default is unchanged: no `mode` key means the persistent session, as before.
+test_session_mode_is_the_default() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "sessions ensure" "$log_file" || return 1
+  grep -q "codex exec --file" "$log_file" && return 1
+
+  rm -rf "$work_dir"
+}
+
+# A typo'd mode must be loud, not silently treated as one-shot or as a session.
+test_unknown_mode_warns_and_uses_session() {
+  local work_dir config stderr_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  stderr_out="$work_dir/invoke-stderr.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+    bash "$INVOKE" "$config" "$work_dir" "bad-mode-reviewer" 2>"$stderr_out"
+
+  [ "$(cat "$work_dir/bad-mode-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "unknown mode 'sesion'" "$stderr_out" || return 1
+
+  rm -rf "$work_dir"
+}
+
 # --- changeset fallback ---
 
 test_changeset_reviewed_when_no_plan() {
@@ -833,6 +1007,14 @@ run_test "codex exec skips the acpx session check" test_codex_exec_skips_session
 run_test "codex exec clears stale output" test_codex_exec_clears_stale_output
 run_test "codex exec prompt travels on stdin" test_codex_exec_prompt_travels_on_stdin
 run_test "codex exec handles an oversized prompt" test_codex_exec_handles_oversized_prompt
+run_test "whitespace-only response counts as empty" test_whitespace_only_response_is_empty
+run_test "newline-only response counts as empty" test_newline_only_response_is_empty
+run_test "short real response still passes" test_short_real_response_still_passes
+run_test "exec mode uses the exec subcommand" test_exec_mode_uses_exec_subcommand
+run_test "exec mode skips session ensure" test_exec_mode_skips_session_ensure
+run_test "exec mode repeatable across runs" test_exec_mode_repeatable_across_runs
+run_test "session mode is the default" test_session_mode_is_the_default
+run_test "unknown mode warns and uses session" test_unknown_mode_warns_and_uses_session
 run_test "changeset reviewed when no plan" test_changeset_reviewed_when_no_plan
 run_test "plan wins over changeset" test_plan_wins_over_changeset
 run_test "happy path" test_happy_path
