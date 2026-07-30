@@ -78,13 +78,15 @@ if [ ! -d "$WORK_DIR" ]; then
   exit 1
 fi
 
-if [ ! -f "$WORK_DIR/plan.md" ]; then
-  echo "invoke-acpx: plan.md not found in $WORK_DIR" >&2
+# A review target is either a plan or, when no plan was staged, the changeset
+# the runner captured. Exactly one has to be non-empty.
+if [ ! -f "$WORK_DIR/plan.md" ] && [ ! -s "$WORK_DIR/changeset.diff" ]; then
+  echo "invoke-acpx: plan.md not found in $WORK_DIR (and no changeset.diff)" >&2
   exit 1
 fi
 
-if [ ! -s "$WORK_DIR/plan.md" ]; then
-  echo "invoke-acpx: plan.md is empty in $WORK_DIR" >&2
+if [ ! -s "$WORK_DIR/plan.md" ] && [ ! -s "$WORK_DIR/changeset.diff" ]; then
+  echo "invoke-acpx: nothing to review in $WORK_DIR — plan.md is empty and there is no changeset.diff" >&2
   exit 1
 fi
 
@@ -104,6 +106,7 @@ fi
 CONFIG_TIMEOUT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].timeout // empty' "$CONFIG_FILE")
 CONFIG_SYSTEM_PROMPT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].system_prompt // empty' "$CONFIG_FILE")
 CONFIG_MODEL=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].model // empty' "$CONFIG_FILE")
+CONFIG_EFFORT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].effort // empty' "$CONFIG_FILE")
 
 # --- Nested Claude guard ---
 # When the agent is `claude`, Claude Code's nested-session guard (CLAUDECODE=1)
@@ -150,19 +153,35 @@ if [ -f "$WORK_DIR/${REVIEWER}-prompt.txt" ]; then
   # Debate/revision round — prompt file is the full message
   PROMPT_FILE="$WORK_DIR/${REVIEWER}-prompt.txt"
 else
-  # Initial review — build prompt from system_prompt + plan
-  SYSTEM_PROMPT="${CONFIG_SYSTEM_PROMPT:-You are a senior engineer reviewing an implementation plan. Be specific, direct, and focus on what could go wrong.}"
+  # Initial review. Review target: an explicit plan when one was prepared,
+  # otherwise the current changeset. Falling back to the diff means /debate:run
+  # doubles as a code review with no extra syntax — if nobody staged a plan,
+  # debate what actually changed. run-parallel-acpx.sh writes changeset.diff.
+  TARGET_FILE="$WORK_DIR/plan.md"
+  TARGET_NOUN="implementation plan"
+  TARGET_VERB="ready to implement"
+  if [ ! -s "$TARGET_FILE" ] && [ -s "$WORK_DIR/changeset.diff" ]; then
+    TARGET_FILE="$WORK_DIR/changeset.diff"
+    TARGET_NOUN="changeset"
+    TARGET_VERB="ready to merge"
+  fi
+
+  SYSTEM_PROMPT="${CONFIG_SYSTEM_PROMPT:-You are a senior engineer reviewing an ${TARGET_NOUN}. Be specific, direct, and focus on what could go wrong.}"
 
   {
     echo "$SYSTEM_PROMPT"
     echo ""
-    echo "READ-ONLY REVIEW — HARD RULE: You are reviewing a plan, nothing more. Do NOT create, edit, write, move, rename, or delete any file, and do NOT run any command that mutates the filesystem or repository (no patches, no fixes applied in place). You have read-only access only. Output your review as text in your reply — that text is the entire deliverable. Any write attempt is denied by the sandbox and only wastes the round."
+    echo "READ-ONLY REVIEW — HARD RULE: You are reviewing a ${TARGET_NOUN}, nothing more. Do NOT create, edit, write, move, rename, or delete any file, and do NOT run any command that mutates the filesystem or repository (no patches, no fixes applied in place). You have read-only access only. Output your review as text in your reply — that text is the entire deliverable. Any write attempt is denied by the sandbox and only wastes the round."
     echo ""
-    echo "Review this implementation plan:"
+    if [ "$TARGET_NOUN" = "changeset" ]; then
+      echo "Review this changeset. Reviewers with repo access should open the surrounding code rather than judging the diff in isolation; reviewers without it should say so instead of guessing at context they cannot see."
+    else
+      echo "Review this implementation plan:"
+    fi
     echo ""
-    cat "$WORK_DIR/plan.md"
+    cat "$TARGET_FILE"
     echo ""
-    echo "Be specific and actionable. If the plan is solid and ready to implement, end your review with exactly: VERDICT: APPROVED"
+    echo "Be specific and actionable. If it is solid and ${TARGET_VERB}, end your review with exactly: VERDICT: APPROVED"
     echo ""
     echo "If changes are needed, end with exactly: VERDICT: REVISE"
   } > "$WORK_DIR/${REVIEWER}-acpx-prompt.txt"
@@ -377,6 +396,66 @@ if [ "$AGENT" = "opus" ]; then
   set -e
 
   handle_invocation_result "Claude Opus"
+fi
+
+# --- codex exec: the repo-aware seat ---
+# Every other transport here is prompt-only. acpx makes no tool calls at all
+# (measured: asked for the declaration line of a method in a file inside its own
+# --cwd, it returned null under both --approve-reads and --approve-all, and a
+# --verbose run showed no tool or permission traffic). agy is deliberately run
+# from a throwaway workspace because it has no read-only mode. That is fine for
+# reviewing a plan, but it means no reviewer can ever check a claim against the
+# actual code.
+#
+# `codex exec` can. It reads files and runs commands, and `-s read-only` keeps it
+# from writing anything — verified by asking for a method's declaration line and
+# getting the exact line number and verbatim text back.
+#
+# Three flags are load-bearing:
+#   `</dev/null`  — without a closed stdin, codex prints "Reading additional
+#                   input from stdin..." and blocks until the timeout kills it.
+#                   Under a harness that looks like a silent no-op, and is the
+#                   likeliest cause of "codex just returns nothing" reports.
+#   `-s read-only`— the sandbox guarantee, equivalent to acpx's
+#                   --non-interactive-permissions deny.
+#   `-o <file>`   — writes ONLY the final message. codex echoes every command it
+#                   runs, so its stdout can carry an entire test suite; pointing
+#                   -o at the output file keeps the transcript out of the
+#                   synthesizer's input.
+
+if [ "$AGENT" = "codex-exec" ]; then
+  if ! command -v codex > /dev/null 2>&1; then
+    echo "[$REVIEWER] codex CLI not found." >&2
+    echo "codex CLI not installed. Install the Codex CLI and run 'codex' once to sign in." > "$WORK_DIR/${REVIEWER}-output.md"
+    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    trap - EXIT
+    exit 1
+  fi
+
+  echo "[$REVIEWER] Submitting to codex exec, repo-aware (timeout: ${TIMEOUT}s)..." >&2
+
+  CODEX_CMD=()
+  if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
+    CODEX_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
+  fi
+  CODEX_CMD+=(codex exec -s read-only -o "$WORK_DIR/${REVIEWER}-output.md")
+  [ -n "$CONFIG_MODEL" ] && CODEX_CMD+=(-m "$CONFIG_MODEL")
+  [ -n "$CONFIG_EFFORT" ] && CODEX_CMD+=(-c "model_reasoning_effort=$CONFIG_EFFORT")
+  CODEX_CMD+=("$(cat "$PROMPT_FILE")")
+
+  set +e
+  "${CODEX_CMD[@]}" < /dev/null \
+    > "$WORK_DIR/${REVIEWER}-transcript.log" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+  EXIT_CODE=$?
+  set -e
+
+  # A timeout here is usually the stdin hang above; say so rather than leaving
+  # the operator to guess at an empty review.
+  if [ "$EXIT_CODE" -eq 124 ] && ! [ -s "$WORK_DIR/${REVIEWER}-output.md" ]; then
+    echo "[$REVIEWER] codex produced nothing before the timeout. If the transcript ends at 'Reading additional input from stdin...', stdin was not closed." >&2
+  fi
+
+  handle_invocation_result "codex exec"
 fi
 
 # --- acpx call ---

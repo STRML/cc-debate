@@ -41,15 +41,41 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$WORK_DIR" || { echo "Failed to create $WORK_DIR" >&2; exit 1; }
 
-if [ ! -f "$WORK_DIR/plan.md" ]; then
-  echo "[debate] FATAL: plan.md not found in $WORK_DIR — nothing to review" >&2
-  echo "  pwd:        $(pwd)" >&2
-  if command -v realpath >/dev/null 2>&1; then
-    echo "  resolved:   $(realpath "$WORK_DIR" 2>/dev/null || echo "(unresolvable)")" >&2
+# No plan staged? Debate the current changeset instead. A review of what
+# actually changed is almost always what someone wants when they run this
+# without preparing a plan, and it needs no extra syntax. DEBATE_DIFF_BASE
+# overrides the comparison point (default: the merge base with the default
+# branch, falling back to HEAD so uncommitted work still reviews).
+if [ ! -s "$WORK_DIR/plan.md" ]; then
+  DIFF_BASE="${DEBATE_DIFF_BASE:-}"
+  if [ -z "$DIFF_BASE" ] && git rev-parse --git-dir >/dev/null 2>&1; then
+    for cand in origin/main origin/master main master; do
+      if git rev-parse --verify --quiet "$cand" >/dev/null 2>&1; then
+        DIFF_BASE="$(git merge-base HEAD "$cand" 2>/dev/null || true)"
+        [ -n "$DIFF_BASE" ] && break
+      fi
+    done
+    [ -z "$DIFF_BASE" ] && DIFF_BASE="HEAD"
   fi
-  echo "  hint:       run from the project root (the dir where debate-setup.sh wrote plan.md)" >&2
-  echo "  hint:       or set WORK_DIR_OVERRIDE=<absolute path> if you know the right work dir" >&2
-  exit 1
+
+  if [ -n "$DIFF_BASE" ]; then
+    git --no-pager diff "$DIFF_BASE" > "$WORK_DIR/changeset.diff" 2>/dev/null || true
+  fi
+
+  if [ ! -s "$WORK_DIR/changeset.diff" ]; then
+    echo "[debate] FATAL: no plan.md in $WORK_DIR and no changes to review" >&2
+    echo "  pwd:        $(pwd)" >&2
+    if command -v realpath >/dev/null 2>&1; then
+      echo "  resolved:   $(realpath "$WORK_DIR" 2>/dev/null || echo "(unresolvable)")" >&2
+    fi
+    echo "  hint:       write a plan to $WORK_DIR/plan.md, or make some changes to review" >&2
+    echo "  hint:       set DEBATE_DIFF_BASE=<ref> to pick a different comparison point" >&2
+    echo "  hint:       or set WORK_DIR_OVERRIDE=<absolute path> if you know the right work dir" >&2
+    exit 1
+  fi
+
+  echo "[debate] No plan staged — reviewing the changeset against ${DIFF_BASE} ($(wc -l < "$WORK_DIR/changeset.diff" | tr -d ' ') diff lines)." >&2
+  : > "$WORK_DIR/plan.md"
 fi
 
 # Record the SHA of the plan reviewers are about to see. The orchestrator

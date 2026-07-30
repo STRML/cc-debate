@@ -10,6 +10,7 @@ INVOKE="$PROJECT_DIR/scripts/invoke-acpx.sh"
 MOCK="$SCRIPT_DIR/mock-acpx.sh"
 MOCK_AGY="$SCRIPT_DIR/mock-agy.sh"
 MOCK_CLAUDE="$SCRIPT_DIR/mock-claude.sh"
+MOCK_CODEX="$SCRIPT_DIR/mock-codex.sh"
 
 PASS=0
 FAIL=0
@@ -42,6 +43,13 @@ setup_config() {
       "agent": "opus",
       "timeout": 60,
       "system_prompt": "You are The Skeptic."
+    },
+    "codex-exec-reviewer": {
+      "agent": "codex-exec",
+      "timeout": 60,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "system_prompt": "You are The Auditor."
     }
   }
 }
@@ -543,6 +551,137 @@ test_opus_skips_session_ensure() {
   rm -rf "$work_dir"
 }
 
+# --- codex exec (repo-aware seat) ---
+
+test_codex_exec_happy_path() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_RESPONSE="Reads fine. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" || return 1
+  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# The real binary blocks forever on an open stdin. The mock reproduces that, so
+# this test fails if anyone drops the `</dev/null` from the invocation.
+test_codex_exec_closes_stdin() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_HANG_ON_STDIN=1 \
+  MOCK_CODEX_RESPONSE="Survived. VERDICT: APPROVED" \
+    timeout 20 bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+  local rc=$?
+
+  [ "$rc" -ne 124 ] || return 1
+  grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_codex_exec_is_read_only_and_uses_output_flag() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/codex-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_LOG="$log_file" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  grep -q -- "-s read-only" "$log_file" || return 1
+  grep -q -- "-o $work_dir/codex-exec-reviewer-output.md" "$log_file" || return 1
+  grep -q -- "-m gpt-5.6-sol" "$log_file" || return 1
+  grep -q -- "model_reasoning_effort=high" "$log_file" || return 1
+
+  rm -rf "$work_dir"
+}
+
+# codex echoes every command it runs; that transcript must not reach the
+# synthesizer, only the final message.
+test_codex_exec_transcript_kept_out_of_output() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_RESPONSE="Clean. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  grep -q "mock codex transcript" "$work_dir/codex-exec-reviewer-transcript.log" || return 1
+  grep -q "mock codex transcript" "$work_dir/codex-exec-reviewer-output.md" && return 1
+
+  rm -rf "$work_dir"
+}
+
+test_codex_exec_empty_output_is_a_failure() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_RESPONSE="" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# --- changeset fallback ---
+
+test_changeset_reviewed_when_no_plan() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  : > "$work_dir/plan.md"
+  printf -- '--- a/x.js\n+++ b/x.js\n+const distinctiveDiffToken = 1;\n' > "$work_dir/changeset.diff"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  local prompt="$work_dir/test-reviewer-acpx-prompt.txt"
+  grep -q "distinctiveDiffToken" "$prompt" || return 1
+  grep -q "Review this changeset" "$prompt" || return 1
+  grep -q "ready to merge" "$prompt" || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_plan_wins_over_changeset() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  printf -- '--- a/x.js\n+++ b/x.js\n+const shouldNotAppear = 1;\n' > "$work_dir/changeset.diff"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  local prompt="$work_dir/test-reviewer-acpx-prompt.txt"
+  grep -q "Test plan content" "$prompt" || return 1
+  grep -q "shouldNotAppear" "$prompt" && return 1
+  grep -q "ready to implement" "$prompt" || return 1
+
+  rm -rf "$work_dir"
+}
+
 # --- Run ---
 
 echo ""
@@ -556,8 +695,17 @@ ln -sf "$MOCK_AGY" "$SCRIPT_DIR/agy"
 chmod +x "$SCRIPT_DIR/agy"
 ln -sf "$MOCK_CLAUDE" "$SCRIPT_DIR/claude"
 chmod +x "$SCRIPT_DIR/claude"
-trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/agy" "$SCRIPT_DIR/claude"' EXIT
+ln -sf "$MOCK_CODEX" "$SCRIPT_DIR/codex"
+chmod +x "$SCRIPT_DIR/codex"
+trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/agy" "$SCRIPT_DIR/claude" "$SCRIPT_DIR/codex"' EXIT
 
+run_test "codex exec happy path" test_codex_exec_happy_path
+run_test "codex exec closes stdin" test_codex_exec_closes_stdin
+run_test "codex exec read-only + output flags" test_codex_exec_is_read_only_and_uses_output_flag
+run_test "codex exec transcript kept out of output" test_codex_exec_transcript_kept_out_of_output
+run_test "codex exec empty output is a failure" test_codex_exec_empty_output_is_a_failure
+run_test "changeset reviewed when no plan" test_changeset_reviewed_when_no_plan
+run_test "plan wins over changeset" test_plan_wins_over_changeset
 run_test "happy path" test_happy_path
 run_test "debate prompt file" test_prompt_file_used_for_debate
 run_test "initial prompt includes plan" test_initial_prompt_includes_plan
