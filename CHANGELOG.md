@@ -1,6 +1,8 @@
 # Changelog
 
-## [2.9.0] — 2026-07-30 (one-shot reviewers, and blank reviews stop passing as success)
+## [2.9.0] — 2026-07-30 (one-shot reviewers, blank-turn retries, and blank reviews stop passing as success)
+
+- **A blank turn now costs a retry instead of the reviewer's seat.** Some agents end a turn with no final message at random — `kimi-k3` through opencode does it on a large share of turns, on prompts as small as "reply PONG". The new `retries` field (default 1) re-prompts on a blank turn only. A non-zero exit is a real failure that will repeat, and a timeout has already spent its budget, so neither is retried. Set `retries: 0` to switch it off, or 2-3 for an agent you know to be unreliable.
 
 - **A review containing nothing but whitespace no longer counts as delivered.** The empty-output guard tested `[ -s ]`, but acpx terminates even a contentless run with a newline, so an agent that ends its turn without a final message left a 1-byte file that the guard read as a real review. The round logged "Review received", wrote exit 0, and handed the synthesizer a blank. The check now looks for an actual non-whitespace character, so these surface as the failures they always were. This is not hypothetical: `kimi-k3` through opencode ends a large share of its turns with no final message.
 

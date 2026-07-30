@@ -326,6 +326,7 @@ Reviewers live in `~/.claude/debate-acpx.json`. This is the only file you need t
 | `model` | No | For the `antigravity` agent — model display name from `agy models` (e.g. `Gemini 3.1 Pro (High)`). For the `opus` agent — the Claude model id. Omit to use the agent's default. |
 | `model_id` | No | For OpenRouter agents — the underlying model ID (e.g. `inception/mercury-2`). Shown in the summary. |
 | `mode` | No | `session` (default) prompts a persistent acpx session, so the reviewer keeps its context across debate rounds. `exec` sends every prompt as a one-shot instead. See below. |
+| `retries` | No | Extra attempts when the agent ends its turn with no review. Default: 1. Set 0 to disable, or 2-3 for a notably flaky agent. A non-zero exit or a timeout is never retried. |
 
 #### When to set `mode: "exec"`
 
@@ -336,8 +337,14 @@ review** rather than an error. Reproduced with opencode-backed agents such as
 
 If a reviewer's output file is empty on round 2 while round 1 was fine, try
 `"mode": "exec"`. The reviewer loses continuity between rounds (each prompt
-arrives cold, and the debate prompt carries its own context anyway), but it
-answers every time.
+arrives cold, and the debate prompt carries its own context anyway).
+
+A separate failure looks similar and `mode` will not fix it: some agents end a
+turn with no final message at random, session or not. `kimi-k3` through opencode
+does this on a large share of turns, including on a prompt as small as "reply
+PONG". That is what `retries` is for. The reviewer is only dropped once its
+retries are spent, and the round then reports a real failure rather than an
+approval.
 
 ### Claude-side reviewers (top-level keys)
 

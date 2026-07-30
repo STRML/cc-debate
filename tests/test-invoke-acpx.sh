@@ -57,6 +57,18 @@ setup_config() {
       "mode": "exec",
       "system_prompt": "You are The Cartographer."
     },
+    "retry-reviewer": {
+      "agent": "codex",
+      "timeout": 60,
+      "retries": 2,
+      "system_prompt": "You retry."
+    },
+    "no-retry-reviewer": {
+      "agent": "codex",
+      "timeout": 60,
+      "retries": 0,
+      "system_prompt": "You never retry."
+    },
     "bad-mode-reviewer": {
       "agent": "codex",
       "timeout": 60,
@@ -831,6 +843,139 @@ test_short_real_response_still_passes() {
   rm -rf "$work_dir"
 }
 
+# --- blank-output retry ---
+#
+# kimi-k3 through opencode ends a large share of its turns with no final message,
+# on prompts as small as "reply PONG". One blank turn should cost a retry, not the
+# reviewer's seat on the panel.
+
+test_blank_output_is_retried_then_succeeds() {
+  local work_dir config log_file counter
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+  counter="$work_dir/attempts.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_COUNTER_FILE="$counter" \
+  MOCK_ACPX_BLANK_ATTEMPTS=1 \
+  MOCK_ACPX_RESPONSE="Second time lucky. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "retry-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/retry-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "VERDICT: APPROVED" "$work_dir/retry-reviewer-output.md" || return 1
+  # Exactly two prompt calls: the blank one and the retry.
+  [ "$(grep -c -- "--file" "$log_file")" = "2" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_retries_are_bounded() {
+  local work_dir config log_file counter
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+  counter="$work_dir/attempts.txt"
+
+  # Blank forever. retries=2 means 3 prompt calls total, then give up.
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_COUNTER_FILE="$counter" \
+  MOCK_ACPX_BLANK_ATTEMPTS=99 \
+    bash "$INVOKE" "$config" "$work_dir" "retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/retry-reviewer-exit.txt")" = "1" ] || return 1
+  grep -q "Empty response" "$work_dir/retry-reviewer-output.md" || return 1
+  [ "$(grep -c -- "--file" "$log_file")" = "3" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_no_retry_when_first_attempt_answers() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_RESPONSE="Answered first time. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "retry-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/retry-reviewer-exit.txt")" = "0" ] || return 1
+  [ "$(grep -c -- "--file" "$log_file")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_retries_zero_disables_retry() {
+  local work_dir config log_file counter
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+  counter="$work_dir/attempts.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_COUNTER_FILE="$counter" \
+  MOCK_ACPX_BLANK_ATTEMPTS=99 \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
+  [ "$(grep -c -- "--file" "$log_file")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# A crashed agent is not a quiet one. Retrying a real error burns the timeout
+# budget on something that will fail the same way.
+test_hard_failure_is_not_retried() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_EXIT=1 \
+  MOCK_ACPX_RESPONSE="" \
+  MOCK_ACPX_STDERR="agent exploded" \
+    bash "$INVOKE" "$config" "$work_dir" "retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/retry-reviewer-exit.txt")" = "1" ] || return 1
+  [ "$(grep -c -- "--file" "$log_file")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# Default when a reviewer sets no `retries` at all: one retry, so a single blank
+# turn does not cost the seat.
+test_default_allows_one_retry() {
+  local work_dir config log_file counter
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+  counter="$work_dir/attempts.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_COUNTER_FILE="$counter" \
+  MOCK_ACPX_BLANK_ATTEMPTS=99 \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "1" ] || return 1
+  [ "$(grep -c -- "--file" "$log_file")" = "2" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
 # --- one-shot (mode: exec) ---
 #
 # Some ACP agents go mute on the second prompt into a persistent session: the turn
@@ -1007,6 +1152,12 @@ run_test "codex exec skips the acpx session check" test_codex_exec_skips_session
 run_test "codex exec clears stale output" test_codex_exec_clears_stale_output
 run_test "codex exec prompt travels on stdin" test_codex_exec_prompt_travels_on_stdin
 run_test "codex exec handles an oversized prompt" test_codex_exec_handles_oversized_prompt
+run_test "blank output is retried then succeeds" test_blank_output_is_retried_then_succeeds
+run_test "retries are bounded" test_retries_are_bounded
+run_test "no retry when first attempt answers" test_no_retry_when_first_attempt_answers
+run_test "retries 0 disables retry" test_retries_zero_disables_retry
+run_test "hard failure is not retried" test_hard_failure_is_not_retried
+run_test "default allows one retry" test_default_allows_one_retry
 run_test "whitespace-only response counts as empty" test_whitespace_only_response_is_empty
 run_test "newline-only response counts as empty" test_newline_only_response_is_empty
 run_test "short real response still passes" test_short_real_response_still_passes
