@@ -1,7 +1,10 @@
 #!/bin/bash
-# record-round.sh — record a reviewer round's plan SHA and verdict.
+# record-round.sh — record a reviewer round's review-target SHA and verdict.
 #
-# Append-only log of what plan state each round actually saw, plus a pointer
+# The target is plan.md in plan mode and changeset.diff in changeset mode; the
+# runner names it in <work_dir>/review-target.txt.
+#
+# Append-only log of what state each round actually saw, plus a pointer
 # to the last APPROVED state. Used by safe-cleanup.sh to detect when the
 # orchestrator has applied edits after the last reviewer pass and is about
 # to claim victory without verification.
@@ -39,16 +42,33 @@ case "$VERDICT" in
     ;;
 esac
 
-PLAN="$WORK_DIR/plan.md"
-if [ ! -f "$PLAN" ]; then
-  echo "[debate] record-round: $PLAN not found" >&2
+# What the round actually reviewed. run-parallel-acpx.sh writes review-target.txt
+# (plan.md in plan mode, changeset.diff in changeset mode). Hardcoding plan.md
+# here made every changeset round record the SHA of an empty placeholder (#17).
+# A marker that names anything but a plain file in the work dir is refused
+# rather than rewritten: this feeds a safety gate, so malformed input fails
+# closed. safe-cleanup.sh applies the same rule.
+TARGET_NAME="plan.md"
+if [ -s "$WORK_DIR/review-target.txt" ]; then
+  TARGET_NAME=$(tr -d '[:space:]' < "$WORK_DIR/review-target.txt")
+  case "$TARGET_NAME" in
+    ""|.|..|*/*)
+      echo "[debate] record-round: unusable review-target.txt: '$TARGET_NAME'" >&2
+      exit 1
+      ;;
+  esac
+fi
+TARGET="$WORK_DIR/$TARGET_NAME"
+
+if [ ! -f "$TARGET" ]; then
+  echo "[debate] record-round: $TARGET not found" >&2
   exit 1
 fi
 
 if command -v sha256sum >/dev/null 2>&1; then
-  sha=$(sha256sum "$PLAN" | cut -d' ' -f1)
+  sha=$(sha256sum "$TARGET" | cut -d' ' -f1)
 else
-  sha=$(shasum -a 256 "$PLAN" | cut -d' ' -f1)
+  sha=$(shasum -a 256 "$TARGET" | cut -d' ' -f1)
 fi
 
 ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")

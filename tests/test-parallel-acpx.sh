@@ -274,6 +274,35 @@ test_round_sha_covers_the_changeset() {
   rm -rf "$repo" "$tmp_dir"
 }
 
+# record-round.sh and safe-cleanup.sh gate on whatever this marker names. Without
+# it they both assume plan.md and gate on an empty placeholder (#17).
+test_review_target_marker_written() {
+  local tmp_dir review_id repo work_dir plan_work
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-marker"
+  repo=$(setup_git_repo)
+  work_dir="$repo/.tmp/ai-review-${review_id}"
+
+  echo "const markerToken = 8;" >> "$repo/f.txt"
+
+  ( cd "$repo" && PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+      bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null )
+
+  [ "$(cat "$work_dir/review-target.txt")" = "changeset.diff" ] || { rm -rf "$repo" "$tmp_dir"; return 1; }
+  # safe-cleanup regenerates the diff against this base to detect drift.
+  [ -s "$work_dir/changeset-base.txt" ] || { rm -rf "$repo" "$tmp_dir"; return 1; }
+
+  # Plan mode names plan.md.
+  plan_work="$repo/.tmp/ai-review-${review_id}-plan"
+  mkdir -p "$plan_work"
+  echo "A real staged plan" > "$plan_work/plan.md"
+  ( cd "$repo" && PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+      bash "$PARALLEL" "$tmp_dir/config.json" "${review_id}-plan" 2>/dev/null )
+  [ "$(cat "$plan_work/review-target.txt")" = "plan.md" ] || { rm -rf "$repo" "$tmp_dir"; return 1; }
+
+  rm -rf "$repo" "$tmp_dir"
+}
+
 test_plan_beats_changeset() {
   local tmp_dir review_id repo work_dir
   tmp_dir=$(setup_env)
@@ -481,6 +510,7 @@ run_test "DEBATE_DIFF_BASE respected" test_diff_base_override_respected
 run_test "untracked files included in changeset" test_untracked_files_included_in_changeset
 run_test "work dir excluded from changeset" test_work_dir_excluded_from_changeset
 run_test "round SHA covers the changeset" test_round_sha_covers_the_changeset
+run_test "review-target marker written" test_review_target_marker_written
 run_test "plan beats changeset" test_plan_beats_changeset
 run_test "missing config fails" test_missing_config_fails
 run_test "prompt files cleaned up" test_prompt_files_cleaned_up
