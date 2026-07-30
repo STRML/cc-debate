@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.8.1] — 2026-07-30 (codex prompt via stdin)
+
+- **The `codex-exec` prompt no longer goes in the argument list.** It was passed positionally, and in changeset mode the prompt carries a whole diff — anything past `ARG_MAX` (1 MiB on macOS) fails with `Argument list too long`, so exactly the large reviews that most need a repo-aware reader were the ones that could not run. The prompt is now fed on stdin via `codex exec ... -` with the prompt file redirected in. That redirect also preserves the hang fix: codex blocks forever on a stdin that never reaches EOF, and a regular file gives EOF where an inherited pipe does not. Caught by CodeRabbit on #15. Two regression tests cover it, including one that builds a prompt past `getconf ARG_MAX`.
+
 ## [2.8.0] — 2026-07-30 (a reviewer that reads the code, and changeset review)
 
 - **New `codex-exec` agent — the first reviewer with repo access.** Every existing backend is prompt-only. acpx makes no tool calls at all: asked for the declaration line of a method in a file inside its own `--cwd`, it returns null under both `--approve-reads` and `--approve-all`, and a `--verbose` run shows no tool or permission traffic. `agy` is deliberately run from a throwaway workspace because it has no read-only mode. That is fine for judging a plan, but it meant no reviewer could ever check a claim against the actual code. `codex-exec` bypasses acpx and calls `codex exec` directly, which reads files and runs commands, sandboxed with `-s read-only`. New optional `effort` config field, passed as `-c model_reasoning_effort=`. Give it a longer `timeout` than the prompt-only seats.

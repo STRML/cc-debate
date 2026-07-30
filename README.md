@@ -137,7 +137,13 @@ The `codex-exec` agent can. It bypasses acpx and calls `codex exec` directly, wh
 
 `model` is passed to `codex exec -m`, and `effort` becomes `-c model_reasoning_effort=` (`low`, `medium`, `high`). Reads are sandboxed with `-s read-only`, so the reviewer can open anything in the repo and change nothing. Give it a longer `timeout` than the prompt-only seats — it is doing real work, and a review that opens several files takes minutes, not seconds.
 
-Two implementation details, both handled for you. `codex exec` blocks forever on an open stdin, printing `Reading additional input from stdin...` and waiting, so the script closes stdin; if you call `codex exec` yourself anywhere, add `</dev/null`. And `codex` echoes every command it runs to stdout, which can be an entire test suite, so the script uses `-o` to capture only the final message. The transcript lands in `<reviewer>-transcript.log` instead of the synthesizer's input.
+Three implementation details, all handled for you.
+
+The prompt goes to codex on stdin (`codex exec ... -` with the prompt file redirected in), never in the argument list. In changeset mode the prompt carries a whole diff, and a large one exceeds `ARG_MAX` — 1 MiB on macOS — and fails with `Argument list too long`.
+
+That redirect doubles as the hang fix. `codex exec` blocks forever on a stdin that never reaches EOF, printing `Reading additional input from stdin...` and waiting, which under a harness looks exactly like a silent no-op. A regular file gives EOF; an inherited pipe does not. If you call `codex exec` yourself with the prompt in argv, add `</dev/null`.
+
+And `codex` echoes every command it runs to stdout, which can be an entire test suite, so the script uses `-o` to capture only the final message. The transcript lands in `<reviewer>-transcript.log` instead of the synthesizer's input.
 
 > **Claude note:** Using `claude` as a reviewer means Claude reviewing its own plan — useful for a fresh-context skeptical read, but not truly independent. For independent perspectives, use non-Claude agents. `invoke-acpx.sh` automatically handles the nested-session guard (`CLAUDECODE`) required to run Claude as a subprocess.
 
