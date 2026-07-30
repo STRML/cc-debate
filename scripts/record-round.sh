@@ -45,10 +45,18 @@ esac
 # What the round actually reviewed. run-parallel-acpx.sh writes review-target.txt
 # (plan.md in plan mode, changeset.diff in changeset mode). Hardcoding plan.md
 # here made every changeset round record the SHA of an empty placeholder (#17).
-# basename keeps a hand-edited marker from pointing outside the work dir.
+# A marker that names anything but a plain file in the work dir is refused
+# rather than rewritten: this feeds a safety gate, so malformed input fails
+# closed. safe-cleanup.sh applies the same rule.
 TARGET_NAME="plan.md"
 if [ -s "$WORK_DIR/review-target.txt" ]; then
-  TARGET_NAME=$(basename "$(tr -d '[:space:]' < "$WORK_DIR/review-target.txt")")
+  TARGET_NAME=$(tr -d '[:space:]' < "$WORK_DIR/review-target.txt")
+  case "$TARGET_NAME" in
+    ""|.|..|*/*)
+      echo "[debate] record-round: unusable review-target.txt: '$TARGET_NAME'" >&2
+      exit 1
+      ;;
+  esac
 fi
 TARGET="$WORK_DIR/$TARGET_NAME"
 

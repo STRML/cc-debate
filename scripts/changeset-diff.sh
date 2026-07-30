@@ -54,9 +54,12 @@ if [ -z "$BASE" ] && [ "$HAS_HEAD" -eq 1 ]; then
   done
   # No default branch, or no shared history with it (shallow clone, grafted
   # history). HEAD still catches uncommitted work; say so rather than implying
-  # the whole branch was reviewed.
+  # the whole branch was reviewed. Freeze it to a SHA: the caller persists this
+  # base and safe-cleanup.sh regenerates against it later, and a moving ref
+  # would quietly drop any commit landed since, which is the drift the gate is
+  # there to catch.
   if [ -z "$BASE" ]; then
-    BASE="HEAD"
+    BASE="$(git -C "$REPO" rev-parse HEAD)"
     echo "[debate] No usable default-branch merge base — comparing against HEAD, so committed work on this branch is NOT included. Set DEBATE_DIFF_BASE=<ref> to widen it." >&2
   fi
 fi

@@ -107,11 +107,24 @@ fi
 # What the review actually gated on. run-parallel-acpx.sh writes
 # review-target.txt; work dirs without one are plan mode. Hardcoding plan.md
 # here made the APPROVED gate compare the empty placeholder against itself in
-# changeset mode, so it passed no matter what changed (#17). basename keeps a
-# hand-edited marker from pointing outside the work dir.
+# changeset mode, so it passed no matter what changed (#17). A marker naming
+# anything but a plain file in the work dir is refused rather than rewritten —
+# a rewritten one could resolve to the work dir itself, which reads as "no
+# target" and would delete everything with no gate applied at all.
+# record-round.sh applies the same rule.
 TARGET_NAME="plan.md"
 if [ -s "$WORK_DIR/review-target.txt" ]; then
-  TARGET_NAME=$(basename "$(tr -d '[:space:]' < "$WORK_DIR/review-target.txt")")
+  TARGET_NAME=$(tr -d '[:space:]' < "$WORK_DIR/review-target.txt")
+  case "$TARGET_NAME" in
+    ""|.|..|*/*)
+      echo "[debate] Refusing to clean up: unusable review-target.txt: '$TARGET_NAME'" >&2
+      echo "  work_dir:  $WORK_DIR" >&2
+      echo "" >&2
+      echo "  It must name a plain file in the work dir (plan.md or changeset.diff)." >&2
+      echo "  To delete the work dir anyway, override with --force." >&2
+      exit 1
+      ;;
+  esac
 fi
 PLAN="$WORK_DIR/$TARGET_NAME"
 CHANGESET_MODE=""

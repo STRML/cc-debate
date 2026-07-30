@@ -375,6 +375,47 @@ test_safe_cleanup_refuses_when_changeset_moved() {
   rm -rf "$repo"
 }
 
+# A marker that resolves to the work dir itself used to read as "no target
+# present", which deletes everything with no gate applied at all. A safety gate
+# fails closed on malformed input.
+test_safe_cleanup_refuses_unusable_marker() {
+  local d
+  d=$(mktemp -d)
+  echo "plan" > "$d/plan.md"
+  echo "." > "$d/review-target.txt"
+
+  set +e
+  bash "$SAFE_CLEANUP" "$d" 2>/dev/null
+  local rc=$?
+  set -e
+
+  [ "$rc" -eq 1 ] || { rm -rf "$d"; return 1; }
+  [ -d "$d" ] || return 1
+
+  # --force still overrides.
+  bash "$SAFE_CLEANUP" "$d" --force
+  [ ! -d "$d" ]
+}
+
+# The stored base outlives the round: safe-cleanup regenerates against it later.
+# A moving ref would drop any commit landed since and defeat the gate.
+test_changeset_base_is_a_frozen_sha() {
+  local repo work base head
+  repo=$(setup_git_repo)
+  # Delete every ref the default-branch scan can find, so the HEAD fallback runs.
+  git -C "$repo" checkout -q --detach
+  git -C "$repo" branch -q -D main
+  echo "const fallbackToken = 1;" >> "$repo/f.txt"
+
+  work=$(setup_changeset_work_dir "$repo")
+  base=$(tr -d '[:space:]' < "$work/changeset-base.txt")
+  head=$(git -C "$repo" rev-parse HEAD)
+
+  [ "$base" = "$head" ] || { rm -rf "$repo"; return 1; }
+
+  rm -rf "$repo"
+}
+
 test_safe_cleanup_usage_error() {
   set +e
   bash "$SAFE_CLEANUP" 2>/dev/null
@@ -421,6 +462,8 @@ run_test "safe-cleanup refuses when saved mismatches"  test_safe_cleanup_refuses
 run_test "safe-cleanup refuses saved inside work_dir"  test_safe_cleanup_refuses_saved_inside_workdir
 run_test "safe-cleanup skips SAVED gate on changeset"  test_safe_cleanup_changeset_needs_no_saved_copy
 run_test "safe-cleanup refuses when changeset moved"   test_safe_cleanup_refuses_when_changeset_moved
+run_test "safe-cleanup refuses an unusable marker"     test_safe_cleanup_refuses_unusable_marker
+run_test "changeset base is a frozen SHA"              test_changeset_base_is_a_frozen_sha
 run_test "safe-cleanup usage error on no args"         test_safe_cleanup_usage_error
 run_test "safe-cleanup --saved requires a path"        test_safe_cleanup_saved_requires_path
 

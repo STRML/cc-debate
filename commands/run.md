@@ -723,10 +723,16 @@ Use `safe-cleanup.sh` instead of raw `rm -rf`. It enforces two gates before dele
 1. **APPROVED gate** — refuses if the review target moved after the last APPROVED reviewer pass, so the artifacts needed to verify a post-fix state aren't wiped first. The target is named in `<WORK_DIR>/review-target.txt`: `plan.md` in plan mode, `changeset.diff` in changeset mode. In changeset mode the diff is regenerated against the recorded base, so the gate tracks the working tree rather than a stale snapshot.
 2. **SAVED gate** — refuses unless `--saved` points to a durable copy of `plan.md` with an identical SHA, so a successful review never ends with the only copy of the plan thrown away. **Plan mode only** — a diff is reproducible from git, so changeset mode cleans up without `--saved`.
 
-Pass the `<SAVED_PLAN>` path from Step 8 (omit it in changeset mode):
+Plan mode — pass the `<SAVED_PLAN>` path from Step 8:
 
 ```bash
 bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>" --saved "<SAVED_PLAN>"
+```
+
+Changeset mode — there is no plan to save, so pass no `--saved`:
+
+```bash
+bash "<SCRIPT_DIR>/safe-cleanup.sh" "<WORK_DIR>"
 ```
 
 If safe-cleanup refuses:
