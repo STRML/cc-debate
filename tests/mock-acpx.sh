@@ -8,6 +8,10 @@
 #   MOCK_ACPX_STDERR   — text to write to stderr (default: "")
 #   MOCK_ACPX_LOG      — file to append invocation args to (default: "")
 #
+# Flaky-agent simulation, for the blank-output retry:
+#   MOCK_ACPX_BLANK_ATTEMPTS — first N invocations answer with nothing (default: 0)
+#   MOCK_ACPX_COUNTER_FILE   — where the invocation count lives; required by the above
+#
 # This script mimics `acpx --format quiet --approve-reads <agent> --file <prompt>`.
 # It reads the --file argument to verify it exists, then outputs the response.
 #
@@ -69,6 +73,21 @@ fi
 # Simulate delay
 if [ "$DELAY" -gt 0 ] 2>/dev/null; then
   sleep "$DELAY"
+fi
+
+# Simulate an agent that ends its first N turns without a final message. Real
+# acpx still emits its trailing newline in that case, so the caller sees a
+# 1-byte file rather than a 0-byte one — reproduce that, not a bare truncation.
+BLANK_ATTEMPTS="${MOCK_ACPX_BLANK_ATTEMPTS:-0}"
+COUNTER_FILE="${MOCK_ACPX_COUNTER_FILE:-}"
+if [ "$BLANK_ATTEMPTS" -gt 0 ] 2>/dev/null && [ -n "$COUNTER_FILE" ]; then
+  ATTEMPT=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
+  ATTEMPT=$((ATTEMPT + 1))
+  echo "$ATTEMPT" > "$COUNTER_FILE"
+  if [ "$ATTEMPT" -le "$BLANK_ATTEMPTS" ]; then
+    echo ""
+    exit "$EXIT_CODE"
+  fi
 fi
 
 # Output

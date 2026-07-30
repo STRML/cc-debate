@@ -263,6 +263,11 @@ with opencode-backed agents such as `kimi-k3`. The Step 3 probe below only ever 
 one prompt, so it cannot detect this; the symptom is a reviewer that goes blank on
 round 2 of a real debate.
 
+`retries` is also optional and defaults to 1. It covers a different failure: an
+agent that ends a turn with no final message at all, session or not. Raise it to
+2-3 for an agent you know to be flaky (`kimi-k3` through opencode qualifies), or
+set 0 to turn retrying off. Errors and timeouts are never retried.
+
 For system prompts, suggest unique review personas for each reviewer. Examples:
 - **The Executor** — shell correctness, exit codes, race conditions, file I/O
 - **The Architect** — structural integrity, over-engineering, missing phases, graceful degradation

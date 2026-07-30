@@ -108,6 +108,21 @@ CONFIG_SYSTEM_PROMPT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].system_prom
 CONFIG_MODEL=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].model // empty' "$CONFIG_FILE")
 CONFIG_EFFORT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].effort // empty' "$CONFIG_FILE")
 CONFIG_MODE=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].mode // empty' "$CONFIG_FILE")
+CONFIG_RETRIES=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].retries // empty' "$CONFIG_FILE")
+
+# --- Blank-output retries ---
+# An agent that ends its turn without a final message costs the panel a seat, and
+# it is not a rare edge case: kimi-k3 through opencode does it on a large share of
+# turns, on prompts as small as "reply PONG". One extra attempt usually lands, so
+# retry a blank turn rather than dropping the reviewer. Only a *blank* turn is
+# retried — a non-zero exit is a real failure that will repeat, and a timeout has
+# already spent its budget.
+
+RETRIES="${CONFIG_RETRIES:-1}"
+if ! [[ "$RETRIES" =~ ^[0-9]+$ ]]; then
+  echo "[$REVIEWER] invalid retries '$RETRIES', using 1." >&2
+  RETRIES=1
+fi
 
 # --- Session vs one-shot ---
 # Default: prompt a persistent acpx session, so a reviewer keeps its context
@@ -537,9 +552,21 @@ fi
 # modify the plan doc or any file in the repo while reviewing.
 ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-permissions deny "${AGENT_ARGS[@]}" --file "$PROMPT_FILE")
 
-set +e
-"${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
-EXIT_CODE=$?
-set -e
+ATTEMPT=0
+while : ; do
+  set +e
+  "${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+  EXIT_CODE=$?
+  set -e
+
+  # Anything other than a clean-but-silent turn is this attempt's final answer.
+  if [ "$EXIT_CODE" -ne 0 ] || ! output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
+    break
+  fi
+  [ "$ATTEMPT" -lt "$RETRIES" ] || break
+
+  ATTEMPT=$((ATTEMPT + 1))
+  echo "[$REVIEWER] $AGENT ended its turn with no review; retrying ($ATTEMPT of $RETRIES)..." >&2
+done
 
 handle_invocation_result "acpx"
