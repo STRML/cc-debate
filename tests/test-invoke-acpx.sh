@@ -571,20 +571,52 @@ test_codex_exec_happy_path() {
 
 # The real binary blocks forever on an open stdin. The mock reproduces that, so
 # this test fails if anyone drops the `</dev/null` from the invocation.
+#
+# stdin is held genuinely open by a long `sleep` upstream in a pipe — inheriting
+# an already-closed stdin from the harness would make the mock return anyway and
+# the test would pass without proving anything.
+#
+# The deadline is hand-rolled rather than `timeout`: macOS runners ship no GNU
+# coreutils, so bare `timeout` is not found there and the command under test
+# never runs at all. (invoke-acpx.sh itself probes for timeout/gtimeout; this
+# test must not assume more than the script does.)
 test_codex_exec_closes_stdin() {
-  local work_dir config
+  local work_dir config pid waited
   work_dir=$(setup_work_dir)
   config=$(setup_config "$work_dir")
 
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_CODEX_HANG_ON_STDIN=1 \
-  MOCK_CODEX_RESPONSE="Survived. VERDICT: APPROVED" \
-    timeout 20 bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
-  local rc=$?
+  # A fifo opened read-write never reports EOF, so stdin stays genuinely open
+  # without a second process whose lifetime would confuse the deadline.
+  local fifo="$work_dir/open-stdin.fifo"
+  mkfifo "$fifo"
+  exec 9<>"$fifo"
 
-  [ "$rc" -ne 124 ] || return 1
-  grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" || return 1
+  (
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_CODEX_HANG_ON_STDIN=1 \
+    MOCK_CODEX_RESPONSE="Survived. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" <&9
+  ) >/dev/null 2>&1 &
+  pid=$!
+
+  waited=0
+  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 25 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    exec 9>&-
+    rm -rf "$work_dir"
+    return 1
+  fi
+  wait "$pid" 2>/dev/null || true
+  exec 9>&-
+
+  grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
 
   rm -rf "$work_dir"
 }
