@@ -53,6 +53,7 @@ No exit file — a teammate has delivered iff its output file exists and is non-
     "<name>": {
       "agent": "<acpx-agent-name>",
       "timeout": 120,
+      "mode": "session | exec",
       "system_prompt": "optional persona prompt"
     }
   }
@@ -60,6 +61,11 @@ No exit file — a teammate has delivered iff its output file exists and is non-
 ```
 
 Available acpx agents: codex, claude, cursor, copilot, kimi, kiro, qwen, opencode, kilocode. The `antigravity` (agy) and `opus` reviewers are invoked directly, not via acpx.
+
+`mode` defaults to `session` (persistent acpx session, context kept across rounds).
+`mode: "exec"` sends one-shots and skips `sessions ensure` — needed for agents that
+return an empty turn on the second prompt into a session (seen with opencode-backed
+agents such as `kimi-k3`).
 
 ## Plugin Metadata (`.claude-plugin/`)
 
