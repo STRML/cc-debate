@@ -41,25 +41,84 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$WORK_DIR" || { echo "Failed to create $WORK_DIR" >&2; exit 1; }
 
-if [ ! -f "$WORK_DIR/plan.md" ]; then
-  echo "[debate] FATAL: plan.md not found in $WORK_DIR — nothing to review" >&2
-  echo "  pwd:        $(pwd)" >&2
-  if command -v realpath >/dev/null 2>&1; then
-    echo "  resolved:   $(realpath "$WORK_DIR" 2>/dev/null || echo "(unresolvable)")" >&2
+# No plan staged? Debate the current changeset instead. A review of what
+# actually changed is almost always what someone wants when they run this
+# without preparing a plan, and it needs no extra syntax. DEBATE_DIFF_BASE
+# overrides the comparison point (default: the merge base with the default
+# branch, falling back to HEAD so uncommitted work still reviews).
+REVIEW_TARGET="$WORK_DIR/plan.md"
+if [ ! -s "$WORK_DIR/plan.md" ]; then
+  DIFF_BASE="${DEBATE_DIFF_BASE:-}"
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    HAS_HEAD=0
+    git rev-parse --verify --quiet HEAD >/dev/null 2>&1 && HAS_HEAD=1
+
+    if [ -z "$DIFF_BASE" ] && [ "$HAS_HEAD" -eq 1 ]; then
+      for cand in origin/HEAD origin/main origin/master main master; do
+        if git rev-parse --verify --quiet "$cand" >/dev/null 2>&1; then
+          DIFF_BASE="$(git merge-base HEAD "$cand" 2>/dev/null || true)"
+          [ -n "$DIFF_BASE" ] && break
+        fi
+      done
+      # No default branch, or no shared history with it (shallow clone, grafted
+      # history). HEAD still catches uncommitted work; say so rather than
+      # implying the whole branch was reviewed.
+      if [ -z "$DIFF_BASE" ]; then
+        DIFF_BASE="HEAD"
+        echo "[debate] No usable default-branch merge base — comparing against HEAD, so committed work on this branch is NOT included. Set DEBATE_DIFF_BASE=<ref> to widen it." >&2
+      fi
+    fi
+
+    if [ -n "$DIFF_BASE" ]; then
+      git --no-pager diff "$DIFF_BASE" > "$WORK_DIR/changeset.diff" 2>/dev/null || true
+    elif [ "$HAS_HEAD" -eq 0 ]; then
+      # Repo with no commits: everything is untracked, handled below.
+      : > "$WORK_DIR/changeset.diff"
+    fi
+
+    # `git diff` only covers tracked paths. A new file is exactly the kind of
+    # thing a reviewer must see, so append each untracked file as its own diff.
+    # --no-index keeps this read-only; `git add -N` would mutate the user's index.
+    while IFS= read -r untracked; do
+      [ -n "$untracked" ] || continue
+      # Skip our own scaffolding. The work dir sits inside the repo, so its
+      # plan.md and per-reviewer files are "untracked changes" — without this
+      # the review reads its own artifacts and a clean tree looks dirty.
+      case "$untracked" in
+        "$WORK_DIR"/*|.tmp/*) continue ;;
+      esac
+      git --no-pager diff --no-index -- /dev/null "$untracked" 2>/dev/null \
+        >> "$WORK_DIR/changeset.diff" || true
+    done < <(git ls-files --others --exclude-standard 2>/dev/null || true)
   fi
-  echo "  hint:       run from the project root (the dir where debate-setup.sh wrote plan.md)" >&2
-  echo "  hint:       or set WORK_DIR_OVERRIDE=<absolute path> if you know the right work dir" >&2
-  exit 1
+
+  if [ ! -s "$WORK_DIR/changeset.diff" ]; then
+    echo "[debate] FATAL: no plan.md in $WORK_DIR and no changes to review" >&2
+    echo "  pwd:        $(pwd)" >&2
+    if command -v realpath >/dev/null 2>&1; then
+      echo "  resolved:   $(realpath "$WORK_DIR" 2>/dev/null || echo "(unresolvable)")" >&2
+    fi
+    echo "  hint:       write a plan to $WORK_DIR/plan.md, or make some changes to review" >&2
+    echo "  hint:       set DEBATE_DIFF_BASE=<ref> to pick a different comparison point" >&2
+    echo "  hint:       or set WORK_DIR_OVERRIDE=<absolute path> if you know the right work dir" >&2
+    exit 1
+  fi
+
+  echo "[debate] No plan staged — reviewing the changeset against ${DIFF_BASE:-working tree} ($(wc -l < "$WORK_DIR/changeset.diff" | tr -d ' ') diff lines)." >&2
+  REVIEW_TARGET="$WORK_DIR/changeset.diff"
+  : > "$WORK_DIR/plan.md"
 fi
 
-# Record the SHA of the plan reviewers are about to see. The orchestrator
-# (the /debate:all skill) then calls record-round.sh after determining the
-# round verdict; the SHA there must match this one or someone edited plan.md
-# mid-round.
+# Record the SHA of what reviewers are about to see. The orchestrator (the
+# /debate:all skill) then calls record-round.sh after determining the round
+# verdict; the SHA there must match this one or someone edited the target
+# mid-round. In changeset mode this must hash the DIFF — plan.md is an empty
+# placeholder, and hashing it would make the gate pass no matter how much the
+# working tree moved underneath the review.
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum "$WORK_DIR/plan.md" | cut -d' ' -f1 > "$WORK_DIR/round-active-plan-sha.txt"
+  sha256sum "$REVIEW_TARGET" | cut -d' ' -f1 > "$WORK_DIR/round-active-plan-sha.txt"
 elif command -v shasum >/dev/null 2>&1; then
-  shasum -a 256 "$WORK_DIR/plan.md" | cut -d' ' -f1 > "$WORK_DIR/round-active-plan-sha.txt"
+  shasum -a 256 "$REVIEW_TARGET" | cut -d' ' -f1 > "$WORK_DIR/round-active-plan-sha.txt"
 fi
 
 if [ ! -f "$CONFIG_FILE" ]; then

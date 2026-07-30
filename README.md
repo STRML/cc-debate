@@ -23,6 +23,12 @@ npm install -g acpx@latest
 
 Restart Claude Code after installing the plugin.
 
+### Reviewing a plan vs reviewing your changes
+
+`/debate:run` reviews a plan when one is staged. When no plan is staged, it reviews your current changeset instead — the diff against the merge base with your default branch — so the same command doubles as a code review with no extra syntax.
+
+Set `DEBATE_DIFF_BASE=<ref>` to compare against something else. Pair it with a `codex-exec` reviewer (below) if you want at least one seat that reads the surrounding code rather than judging the diff in isolation.
+
 ---
 
 ## How it works
@@ -112,6 +118,26 @@ These have native Agent Client Protocol support. Install the CLI, and acpx handl
 > Pick the review model with the optional `model` config field — any display name from `agy models` (e.g. `"Gemini 3.1 Pro (High)"`). Two `agy` quirks the script handles for you: the prompt is passed as a positional argument (stdin is ignored in print mode), and `agy -p` is run under a PTY (via Python) because it drops its output when stdout is not a TTY. `agy` has no hard read-only flag, so the reviewer is run from a throwaway workspace with the plan supplied in-prompt — it never needs repo access.
 >
 > **Migrated from the Gemini CLI (June 2026):** Google is [transitioning the Gemini CLI to the Antigravity CLI](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/). This plugin's Google reviewer now uses `agy` directly — the old `gemini` agent has been replaced by `antigravity`.
+
+### The repo-aware seat: `codex-exec`
+
+Every agent above is prompt-only. They see the text you send them and nothing else — acpx makes no tool calls, and `agy` is deliberately run from a throwaway workspace because it has no read-only mode. That is the right design for reviewing a plan, but it means no reviewer can check a claim against the actual code.
+
+The `codex-exec` agent can. It bypasses acpx and calls `codex exec` directly, which reads files and runs commands in your repo. Use it when you want a reviewer that verifies rather than infers.
+
+```json
+"auditor": {
+  "agent": "codex-exec",
+  "timeout": 900,
+  "model": "gpt-5.6-sol",
+  "effort": "high",
+  "system_prompt": "You are The Auditor — verify every claim against the code. Ground each finding in a file:line you have actually read."
+}
+```
+
+`model` is passed to `codex exec -m`, and `effort` becomes `-c model_reasoning_effort=` (`low`, `medium`, `high`). Reads are sandboxed with `-s read-only`, so the reviewer can open anything in the repo and change nothing. Give it a longer `timeout` than the prompt-only seats — it is doing real work, and a review that opens several files takes minutes, not seconds.
+
+Two implementation details, both handled for you. `codex exec` blocks forever on an open stdin, printing `Reading additional input from stdin...` and waiting, so the script closes stdin; if you call `codex exec` yourself anywhere, add `</dev/null`. And `codex` echoes every command it runs to stdout, which can be an entire test suite, so the script uses `-o` to capture only the final message. The transcript lands in `<reviewer>-transcript.log` instead of the synthesizer's input.
 
 > **Claude note:** Using `claude` as a reviewer means Claude reviewing its own plan — useful for a fresh-context skeptical read, but not truly independent. For independent perspectives, use non-Claude agents. `invoke-acpx.sh` automatically handles the nested-session guard (`CLAUDECODE`) required to run Claude as a subprocess.
 

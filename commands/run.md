@@ -134,9 +134,13 @@ Reviewers:
 
 `invoke-acpx.sh` creates a new acpx session before every review run — no manual session creation is needed. If a reviewer fails with exit code 4 (session creation failed), it means the agent CLI is not installed or not authenticated. In that case, suggest running `/debate:acpx-setup` to diagnose.
 
-### 1e. Capture the plan
+### 1e. Capture the review target
 
-First check whether a plan exists in the current conversation context. If no plan is present, ask the user to paste it or describe what to review. Once a plan is available, write it to `<WORK_DIR>/plan.md`.
+First check whether a plan exists in the current conversation context. If one does, write it to `<WORK_DIR>/plan.md`.
+
+If no plan is present, do **not** ask for one. Leave `plan.md` unwritten and continue — `run-parallel-acpx.sh` captures the current changeset and the reviewers debate that instead. Someone who runs this without a plan almost always means "review what I just did".
+
+Only ask the user what to review when the runner exits non-zero reporting no plan and no changes, which means there is genuinely nothing to look at. If they name a specific target instead (a branch, a ref range), set `DEBATE_DIFF_BASE` accordingly rather than writing a plan.
 
 ---
 

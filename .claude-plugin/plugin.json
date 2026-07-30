@@ -1,7 +1,7 @@
 {
   "name": "debate",
-  "version": "2.7.1",
-  "description": "Multi-model AI plan review: run any acpx-supported agent (Codex, Antigravity, Kimi, Qwen, etc.) in parallel, synthesize feedback, debate contradictions",
+  "version": "2.8.0",
+  "description": "Multi-model AI plan and code review: run any acpx-supported agent (Codex, Antigravity, Kimi, Qwen, etc.) in parallel, synthesize feedback, debate contradictions",
   "author": {
     "name": "strml",
     "url": "https://github.com/strml"

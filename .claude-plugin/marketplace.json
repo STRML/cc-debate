@@ -7,8 +7,8 @@
   "plugins": [
     {
       "name": "debate",
-      "description": "Multi-model AI plan review with parallel execution, synthesis, and debate — any acpx-supported agent",
-      "version": "2.7.1",
+      "description": "Multi-model AI plan and code review with parallel execution, synthesis, and debate — any acpx-supported agent",
+      "version": "2.8.0",
       "source": "./",
       "author": {
         "name": "strml"
