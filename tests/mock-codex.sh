@@ -34,10 +34,19 @@ for arg in "$@"; do
   prev="$arg"
 done
 
+# The prompt arrives on stdin when invoked as `codex exec ... -`, which is how
+# the real call avoids ARG_MAX. Capture it so tests can assert what was sent.
 if [ "${MOCK_CODEX_HANG_ON_STDIN:-0}" = "1" ]; then
   echo "Reading additional input from stdin..."
-  # Blocks forever on an open stdin; returns at once on </dev/null.
-  cat > /dev/null
+  # Blocks forever on a stdin that never reaches EOF; returns at once on a
+  # regular file or /dev/null.
+  if [ -n "${MOCK_CODEX_PROMPT_OUT:-}" ]; then
+    cat > "$MOCK_CODEX_PROMPT_OUT"
+  else
+    cat > /dev/null
+  fi
+elif [ -n "${MOCK_CODEX_PROMPT_OUT:-}" ]; then
+  cat > "$MOCK_CODEX_PROMPT_OUT"
 fi
 
 if [ "$DELAY" -gt 0 ] 2>/dev/null; then

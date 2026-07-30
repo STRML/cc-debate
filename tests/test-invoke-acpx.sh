@@ -715,6 +715,57 @@ test_codex_exec_clears_stale_output() {
   rm -rf "$work_dir"
 }
 
+# The prompt must travel on stdin, not in argv. In changeset mode it carries a
+# whole diff, and a large one exceeds ARG_MAX (1 MiB on macOS) with E2BIG.
+test_codex_exec_prompt_travels_on_stdin() {
+  local work_dir config log_file prompt_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/codex-log.txt"
+  prompt_out="$work_dir/seen-prompt.txt"
+
+  echo "PLAN_CONTENT_MARKER" > "$work_dir/plan.md"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_LOG="$log_file" \
+  MOCK_CODEX_PROMPT_OUT="$prompt_out" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  # argv ends with the stdin marker, and carries no prompt text.
+  grep -q -- "codex exec .* -$" "$log_file" || return 1
+  grep -q "PLAN_CONTENT_MARKER" "$log_file" && return 1
+  # ...and the prompt actually arrived on stdin.
+  grep -q "PLAN_CONTENT_MARKER" "$prompt_out" || return 1
+
+  rm -rf "$work_dir"
+}
+
+# Regression for E2BIG: a prompt past ARG_MAX must still get through.
+test_codex_exec_handles_oversized_prompt() {
+  local work_dir config prompt_out limit
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  prompt_out="$work_dir/seen-prompt.txt"
+
+  limit=$(getconf ARG_MAX 2>/dev/null || echo 262144)
+  # Comfortably past the limit; as an argv entry this would be E2BIG.
+  awk -v n=$(( limit / 40 + 5000 )) 'BEGIN{for(i=0;i<n;i++) print "+ const padding_line_token = 1234567890;"}' \
+    > "$work_dir/plan.md"
+  echo "TAIL_MARKER_AFTER_BULK" >> "$work_dir/plan.md"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_PROMPT_OUT="$prompt_out" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || return 1
+  [ "$(wc -c < "$prompt_out")" -gt "$limit" ] || return 1
+  grep -q "TAIL_MARKER_AFTER_BULK" "$prompt_out" || return 1
+
+  rm -rf "$work_dir"
+}
+
 # --- changeset fallback ---
 
 test_changeset_reviewed_when_no_plan() {
@@ -780,6 +831,8 @@ run_test "codex exec transcript kept out of output" test_codex_exec_transcript_k
 run_test "codex exec empty output is a failure" test_codex_exec_empty_output_is_a_failure
 run_test "codex exec skips the acpx session check" test_codex_exec_skips_session_check
 run_test "codex exec clears stale output" test_codex_exec_clears_stale_output
+run_test "codex exec prompt travels on stdin" test_codex_exec_prompt_travels_on_stdin
+run_test "codex exec handles an oversized prompt" test_codex_exec_handles_oversized_prompt
 run_test "changeset reviewed when no plan" test_changeset_reviewed_when_no_plan
 run_test "plan wins over changeset" test_plan_wins_over_changeset
 run_test "happy path" test_happy_path

@@ -454,10 +454,18 @@ if [ "$AGENT" = "codex-exec" ]; then
   # the branch would exit the script.
   if [ -n "$CONFIG_MODEL" ]; then CODEX_CMD+=(-m "$CONFIG_MODEL"); fi
   if [ -n "$CONFIG_EFFORT" ]; then CODEX_CMD+=(-c "model_reasoning_effort=$CONFIG_EFFORT"); fi
-  CODEX_CMD+=("$(cat "$PROMPT_FILE")")
+  # `-` makes codex read the prompt from stdin. The prompt cannot go in the
+  # argument list: in changeset mode it carries a whole diff, and a large one
+  # blows past ARG_MAX (1 MiB on macOS) with E2BIG, "Argument list too long".
+  # Redirecting from the file also keeps stdin EOF-terminated, which is what the
+  # earlier `</dev/null` was for — codex blocks forever on a stdin that never
+  # ends, printing "Reading additional input from stdin..." and looking to a
+  # harness exactly like a silent no-op. A regular file gives EOF; an inherited
+  # pipe does not.
+  CODEX_CMD+=(-)
 
   set +e
-  "${CODEX_CMD[@]}" < /dev/null \
+  "${CODEX_CMD[@]}" < "$PROMPT_FILE" \
     > "$WORK_DIR/${REVIEWER}-transcript.log" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
   EXIT_CODE=$?
   set -e
@@ -465,7 +473,7 @@ if [ "$AGENT" = "codex-exec" ]; then
   # A timeout here is usually the stdin hang above; say so rather than leaving
   # the operator to guess at an empty review.
   if [ "$EXIT_CODE" -eq 124 ] && ! [ -s "$WORK_DIR/${REVIEWER}-output.md" ]; then
-    echo "[$REVIEWER] codex produced nothing before the timeout. If the transcript ends at 'Reading additional input from stdin...', stdin was not closed." >&2
+    echo "[$REVIEWER] codex produced nothing before the timeout. If the transcript ends at 'Reading additional input from stdin...', stdin never reached EOF." >&2
   fi
 
   handle_invocation_result "codex exec"
