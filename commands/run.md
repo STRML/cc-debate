@@ -61,7 +61,11 @@ this order:
    preset key nor a reviewer name is treated as a one-reviewer subset — the Step 2a runner
    skips unknown names.
 3. **No panel argument** — run the config's `default_reviewers` if that top-level array
-   is present and non-empty, otherwise every key in `reviewers`. **Spawn no Claude
+   is present, otherwise every key in `reviewers`. An explicitly empty
+   `default_reviewers: []` selects **no** acpx reviewers (the runner exits non-zero
+   with "No reviewers configured"), matching what an empty `reviewers` array already
+   means on a preset; it is a way to force explicit selection every time, not a
+   synonym for "absent". **Spawn no Claude
    teammates: treat `claude_reviewers` as `{}` and skip Step 2b.** The acpx panel is
    the cheap, uncorrelated part; Claude teammates cost main-loop tokens and are opt-in.
    Reach them with `/debate:all` (same command, same arguments, but the top-level

@@ -146,7 +146,7 @@ That matters because the prompt this seat reads contains the changeset. A diff c
 Two mitigations are applied, and neither is a sandbox:
 
 - **`HOME` points at a throwaway directory** inside the work dir, so `~/…` resolves nowhere useful. Verified: the same canary read returns `BLOCKED` tilde-relative and still succeeds by absolute path. Most secrets are referenced as `~/.aws`, `~/.ssh`, `~/.netrc`, so this is worth having. `CODEX_HOME` still points at the real config, so auth works.
-- **Secret-shaped environment variables are dropped** (`*KEY*`, `*TOKEN*`, `*SECRET*`, `AWS_*`, `GITHUB_*`, and similar). Env is the cheaper target — it needs no filesystem guess at all.
+- **Secret-shaped environment variables are dropped** (`*KEY*`, `*TOKEN*`, `*SECRET*`, `AWS_*`, `GITHUB_*`, and similar). Env is the cheaper target — it needs no filesystem guess at all. **`OPENAI_API_KEY` is dropped too**, with no provider exception: codex authenticates from `CODEX_HOME` (`codex login`), verified by running it to completion with `OPENAI_API_KEY`, `OPENAI_TOKEN` and `CODEX_TOKEN` all unset. If you rely on API-key auth rather than `codex login`, this seat will not authenticate.
 
 An absolute path still works, and an injected instruction can construct one. So: review your own branches with repo-aware seats, and use a prompt-only preset (`quick`, or any panel without a `codex-exec` agent) for a diff from someone you do not trust.
 

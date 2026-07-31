@@ -898,6 +898,23 @@ test_osc_only_response_is_empty() {
   rm -rf "$work_dir"
 }
 
+# The same hyperlink in 8-bit C1 form: OSC is 0x9D, ST is 0x9C, no ESC byte anywhere.
+# A 7-bit-only filter leaves the URL intact and the review reads as delivered.
+test_c1_osc_only_response_is_empty() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\2358;;https://example.invalid/x\234')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
 # A review that merely mentions a URL must survive the OSC strip.
 test_review_containing_a_url_still_passes() {
   local work_dir config
@@ -1236,9 +1253,13 @@ test_codex_exec_scrubs_secret_env_vars() {
   MOCK_CODEX_ENV_OUT="$env_out" \
   DEBATE_TEST_API_KEY="should-not-survive" \
   DEBATE_TEST_BENIGN="should-survive" \
+  OPENAI_API_KEY="sk-should-not-survive" \
     bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
 
   grep -q "^SECRET_PRESENT=$" "$env_out" || { echo "  secret-shaped var reached codex"; return 1; }
+  # The provider key specifically: an earlier version exempted OPENAI_* ahead of the
+  # secret patterns, so the most valuable secret on the box was the one kept.
+  grep -q "^PROVIDER_KEY_PRESENT=$" "$env_out" || { echo "  OPENAI_API_KEY reached codex"; return 1; }
   # The scrub must be targeted, not a blanket wipe — codex needs a working env.
   grep -q "^BENIGN_PRESENT=yes$" "$env_out" || { echo "  benign var was wrongly stripped"; return 1; }
 
@@ -1321,6 +1342,7 @@ run_test "hard failure is not retried" test_hard_failure_is_not_retried
 run_test "default allows one retry" test_default_allows_one_retry
 run_test "control-bytes-only response counts as empty" test_control_bytes_only_response_is_empty
 run_test "OSC-only response counts as empty" test_osc_only_response_is_empty
+run_test "C1 OSC-only response counts as empty" test_c1_osc_only_response_is_empty
 run_test "review containing a URL still passes" test_review_containing_a_url_still_passes
 run_test "punctuation-only response counts as empty" test_punctuation_only_response_is_empty
 run_test "codex exec retries a blank turn" test_codex_exec_retries_a_blank_turn

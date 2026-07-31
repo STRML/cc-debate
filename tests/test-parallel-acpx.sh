@@ -483,9 +483,14 @@ EOF
   mkdir -p "$work_dir"
   echo "Test plan" > "$work_dir/plan.md"
 
+  local rc=0
   PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
-    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null || rc=$?
 
+  # Assert the status explicitly. `set -e` does not fire for a command inside a
+  # function called as `if "$@"`, so without capturing rc a non-zero exit here
+  # would pass silently and the test would prove nothing.
+  [ "$rc" -ne 0 ] || { echo "  runner exited 0 with an empty default set"; rm -rf "$work_dir" "$tmp_dir"; return 1; }
   [ ! -f "$work_dir/alpha-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
   [ ! -f "$work_dir/beta-exit.txt" ]  || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
 

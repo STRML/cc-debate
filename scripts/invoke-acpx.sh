@@ -266,14 +266,26 @@ fi
 # an alnum test untouched. Verified. OSC ends at BEL or at ST (ESC backslash), so
 # both terminators are handled.
 output_is_blank() {
-  local file="$1" esc bel
+  local file="$1" esc bel osc8 st8 csi8
   [ -s "$file" ] || return 0
   esc=$(printf '\033')
   bel=$(printf '\007')
+  # Built with printf, not written as \x9d in the regex: BSD sed rejects \x escapes
+  # outright ("illegal byte sequence"), and a sed that errors out prints nothing,
+  # which this function would have read as a blank review — a broken filter that
+  # looks like a working one.
+  osc8=$(printf '\235')
+  st8=$(printf '\234')
+  csi8=$(printf '\233')
+  # The 8-bit C1 forms are stripped too: OSC is 0x9D and ST is 0x9C, so
+  # `0x9D 8;;https://… 0x9C` is the same hyperlink without a single ESC byte in it,
+  # and a 7-bit-only filter leaves its payload intact.
   ! LC_ALL=C sed -E "
         s/${esc}\][^${bel}]*${bel}//g
         s/${esc}\][^${esc}]*${esc}\\\\//g
+        s/${osc8}[^${st8}${bel}]*[${st8}${bel}]//g
         s/${esc}\[[0-9;?]*[A-Za-z]//g
+        s/${csi8}[0-9;?]*[A-Za-z]//g
         s/${esc}[()][A-Za-z0-9]//g
       " "$file" \
     | LC_ALL=C grep -q '[[:alnum:]]'
@@ -572,9 +584,14 @@ if [ "$AGENT" = "codex-exec" ]; then
   CODEX_ENV=(env)
   while IFS='=' read -r _envkey _; do
     case "$_envkey" in
-      # Keep what codex itself needs to run and authenticate.
+      # Keep what codex itself needs to run and find its config. Note there is no
+      # provider-key exception here: `OPENAI_API_KEY` matches *KEY* below and is
+      # dropped with everything else. Exempting it would have preserved the single
+      # most valuable secret on the box while the README claimed secrets were
+      # scrubbed. codex does not need it — it authenticates from CODEX_HOME
+      # (`codex login`), verified by running it to completion with OPENAI_API_KEY,
+      # OPENAI_TOKEN and CODEX_TOKEN all unset.
       HOME|CODEX_HOME|PATH|SHELL|TERM|TMPDIR|LANG|LC_*|USER|LOGNAME) continue ;;
-      OPENAI_*|CODEX_*) continue ;;
       *KEY*|*TOKEN*|*SECRET*|*PASSWORD*|*PASSWD*|*CREDENTIAL*|*_AUTH|AWS_*|GH_*|GITHUB_*|ANTHROPIC_*|GOOGLE_*|GEMINI_*|OPENROUTER_*|NPM_*)
         CODEX_ENV+=(-u "$_envkey") ;;
     esac

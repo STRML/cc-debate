@@ -65,6 +65,7 @@ if [ -n "${MOCK_CODEX_ENV_OUT:-}" ]; then
     echo "HOME=${HOME:-}"
     echo "CODEX_HOME=${CODEX_HOME:-}"
     echo "SECRET_PRESENT=${DEBATE_TEST_API_KEY+yes}"
+    echo "PROVIDER_KEY_PRESENT=${OPENAI_API_KEY+yes}"
     echo "BENIGN_PRESENT=${DEBATE_TEST_BENIGN+yes}"
   } > "$MOCK_CODEX_ENV_OUT"
 fi
