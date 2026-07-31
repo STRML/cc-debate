@@ -577,6 +577,52 @@ test_opus_skips_session_ensure() {
 
 # --- codex exec (repo-aware seat) ---
 
+# Two-sided on purpose. Without the valid-value half, an implementation that
+# rejected every effort would pass the invalid-value half while breaking every
+# correctly-configured codex seat.
+test_codex_effort_invalid_is_refused_before_spawn() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  jq '.reviewers["codex-exec-reviewer"].effort = "bogus"' "$config" > "$config.tmp" \
+    && mv "$config.tmp" "$config"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_RESPONSE="should never run. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "2" ] || return 1
+  grep -q "Invalid .effort." "$work_dir/codex-exec-reviewer-output.md" || return 1
+  ! grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_codex_effort_valid_values_accepted() {
+  local work_dir config eff
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  for eff in none minimal low medium high xhigh max; do
+    jq --arg e "$eff" '.reviewers["codex-exec-reviewer"].effort = $e' "$config" > "$config.tmp" \
+      && mv "$config.tmp" "$config"
+    rm -f "$work_dir/codex-exec-reviewer-output.md" "$work_dir/codex-exec-reviewer-exit.txt"
+
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_CODEX_RESPONSE="Reads fine. VERDICT: APPROVED" \
+      bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+    [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
+    grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" \
+      || { rm -rf "$work_dir"; return 1; }
+  done
+
+  rm -rf "$work_dir"
+}
+
 test_codex_exec_happy_path() {
   local work_dir config
   work_dir=$(setup_work_dir)
@@ -1380,6 +1426,8 @@ ln -sf "$MOCK_CODEX" "$SCRIPT_DIR/codex"
 chmod +x "$SCRIPT_DIR/codex"
 trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/agy" "$SCRIPT_DIR/claude" "$SCRIPT_DIR/codex"' EXIT
 
+run_test "codex effort invalid refused before spawn" test_codex_effort_invalid_is_refused_before_spawn
+run_test "codex effort valid values accepted" test_codex_effort_valid_values_accepted
 run_test "codex exec happy path" test_codex_exec_happy_path
 run_test "codex exec closes stdin" test_codex_exec_closes_stdin
 run_test "codex exec read-only + output flags" test_codex_exec_is_read_only_and_uses_output_flag

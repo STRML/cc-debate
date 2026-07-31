@@ -110,6 +110,29 @@ CONFIG_EFFORT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].effort // empty' "
 CONFIG_MODE=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].mode // empty' "$CONFIG_FILE")
 CONFIG_RETRIES=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].retries // empty' "$CONFIG_FILE")
 
+# --- Effort is a closed enum; check it before spending a seat ---
+# codex accepts any model_reasoning_effort at startup and rejects an invalid one
+# with a 400 at REQUEST time -- after the reviewer has been spawned and the prompt
+# sent. A config typo therefore surfaces as a seat that starts cleanly, does
+# nothing, and reports an API error: indistinguishable from a provider outage,
+# and the panel silently shrinks by one with no hint the cause was a typo.
+#
+# Verified against codex-cli 0.146.0, which names the set in its own 400:
+#   "[reasoning.effort] Invalid value: 'bogus'. Supported values are: 'none',
+#    'minimal', 'low', 'medium', 'high', 'xhigh', and 'max'."
+#
+# --model is deliberately NOT checked here: the valid set is account-dependent
+# (a ChatGPT-account codex rejects models an API-key account accepts), so there is
+# no offline list, and a hardcoded one would go stale and reject valid configs.
+CODEX_EFFORTS="none minimal low medium high xhigh max"
+if [ -n "$CONFIG_EFFORT" ] && ! printf '%s\n' $CODEX_EFFORTS | grep -qx -- "$CONFIG_EFFORT"; then
+  echo "invoke-acpx: reviewer '$REVIEWER' sets effort '$CONFIG_EFFORT'; valid: $CODEX_EFFORTS" >&2
+  echo "Invalid \`effort\` for reviewer '$REVIEWER': '${CONFIG_EFFORT}'. Valid values: ${CODEX_EFFORTS// /, }." \
+    > "$WORK_DIR/${REVIEWER}-output.md"
+  echo "2" > "$WORK_DIR/${REVIEWER}-exit.txt"
+  exit 2
+fi
+
 # --- Blank-output retries ---
 # An agent that ends its turn without a final message costs the panel a seat, and
 # it is not a rare edge case: kimi-k3 through opencode does it on a large share of
