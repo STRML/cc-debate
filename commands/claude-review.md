@@ -334,11 +334,16 @@ sends the liveness ping) exactly like Round 1 and, being freshly spawned, actual
 and returns a completion notification.
 
 **Wedge fallback:** a teammate has delivered iff `<WORK_DIR>/<reviewer>-r<ROUND>-output.md`
-exists and is non-empty (`[ -s … ]`) — a run-scoped, deterministic signal, so you no
-longer grep transcripts to find a lost review. If ~10 min pass and that file is still
-missing/empty, the teammate wedged → do not keep waiting or re-ping; respawn a fresh
-`<reviewer>-r<ROUND>` (same footer, same `[OUTPUT_PATH]`) and wait on that instead. Each
-round writes its own `-r<ROUND>-` file, so a respawn cannot collide with a prior round.
+or its `-b-` respawn variant exists and is non-empty (`[ -s … ]`) — a run-scoped,
+deterministic signal, so you no longer grep transcripts to find a lost review. If ~10 min
+pass and neither file exists, treat the teammate as wedged → do not keep waiting or
+re-ping; respawn a fresh `<reviewer>-r<ROUND>b` and wait on that instead.
+
+The respawn writes to `<WORK_DIR>/<reviewer>-r<ROUND>-b-output.md`, **never** the
+original's path. Ten minutes without a file means "has not delivered yet", not "is dead";
+a slow teammate returns later and writes where it was told, so pointing both at one path
+lets the loser silently overwrite the winner. If both land, read both — two independent
+reviews of the same target beat either one.
 
 Go to **Step 4**.
 
