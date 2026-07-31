@@ -435,7 +435,8 @@ The value of multiple reviewers is getting genuinely different lenses. Some idea
 |---------|-------------|
 | `/debate:setup` | Check prerequisites, create `~/.claude/debate-scripts` symlink, detect v1.x configs and migrate, print permission allowlist |
 | `/debate:acpx-setup` | Interactive reviewer configuration: pick agents, set up OpenRouter models, probe connectivity |
-| `/debate:run [reviewers\|preset] [skip-debate]` | Run all (or a subset, or a named `presets` panel) of reviewers in parallel, synthesize, debate, iterate up to 3 rounds. Alias: `/debate:all`. |
+| `/debate:run [reviewers\|preset] [skip-debate]` | Run the acpx panel (all, a subset, or a named `presets` panel) in parallel, synthesize, debate, iterate up to 3 rounds. No Claude teammates unless a preset asks for them. |
+| `/debate:all [reviewers\|preset] [skip-debate]` | Same, plus the Claude teammates from `claude_reviewers`. |
 | `/debate:claude-review` | Claude review — model-tuned skeptic pair by default (Fable Skeptic + Opus Skeptic). Up to 5 rounds. |
 | `/debate:claude-double-review` | Skeptic pair + Architect in parallel. |
 | `/debate:claude-custom-review` | Interactive picker — choose personalities and model. |
@@ -447,13 +448,17 @@ The value of multiple reviewers is getting genuinely different lenses. Some idea
 ### `/debate:run` options
 
 ```bash
-/debate:run                    # all configured reviewers
+/debate:run                    # the acpx panel (default_reviewers), no Claude teammates
 /debate:run codex,mercury      # specific acpx subset only
 /debate:run tight              # a named preset from the `presets` object (see Config reference)
 /debate:run skip-debate        # skip debate phase, straight to final report
 ```
 
-`/debate:all` is a permanent alias for `/debate:run` — same arguments, same behavior.
+`/debate:all` takes the same arguments and differs in one way: with no preset and no
+reviewer subset, it also spawns the Claude teammates listed in `claude_reviewers`,
+which `/debate:run` skips. The acpx panel is cheap and vendor-diverse; the Claude
+teammates cost main-loop tokens, so they are opt-in. A preset that names its own
+`claude_reviewers` gets them under either command.
 
 ---
 

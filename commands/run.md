@@ -60,8 +60,14 @@ this order:
    `codex,antigravity` usage is unaffected. A single bare token that matches neither a
    preset key nor a reviewer name is treated as a one-reviewer subset — the Step 2a runner
    skips unknown names.
-3. **No panel argument** — run all reviewers from config with the top-level
-   `claude_reviewers`.
+3. **No panel argument** — run the config's `default_reviewers` if that top-level array
+   is present and non-empty, otherwise every key in `reviewers`. **Spawn no Claude
+   teammates: treat `claude_reviewers` as `{}` and skip Step 2b.** The acpx panel is
+   the cheap, uncorrelated part; Claude teammates cost main-loop tokens and are opt-in.
+   Reach them with `/debate:all` (same command, same arguments, but the top-level
+   `claude_reviewers` applies) or with a preset that names its own `claude_reviewers`.
+   **Exception: when invoked as `/debate:all`, use the top-level `claude_reviewers`
+   here instead of `{}`.**
 
 Precedence: if a token matches both a preset key and a reviewer name, the **preset wins**
 (so don't name a preset after a reviewer). **Validate the selected acpx panel before
@@ -166,7 +172,9 @@ The Claude side of the panel — the skeptic(s) and any persona reviewers — is
 entirely by the `claude_reviewers` object in `~/.claude/debate-acpx.json` (loaded in
 Step 1a). **If Step 1a resolved a preset, use that preset's `claude_reviewers` map here
 instead of the top-level one** — an empty `{}` means spawn no Claude teammates, so skip
-2b entirely. There is no separate `fable_reviewer` flag; the skeptic is just an entry in
+2b entirely. **With no panel argument, the map is `{}` under `/debate:run` and the
+top-level `claude_reviewers` under `/debate:all`** (Step 1a rule 3); a preset's own map
+wins over both. There is no separate `fable_reviewer` flag; the skeptic is just an entry in
 that object. **Read the shared bodies source now:**
 `~/.claude/debate-scripts/reviewer-prompts.md` (shared with `/debate:claude-review`).
 Each entry resolves to one or more background Agent teammates (persona × model), all

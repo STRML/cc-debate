@@ -258,11 +258,29 @@ test_run_is_canonical_orchestrator() {
 }
 
 test_all_is_alias_to_run() {
-  # commands/all.md must be a thin alias, NOT a second copy of the orchestrator.
+  # commands/all.md must stay a thin alias, NOT a second copy of the orchestrator.
+  # It carries exactly one documented difference from run.md — the Claude teammates —
+  # and that difference has to be stated, or the two commands silently converge again.
   local f="$PROJECT_DIR/commands/all.md"
   [ -f "$f" ] || { echo "  commands/all.md missing"; return 1; }
   grep -q "alias for \`/debate:run\`" "$f" || { echo "  all.md: does not declare itself an alias"; return 1; }
   ! grep -q "## Step 2: Parallel Review" "$f" || { echo "  all.md: contains full orchestrator (should be alias only)"; return 1; }
+  grep -q "exactly one difference" "$f" || { echo "  all.md: does not state its one difference from run.md"; return 1; }
+  grep -qi "claude_reviewers" "$f" || { echo "  all.md: does not name claude_reviewers as the difference"; return 1; }
+}
+
+# The split only works if run.md actually documents the opt-out. If someone reverts
+# rule 3 to "run all reviewers with the top-level claude_reviewers", the two commands
+# become identical again and nothing else in the suite would notice.
+test_run_defaults_to_no_claude_teammates() {
+  local f="$PROJECT_DIR/commands/run.md" flat
+  # Prose wraps; match against the file with newlines collapsed so the assertion
+  # tracks the wording rather than the line breaks.
+  flat=$(tr '\n' ' ' < "$f" | tr -s ' ')
+  echo "$flat" | grep -q "Spawn no Claude teammates" \
+    || { echo "  run.md: rule 3 does not opt out of Claude teammates"; return 1; }
+  echo "$flat" | grep -q "default_reviewers" \
+    || { echo "  run.md: rule 3 does not honor default_reviewers"; return 1; }
 }
 
 test_alias_allowed_tools_parity() {
@@ -298,6 +316,7 @@ run_test ".gitignore updated" test_gitignore_updated
 run_test "version consistent" test_version_consistent
 run_test "run.md is canonical orchestrator" test_run_is_canonical_orchestrator
 run_test "all.md is alias to run" test_all_is_alias_to_run
+run_test "run defaults to no Claude teammates" test_run_defaults_to_no_claude_teammates
 run_test "alias allowed-tools parity" test_alias_allowed_tools_parity
 
 echo ""
