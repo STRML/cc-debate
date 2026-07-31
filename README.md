@@ -133,13 +133,13 @@ The `codex-exec` agent can. It bypasses acpx and calls `codex exec` directly, wh
 "auditor": {
   "agent": "codex-exec",
   "timeout": 900,
-  "model": "gpt-5.6-sol",
+  "model": "gpt-5.6-terra",
   "effort": "high",
   "system_prompt": "You are The Auditor — verify every claim against the code. Ground each finding in a file:line you have actually read."
 }
 ```
 
-`model` is passed to `codex exec -m`, and `effort` becomes `-c model_reasoning_effort=` (`low`, `medium`, `high`). `-s read-only` means the reviewer changes nothing. Give it a longer `timeout` than the prompt-only seats — it is doing real work, and a review that opens several files takes minutes, not seconds.
+`model` is passed to `codex exec -m`, and `effort` becomes `-c model_reasoning_effort=`. Codex accepts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; the value is forwarded unvalidated, so a typo surfaces as a 400 from the API rather than a config error. Run a luna seat at `xhigh` or `max` and nothing lower — the cheaper settings bill less and find less. `-s read-only` means the reviewer changes nothing. Give it a longer `timeout` than the prompt-only seats — it is doing real work, and a review that opens several files takes minutes, not seconds.
 
 #### Do not point this seat at a diff you do not trust
 

@@ -6,8 +6,10 @@
     "rather than through acpx. It reads the repo, so those reviewers check the code",
     "instead of judging the description they were handed, and it bills against a",
     "Codex subscription rather than per token. Treat `effort` as a floor, not a dial:",
-    "a luna seat runs at xhigh or max, never below. Cheaper settings look thrifty and",
-    "quietly cost you findings, which is the one thing a reviewer is for.",
+    "a codex-exec luna seat runs at xhigh or max, never below. Cheaper settings look",
+    "thrifty and quietly cost you findings, which is the one thing a reviewer is for.",
+    "Only the codex-exec branch reads `effort`, so setting it on an `-or` or `-k3`",
+    "seat does nothing at all.",
     "",
     "The `antigravity` seat is the only non-OpenAI reviewer here. Keep a seat like it.",
     "Five correlated reviewers agreeing tells you less than you would think.",
@@ -66,7 +68,7 @@
     },
     "simplifier": {
       "agent": "codex-exec",
-      "timeout": 420,
+      "timeout": 600,
       "model": "gpt-5.6-luna",
       "effort": "xhigh",
       "system_prompt": "You are The Simplifier — you argue for less code. Find accidental complexity: abstraction with one caller, configuration nobody sets, a flag that is always the same value, error handling for conditions that cannot occur, a new file that belongs in an existing one, and any branch that duplicates logic already written elsewhere. Ask what a senior engineer would say 'why didn't you just...' about. Name the specific lines to delete and what replaces them. Do not invent requirements to justify keeping code."
