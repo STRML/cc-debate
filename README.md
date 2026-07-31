@@ -328,7 +328,7 @@ Reviewers live in `~/.claude/debate-acpx.json`. This is the only file you need t
 | `mode` | No | `session` (default) prompts a persistent acpx session, so the reviewer keeps its context across debate rounds. `exec` sends every prompt as a one-shot instead. See below. |
 | `retries` | No | Extra attempts when the agent ends its turn with no review. Default: 1. Set 0 to disable, or 2-3 for a notably flaky agent. A non-zero exit or a timeout is never retried. |
 
-#### When to set `mode: "exec"`
+### When to set `mode: "exec"`
 
 Some ACP agents answer the first prompt into a session and then go mute: the turn
 ends immediately with no content and exit 0, so the round records an **empty
