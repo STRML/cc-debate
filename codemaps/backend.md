@@ -53,6 +53,8 @@ No exit file — a teammate has delivered iff its output file exists and is non-
     "<name>": {
       "agent": "<acpx-agent-name>",
       "timeout": 120,
+      "model": "optional model id",
+      "effort": "codex-exec only: none|minimal|low|medium|high|xhigh|max",
       "mode": "session | exec",
       "retries": 1,
       "system_prompt": "optional persona prompt"
@@ -61,7 +63,9 @@ No exit file — a teammate has delivered iff its output file exists and is non-
 }
 ```
 
-Available acpx agents: codex, claude, cursor, copilot, kimi, kiro, qwen, opencode, kilocode. The `antigravity` (agy) and `opus` reviewers are invoked directly, not via acpx.
+Available acpx agents: codex, claude, cursor, copilot, kimi, kiro, qwen, opencode, kilocode. The `antigravity` (agy), `opus`, and `codex-exec` reviewers are invoked directly, not via acpx.
+
+`effort` is read only on the `codex-exec` branch and forwarded unvalidated, so a bad value fails as a 400 at run time rather than as a config error. `tests/test-references.sh` lints it, along with the rule that a luna seat runs at `xhigh` or above with a timeout of at least 900.
 
 `mode` defaults to `session` (persistent acpx session, context kept across rounds).
 `mode: "exec"` sends one-shots and skips `sessions ensure` — needed for agents that

@@ -347,9 +347,10 @@ one Gemini seat for a non-OpenAI opinion and a `fallback` preset for when the Co
 | Field | Required | Description |
 |-------|----------|-------------|
 | `agent` | Yes | acpx agent name (see [Supported Agents](#supported-agents)) |
-| `timeout` | No | Seconds before the review is killed. Default: 120. Use 240-300 for large/slow agents. |
+| `timeout` | No | Seconds before the review is killed. Default: 120. Use 240-300 for large/slow prompt-only agents, and 900 for a repo-aware `codex-exec` seat, which reads files and costs far more. |
 | `system_prompt` | No | Persona sent as the prompt prefix. Omit for generic reviewer behavior. |
-| `model` | No | For the `antigravity` agent — model display name from `agy models` (e.g. `Gemini 3.1 Pro (High)`). For the `opus` agent — the Claude model id. Omit to use the agent's default. |
+| `model` | No | For the `codex-exec` agent — the model id passed to `codex exec -m` (e.g. `gpt-5.6-luna`). For the `antigravity` agent — model display name from `agy models` (e.g. `Gemini 3.1 Pro (High)`). For the `opus` agent — the Claude model id. Omit to use the agent's default. |
+| `effort` | No | **`codex-exec` only** — becomes `-c model_reasoning_effort=`. One of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Set on any other agent it is silently ignored. Run a luna seat at `xhigh` or `max`; the cheaper settings bill less and find less. |
 | `model_id` | No | For OpenRouter agents — the underlying model ID (e.g. `inception/mercury-2`). Shown in the summary. |
 | `mode` | No | `session` (default) prompts a persistent acpx session, so the reviewer keeps its context across debate rounds. `exec` sends every prompt as a one-shot instead. See below. |
 | `retries` | No | Extra attempts when the agent ends its turn with no review. Default: 1. Set 0 to disable, or 2-3 for a notably flaky agent. A non-zero exit or a timeout is never retried. |
@@ -528,7 +529,7 @@ You're not signed in. Run `agy` once in a terminal to complete the browser OAuth
 The `OPENCODE_CONFIG_CONTENT` env var may not be taking effect. Verify your `start.sh` exports it correctly and that the model ID matches what's on openrouter.ai/models exactly.
 
 **Reviews time out**
-Increase the `timeout` value for that reviewer in `~/.claude/debate-acpx.json`. Large models (DeepSeek R1, Gemini 2.5 Pro) often need 240-300s. The parallel runner automatically sets `MAX_WAIT = max(timeout) + 60s`.
+Increase the `timeout` value for that reviewer in `~/.claude/debate-acpx.json`. Prompt-only seats are usually fine at 240-300s. A repo-aware `codex-exec` seat is not: one at `xhigh` spent 271s on a single-file, 13-line diff, so the shipped sample gives those seats 900s. The parallel runner sets `MAX_WAIT = max(timeout × (retries + 1)) + 60s`, which is 1860s for the shipped panel — raising a seat costs nothing until its own worst case passes every other seat's.
 
 **`timeout: command not found` warning**
 Install GNU coreutils: `brew install coreutils` (macOS). Reviews still run without it — the per-reviewer hard kill just won't be enforced.

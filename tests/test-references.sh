@@ -202,6 +202,62 @@ test_sample_config_is_coherent() {
     echo "  agent shared by reviewers without mode:exec: $bad"
     return 1
   fi
+
+  # `A | index(B)` evaluates B against A, so the seat's own fields have to be bound
+  # to a variable first. Getting this wrong does not fail loudly: jq errors, `bad`
+  # comes back empty, and the check quietly passes forever. Hence the `|| return 1`
+  # on every one of these — a broken lint must fail, not abstain.
+
+  # effort is forwarded to codex unvalidated (invoke-acpx.sh), so a typo does not
+  # fail the config. It comes back as a 400 from the API mid-review and the seat is
+  # simply gone. Catch it here, where catching it is free.
+  bad=$(jq -r '.reviewers | to_entries[]
+    | select(.value.effort != null)
+    | .value.effort as $e
+    | select(["none","minimal","low","medium","high","xhigh","max"] | index($e) | not)
+    | .key' "$f") || { echo "  effort lint failed to run"; return 1; }
+  if [ -n "$bad" ]; then
+    echo "  invalid effort value: $bad"
+    return 1
+  fi
+
+  # Only the codex-exec branch reads effort. Setting it anywhere else is a silent
+  # no-op that reads like configuration, which is worse than leaving it out.
+  bad=$(jq -r '.reviewers | to_entries[]
+    | select(.value.effort != null and .value.agent != "codex-exec")
+    | .key' "$f") || { echo "  effort-placement lint failed to run"; return 1; }
+  if [ -n "$bad" ]; then
+    echo "  effort set on a seat that ignores it: $bad"
+    return 1
+  fi
+
+  # The _comment states the luna floor. State it here too, or it drifts back the
+  # way it drifted the first time.
+  bad=$(jq -r '.reviewers | to_entries[]
+    | select(.value.agent == "codex-exec")
+    | select((.value.model // "") | test("luna"))
+    | (.value.effort // "") as $e
+    | select(["xhigh","max"] | index($e) | not)
+    | .key' "$f") || { echo "  luna-floor lint failed to run"; return 1; }
+  if [ -n "$bad" ]; then
+    echo "  luna seat below xhigh: $bad"
+    return 1
+  fi
+
+  # Measured: a luna xhigh seat spent 271s reviewing a single-file, 13-line diff.
+  # That is near the floor cost of the seat, not a typical one. A repo-aware seat at
+  # this effort needs a budget it can finish in, and 900 costs nothing, because
+  # auditor and pentester already fix MAX_WAIT at 900*(1+1)+60.
+  bad=$(jq -r '.reviewers | to_entries[]
+    | select(.value.agent == "codex-exec")
+    | (.value.effort // "") as $e
+    | select(["xhigh","max"] | index($e))
+    | select((.value.timeout // 120) < 900)
+    | .key' "$f") || { echo "  timeout-floor lint failed to run"; return 1; }
+  if [ -n "$bad" ]; then
+    echo "  xhigh seat with a timeout under 900: $bad"
+    return 1
+  fi
 }
 
 test_new_scripts_executable() {

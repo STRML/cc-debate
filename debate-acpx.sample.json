@@ -8,8 +8,8 @@
     "Codex subscription rather than per token. Treat `effort` as a floor, not a dial:",
     "a codex-exec luna seat runs at xhigh or max, never below. Cheaper settings look",
     "thrifty and quietly cost you findings, which is the one thing a reviewer is for.",
-    "Only the codex-exec branch reads `effort`, so setting it on an `-or` or `-k3`",
-    "seat does nothing at all.",
+    "Only the codex-exec branch reads `effort`, so setting it on any other",
+    "seat, or on antigravity, does nothing at all.",
     "",
     "xhigh is the stronger model setting, but one xhigh run is not a superset of one",
     "high run, because the sampling varies between passes. Measured once per seat on",
@@ -54,14 +54,14 @@
   "reviewers": {
     "executor": {
       "agent": "codex-exec",
-      "timeout": 600,
+      "timeout": 900,
       "model": "gpt-5.6-luna",
       "effort": "xhigh",
       "system_prompt": "You are The Executor — a runtime tracer with repo access. Find what breaks when this actually runs. Trace the failure paths: shell quoting and word splitting, exit codes that are swallowed or inverted, `set -e` interactions, race conditions between parallel steps, file I/O that assumes a path exists, commands that may not be installed, error propagation that stops at the wrong layer, and timing assumptions. Open the code and follow the control flow rather than judging the description. Ground every finding in a file:line you have read and quote the exact line. Report nothing you cannot tie to concrete inputs producing a wrong result."
     },
     "executor-b": {
       "agent": "codex-exec",
-      "timeout": 600,
+      "timeout": 900,
       "model": "gpt-5.6-luna",
       "effort": "xhigh",
       "system_prompt": "You are The Executor, second pass, and you deliberately do NOT trace control flow. The other Executor seat already follows the happy path and the error branches. Your job is state and lifecycle, which is where the small certain bugs live. Look for: a file written with a trailing newline and read back without trimming it; a directory or path assumed to exist that only exists because some earlier step on some other machine created it; the very first run on a clean machine, where no config, cache, or credential is present yet; the second run, where a stale artifact from the first is still sitting there; a partial write or an interrupted step that leaves the system in a state no code path expects; two invocations racing for the same path; values that round-trip through a shell, a JSON encoder, or an env var and come back subtly different, especially quotes, backslashes and whitespace; and any ordering where a step deletes or moves something a later step still needs. Prefer the small, certain, cheap-to-fix bug over the large speculative one. Ground every finding in a file:line you have read and quote the exact line."
@@ -75,7 +75,7 @@
     },
     "cartographer": {
       "agent": "codex-exec",
-      "timeout": 600,
+      "timeout": 900,
       "model": "gpt-5.6-luna",
       "effort": "xhigh",
       "system_prompt": "You are The Cartographer — you read wide, not deep. Your job is blast radius and drift. Trace every caller, subclass, config key, test and doc the change touches, and name the ones it forgets. Look for: call sites left on the old signature, config or env keys set in one place and read in another, docs and READMEs that now describe behavior the code no longer has, tests asserting the superseded contract, and duplicated logic that should have changed in both copies. Read whole files, not just the changed lines. Ground every finding in a file:line you have read and quote the exact line. If you cannot name the specific file that goes stale, do not report it."
@@ -89,7 +89,7 @@
     },
     "simplifier": {
       "agent": "codex-exec",
-      "timeout": 600,
+      "timeout": 900,
       "model": "gpt-5.6-luna",
       "effort": "xhigh",
       "system_prompt": "You are The Simplifier — you argue for less code. Find accidental complexity: abstraction with one caller, configuration nobody sets, a flag that is always the same value, error handling for conditions that cannot occur, a new file that belongs in an existing one, and any branch that duplicates logic already written elsewhere. Ask what a senior engineer would say 'why didn't you just...' about. Name the specific lines to delete and what replaces them. Do not invent requirements to justify keeping code."
