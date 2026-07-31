@@ -256,9 +256,10 @@ inlined or the reviewer has nothing to review.
 | `simplifier` | `reviewer-prompts.md` § Simplifier |
 | `operator`   | `reviewer-prompts.md` § Operator |
 | `pentester`  | `reviewer-prompts.md` § Pentester |
+| `grounder`   | `reviewer-prompts.md` § Grounder |
 | anything else | a path to a custom persona file — its contents, verbatim |
 
-Any key that is **not** one of the four built-in names is treated as a path to a custom
+Any key that is **not** one of the five built-in names is treated as a path to a custom
 persona file — read it (absolute, or relative to `REPO_ROOT`); if missing/unreadable,
 print `⚠️ persona <path>: file not found — skipping.` and skip it.
 
@@ -276,7 +277,8 @@ model in the list; e.g. `"skeptic": ["fable","opus"]` = the tuned pair). Each mo
   probe once: `claude --model fable --print --output-format json 'ok'`; non-zero exit
   or `not available` / `unknown model` / `deactivated` / empty result = unavailable.
 - `"auto"` → spawn **only when the plan is in this persona's domain** (discretion),
-  using the persona's default model (`operator` → `sonnet`, everything else → `opus`).
+  using the persona's default model (`operator` and `grounder` → `sonnet`, everything
+  else → `opus`).
 - any other value → print `⚠️ persona <key>: invalid model '<v>' — skipping.` and skip.
 
 **`"auto"` domain triggers** — under `auto`, spawn only if the plan touches the
@@ -288,6 +290,10 @@ persona's area; when unsure, lean off to stay lean (the skeptic covers the gener
 - `operator` → reliability/ops: deployment, long-running services, failure modes,
   external dependencies, background jobs, data migrations.
 - `simplifier` → complexity: new abstractions or layers, large or structural diffs.
+- `grounder` → the plan asserts things about the CURRENT codebase: cites file paths,
+  symbols, schemas, counts, defaults or existing behaviour it builds on. Lean **on**
+  for a plan that was written against an earlier state of the repo, or revised more
+  than once — that is when its citations go stale.
 - `skeptic` → always in-domain (it's the general reviewer); `auto` = `opus`.
 - custom persona → read its body and judge whether the plan is within the focus it
   describes.
@@ -838,6 +844,6 @@ abort Cleanup path above):
 - **SHA-gated cleanup.** Step 9 uses `safe-cleanup.sh`, not `rm -rf`. It refuses to delete the work dir unless (a) the review target still matches the last APPROVED state and (b) in plan mode, `--saved` points to a durable, byte-identical copy of the plan. A refusal is your signal to verify or to save the plan — not to add `--force`. The work dir is the only copy of the final plan until Step 8 persists it.
 - **Re-invoke teammates by respawning, never by SendMessage.** An idle background teammate is never re-scheduled to read its inbox, so a SendMessage to it returns success but never wakes it (the production wedge). Rounds 2+ and the Step 6.5 verification pass therefore spawn **fresh** `claude-<persona>-r<N>` / `claude-<persona>-verify` Agent teammates with the revised plan inlined — same footer + file-write delivery as Round 1 (`[OUTPUT_PATH]` pointed at this round's `-r<N>-`/`-verify-output.md`). Guard every teammate wait with the Step 2c-wedge detector: no non-empty output file within ~10 min = treat as dead → respawn, don't wait or re-ping. **A respawn always writes to its own `-b-output.md`, never the original's path** — the threshold detects "hasn't delivered", not "is dead", and a slow teammate that returns later will overwrite the respawn's review if both point at one file. **Reconcile before recording a round:** every spawned persona must have at least one non-empty output file across its attempts, or the panel silently shrank — respawn the missing ones first.
 - **Close every teammate you open (best-effort).** Named skeptic/persona teammates — Round-1 base names plus every `-r<N>` respawn and `-verify` teammate — persist after they return and pile up across runs. Step 10 sends a shutdown request (SendMessage `shutdown_request`, not `TaskStop`) to each on success AND on abort, but does **not** block completion on `shutdown_response`: an idle teammate may never read the request, and unacknowledged shutdowns are fine (teammates are reaped at session end). Never leave a review's teammates running that you can reach.
-- **The Claude side is config-driven.** `claude_reviewers` maps each persona key — `skeptic`, `simplifier`, `operator`, `pentester`, or a custom persona file path — to a model spec (`false` | `"opus"` | `"sonnet"` | `"fable"` | `"auto"`, or an array). Full resolution rules and the pentester-never-sonnet guard are in Step 2b (the authority); bodies live in `reviewer-prompts.md`.
+- **The Claude side is config-driven.** `claude_reviewers` maps each persona key — `skeptic`, `simplifier`, `operator`, `pentester`, `grounder`, or a custom persona file path — to a model spec (`false` | `"opus"` | `"sonnet"` | `"fable"` | `"auto"`, or an array). Full resolution rules and the pentester-never-sonnet guard are in Step 2b (the authority); bodies live in `reviewer-prompts.md`.
 - **Revision discipline:** Make real improvements, not cosmetic changes.
 - **User control:** If a revision would contradict the user's explicit requirements, skip it and note it.
