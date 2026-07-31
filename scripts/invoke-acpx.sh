@@ -632,6 +632,29 @@ else
   echo "[$REVIEWER] Submitting plan to $AGENT via acpx (timeout: ${TIMEOUT}s)..." >&2
 fi
 
+# acpx does not tear down the agent adapter it spawns, and `timeout` only
+# signals the process group when the timeout FIRES — on a normal exit it
+# returns as soon as the command does and signals nothing at all. So the
+# adapter, and the MCP server fleet that adapter boots, is left running: it
+# reparents to init and never exits. That is one orphan tree per reviewer per
+# round on the SUCCESS path, which is why it accumulates with routine use
+# rather than only after failures. Measured on one workstation after ~2 weeks
+# of /debate use: 13 orphaned adapter trees, every one of them in a process
+# group whose leader had long since exited.
+#
+# `timeout` makes ITSELF the process-group leader — its pid equals its pgid,
+# and the command it runs joins that group — so the timeout pid is both the
+# pid to wait on and the group to sweep afterwards. Once it exits the survivors
+# are orphans with ppid=1, but they are still in that now-leaderless group, and
+# the group is the only remaining handle on them: there is no parent link left
+# to walk. `kill -TERM -- -<pid>` signals the whole group; an empty group is
+# the normal, healthy outcome, so a failure here is discarded.
+reap_process_group() {
+  local pgid="${1:-}"
+  [ -n "$pgid" ] || return 0
+  kill -TERM -- "-$pgid" 2> /dev/null || true
+}
+
 ACPX_CMD=()
 if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
   ACPX_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
@@ -651,7 +674,13 @@ ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-per
 
 attempt_acpx() {
   set +e
-  "${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+  # Backgrounded solely to capture $! — the process group to sweep once the call
+  # is done. `wait` restores the blocking, in-order semantics of a foreground
+  # run, and stdout/stderr are redirected exactly as before. acpx takes its
+  # prompt via --file, so it never reads the stdin it no longer controls.
+  "${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log" &
+  ACPX_PID=$!
+  wait "$ACPX_PID"
   EXIT_CODE=$?
   set -e
 
@@ -680,6 +709,17 @@ attempt_acpx() {
       echo "[$REVIEWER] $AGENT was denied a permission but still delivered a review; keeping it." >&2
     fi
     EXIT_CODE=0
+  fi
+
+  # Sweep whatever acpx left behind, on both the timeout and the success path.
+  # Under `timeout` this pid IS the process-group id (see above), so killing
+  # the group reclaims the adapter tree. Without a timeout binary the command
+  # ran in THIS script's process group, and sweeping that group would kill the
+  # script mid-run — so reap only when a timeout binary actually wrapped the
+  # call, gated on the same condition that added the prefix to ACPX_CMD. A
+  # blank-turn retry re-runs this function, so each attempt reaps its own tree.
+  if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
+    reap_process_group "$ACPX_PID"
   fi
 }
 run_with_blank_retry attempt_acpx "$AGENT"

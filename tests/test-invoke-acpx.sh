@@ -1130,6 +1130,53 @@ test_denied_permission_blank_forever_still_fails() {
   rm -rf "$work_dir"
 }
 
+# --- orphan reaping ---
+
+test_orphaned_adapter_reaped() {
+  local work_dir config orphan_file orphan_pid _
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  orphan_file="$work_dir/orphan.pid"
+
+  # The reap only functions when a timeout binary wrapped the call — on a host
+  # without timeout or gtimeout the script runs unenforced, so this assertion
+  # cannot hold. Skip with a diagnostic rather than fail a capability the
+  # script itself does not assume.
+  if ! command -v timeout > /dev/null 2>&1 && ! command -v gtimeout > /dev/null 2>&1; then
+    echo "SKIP: orphaned-adapter reaping needs timeout/gtimeout (not present on this host)"
+    rm -rf "$work_dir"
+    return 0
+  fi
+
+  # The mock exits 0, so this is the SUCCESS path — where `timeout` never fires
+  # and therefore never signals the group. That is precisely the case that
+  # leaked: acpx returns, its spawned adapter keeps running and reparents to
+  # init. MOCK_ACPX_ORPHAN makes the mock leave exactly such a child behind.
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_ORPHAN="$orphan_file" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2> /dev/null
+
+  [ -f "$orphan_file" ] || { rm -rf "$work_dir"; return 1; }
+  orphan_pid=$(cat "$orphan_file")
+  [ -n "$orphan_pid" ] || { rm -rf "$work_dir"; return 1; }
+
+  # SIGTERM delivery is asynchronous; give it a moment before declaring a leak.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$orphan_pid" 2> /dev/null || break
+    sleep 0.1
+  done
+
+  if kill -0 "$orphan_pid" 2> /dev/null; then
+    # Don't let a failing test leak the very process it is testing for.
+    kill -9 "$orphan_pid" 2> /dev/null || true
+    rm -rf "$work_dir"
+    return 1
+  fi
+
+  rm -rf "$work_dir"
+}
+
 # --- Run ---
 
 echo ""
@@ -1195,6 +1242,7 @@ run_test "opus skips session ensure" test_opus_skips_session_ensure
 run_test "denied permission keeps the review" test_denied_permission_keeps_the_review
 run_test "denied permission blank is retried" test_denied_permission_blank_is_retried
 run_test "denied and blank forever still fails" test_denied_permission_blank_forever_still_fails
+run_test "orphaned adapter reaped on success" test_orphaned_adapter_reaped
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="
