@@ -252,11 +252,43 @@ fi
 # A review with no content is not always a zero-byte file. acpx still terminates
 # its (empty) output with a newline, so an agent that ends its turn without a final
 # message leaves 1 byte behind — which `[ -s ]` reports as non-empty, and the round
-# records a blank review as a success. Test for actual characters instead.
+# records a blank review as a success.
+#
+# Terminal escapes are stripped before the test, and the test is for a letter or
+# digit rather than merely a non-space byte. Both halves are needed: a zero-width
+# space is non-space by POSIX, and an ANSI reset survives an alnum test because
+# `ESC[0m` literally contains a digit and a letter. Either one alone lets a review
+# with no content register as delivered — whether the bytes come from a misbehaving
+# backend or a reviewer that a hostile changeset talked into emitting them.
+# LC_ALL=C keeps multi-byte UTF-8 controls out of [[:alnum:]].
 output_is_blank() {
-  local file="$1"
+  local file="$1" esc
   [ -s "$file" ] || return 0
-  ! grep -q '[^[:space:]]' "$file"
+  esc=$(printf '\033')
+  ! LC_ALL=C sed -E "s/${esc}\[[0-9;?]*[A-Za-z]//g; s/${esc}[()][A-Za-z0-9]//g" "$file" \
+    | LC_ALL=C grep -q '[[:alnum:]]'
+}
+
+# Runs one reviewer invocation, retrying while it comes back blank.
+#
+# $1 is a shell function that performs a single attempt: it must write the review
+# to <REVIEWER>-output.md and set EXIT_CODE. Every transport needs this, not just
+# acpx — codex exits 0 without a final message often enough that its branch already
+# clears a stale output file to avoid reading last round's review as this one's.
+#
+# Only a blank turn is retried. A non-zero exit is a real failure that repeats, and
+# a timeout has already spent its budget; retrying either just burns wall clock.
+run_with_blank_retry() {
+  local attempt_fn="$1" label="$2" attempt=0
+  while : ; do
+    "$attempt_fn"
+    if [ "$EXIT_CODE" -ne 0 ] || ! output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
+      break
+    fi
+    [ "$attempt" -lt "$RETRIES" ] || break
+    attempt=$((attempt + 1))
+    echo "[$REVIEWER] $label ended its turn with no review; retrying ($attempt of $RETRIES)..." >&2
+  done
 }
 
 handle_invocation_result() {
@@ -375,6 +407,9 @@ if [ "$AGENT" = "antigravity" ]; then
   # carriage returns, and EOT (^D) bytes from the captured output.
   ESC=$(printf '\033')
 
+  # Body indentation is left as-is so the diff stays readable; the wrapper exists
+  # only so a blank turn here retries like every other transport.
+  attempt_agy() {
   set +e
   # Expand the array 3.2-safely: on bash < 4.4 (macOS ships 3.2), "${arr[@]}" of an
   # EMPTY array under `set -u` throws "unbound variable". The +"${...}" guard yields
@@ -418,6 +453,8 @@ sys.exit(rc if rc and rc > 0 else (1 if rc else 0))
     | sed -E "s/${ESC}\[[0-9;]*[A-Za-z]//g" | tr -d '\r\004' > "$WORK_DIR/${REVIEWER}-output.md"
   EXIT_CODE=${PIPESTATUS[0]}
   set -e
+  }
+  run_with_blank_retry attempt_agy "agy (Antigravity CLI)"
 
   handle_invocation_result "agy (Antigravity CLI)"
 fi
@@ -447,10 +484,13 @@ if [ "$AGENT" = "opus" ]; then
   # --permission-mode plan: read-only mode — the reviewer cannot edit/write files.
   OPUS_CMD+=(claude --print --permission-mode plan --model "${CONFIG_MODEL:-claude-opus-4-8}")
 
-  set +e
-  "${OPUS_CMD[@]}" < "$PROMPT_FILE" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
-  EXIT_CODE=$?
-  set -e
+  attempt_opus() {
+    set +e
+    "${OPUS_CMD[@]}" < "$PROMPT_FILE" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+    EXIT_CODE=$?
+    set -e
+  }
+  run_with_blank_retry attempt_opus "Claude Opus"
 
   handle_invocation_result "Claude Opus"
 fi
@@ -500,7 +540,11 @@ if [ "$AGENT" = "codex-exec" ]; then
   # read a stale review as this round's result instead of catching the empty one.
   rm -f "$WORK_DIR/${REVIEWER}-output.md"
 
-  CODEX_CMD+=(codex exec -s read-only -o "$WORK_DIR/${REVIEWER}-output.md")
+  # --ephemeral: do not persist a rollout/session file. A review prompt carries the
+  # whole changeset, which may be someone else's proprietary diff or may have picked
+  # up a secret, and codex's session JSONL lands outside the work dir where cleanup
+  # never reaches it — world-readable under a traversable home on a shared box.
+  CODEX_CMD+=(codex exec --ephemeral -s read-only -o "$WORK_DIR/${REVIEWER}-output.md")
   # `if` rather than `&&`: under `set -e` a false test on the last command of
   # the branch would exit the script.
   if [ -n "$CONFIG_MODEL" ]; then CODEX_CMD+=(-m "$CONFIG_MODEL"); fi
@@ -515,11 +559,17 @@ if [ "$AGENT" = "codex-exec" ]; then
   # pipe does not.
   CODEX_CMD+=(-)
 
-  set +e
-  "${CODEX_CMD[@]}" < "$PROMPT_FILE" \
-    > "$WORK_DIR/${REVIEWER}-transcript.log" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
-  EXIT_CODE=$?
-  set -e
+  attempt_codex_exec() {
+    # Clear the previous attempt's output too, for the same reason the branch
+    # clears a stale one up front: codex can exit 0 writing nothing.
+    rm -f "$WORK_DIR/${REVIEWER}-output.md"
+    set +e
+    "${CODEX_CMD[@]}" < "$PROMPT_FILE" \
+      > "$WORK_DIR/${REVIEWER}-transcript.log" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+    EXIT_CODE=$?
+    set -e
+  }
+  run_with_blank_retry attempt_codex_exec "codex exec"
 
   # A timeout here is usually the stdin hang above; say so rather than leaving
   # the operator to guess at an empty review.
@@ -555,21 +605,12 @@ fi
 # modify the plan doc or any file in the repo while reviewing.
 ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-permissions deny "${AGENT_ARGS[@]}" --file "$PROMPT_FILE")
 
-ATTEMPT=0
-while : ; do
+attempt_acpx() {
   set +e
   "${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
   EXIT_CODE=$?
   set -e
-
-  # Anything other than a clean-but-silent turn is this attempt's final answer.
-  if [ "$EXIT_CODE" -ne 0 ] || ! output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
-    break
-  fi
-  [ "$ATTEMPT" -lt "$RETRIES" ] || break
-
-  ATTEMPT=$((ATTEMPT + 1))
-  echo "[$REVIEWER] $AGENT ended its turn with no review; retrying ($ATTEMPT of $RETRIES)..." >&2
-done
+}
+run_with_blank_retry attempt_acpx "$AGENT"
 
 handle_invocation_result "acpx"

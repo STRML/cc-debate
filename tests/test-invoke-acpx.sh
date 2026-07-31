@@ -862,6 +862,64 @@ test_blank_output_does_not_log_review_received() {
   rm -rf "$work_dir"
 }
 
+# A terminal reset or a zero-width space is not whitespace by POSIX, so a review
+# containing only control bytes used to pass as delivered. Both verified to match
+# `[^[:space:]]`, which is why the gate tests for alphanumerics instead.
+test_control_bytes_only_response_is_empty() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\033[0m')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# Punctuation-only output is likewise not a review.
+test_punctuation_only_response_is_empty() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="---" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# codex-exec is a direct-CLI transport and used to bypass the retry loop entirely,
+# so a blank Codex turn cost the seat despite `retries` being configured.
+test_codex_exec_retries_a_blank_turn() {
+  local work_dir config log_file counter
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/codex-log.txt"
+  counter="$work_dir/attempts.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_LOG="$log_file" \
+  MOCK_CODEX_COUNTER_FILE="$counter" \
+  MOCK_CODEX_BLANK_ATTEMPTS=1 \
+  MOCK_CODEX_RESPONSE="Second time. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" || return 1
+  [ "$(grep -c "codex exec" "$log_file")" = "2" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
 # --- blank-output retry ---
 #
 # kimi-k3 through opencode ends a large share of its turns with no final message,
@@ -1178,6 +1236,9 @@ run_test "no retry when first attempt answers" test_no_retry_when_first_attempt_
 run_test "retries 0 disables retry" test_retries_zero_disables_retry
 run_test "hard failure is not retried" test_hard_failure_is_not_retried
 run_test "default allows one retry" test_default_allows_one_retry
+run_test "control-bytes-only response counts as empty" test_control_bytes_only_response_is_empty
+run_test "punctuation-only response counts as empty" test_punctuation_only_response_is_empty
+run_test "codex exec retries a blank turn" test_codex_exec_retries_a_blank_turn
 run_test "whitespace-only response counts as empty" test_whitespace_only_response_is_empty
 run_test "newline-only response counts as empty" test_newline_only_response_is_empty
 run_test "short real response still passes" test_short_real_response_still_passes

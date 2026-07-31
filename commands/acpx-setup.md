@@ -281,10 +281,18 @@ For system prompts, suggest unique review personas for each reviewer. Examples:
 
 For each configured reviewer:
 
-- **Non-antigravity, non-opus agents:** ensure a session exists and run a quick test via acpx:
+- **Session-mode acpx agents** (anything that is not `antigravity`, `opus` or
+  `codex-exec`, and whose reviewer does not set `mode: "exec"`): ensure a session
+  exists and run a quick test via acpx:
   ```bash
   $ACPX_CMD <agent> sessions ensure 2>&1
   echo "Reply with only the word PONG." | $ACPX_CMD --format quiet --approve-reads <agent>
+  ```
+- **`mode: "exec"` reviewers:** skip `sessions ensure` — a one-shot never opens a
+  session, and probing for one reports a working agent as broken. Probe with the
+  one-shot form instead:
+  ```bash
+  echo "Reply with only the word PONG." | $ACPX_CMD --format quiet --approve-reads <agent> exec
   ```
 - **antigravity agent:** probe using the Antigravity CLI directly (see below):
   ```bash
