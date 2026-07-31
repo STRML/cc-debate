@@ -11,6 +11,20 @@
     "Only the codex-exec branch reads `effort`, so setting it on an `-or` or `-k3`",
     "seat does nothing at all.",
     "",
+    "xhigh is the stronger model setting, but one xhigh run is not a superset of one",
+    "high run, because the sampling varies between passes. Measured once per seat on",
+    "one spec, so the direction is real and the magnitudes are noisy. Going from low",
+    "to xhigh paid for itself at the simplifier seat: it recovered findings that",
+    "previously took a sol seat to reach. Going from high to xhigh at the executor",
+    "seat came out lateral on that run, trading three new findings for two it stopped",
+    "catching, and those two were small certain bugs, the most valuable kind. The",
+    "lesson is not to stay low. It is that one pass of anything misses things.",
+    "",
+    "The stronger lever is not effort at all. Two seats given slightly DIFFERENT prompts",
+    "catch more than one seat run at a higher effort, because each prompt is blind to what",
+    "the other is looking for. The `union` preset runs the Executor twice that way, one seat",
+    "on control flow and one on state and lifecycle. Luna is cheap; use two angles.",
+    "",
     "The `antigravity` seat is the only non-OpenAI reviewer here. Keep a seat like it.",
     "Five correlated reviewers agreeing tells you less than you would think.",
     "",
@@ -44,6 +58,13 @@
       "model": "gpt-5.6-luna",
       "effort": "xhigh",
       "system_prompt": "You are The Executor — a runtime tracer with repo access. Find what breaks when this actually runs. Trace the failure paths: shell quoting and word splitting, exit codes that are swallowed or inverted, `set -e` interactions, race conditions between parallel steps, file I/O that assumes a path exists, commands that may not be installed, error propagation that stops at the wrong layer, and timing assumptions. Open the code and follow the control flow rather than judging the description. Ground every finding in a file:line you have read and quote the exact line. Report nothing you cannot tie to concrete inputs producing a wrong result."
+    },
+    "executor-b": {
+      "agent": "codex-exec",
+      "timeout": 600,
+      "model": "gpt-5.6-luna",
+      "effort": "xhigh",
+      "system_prompt": "You are The Executor, second pass, and you deliberately do NOT trace control flow. The other Executor seat already follows the happy path and the error branches. Your job is state and lifecycle, which is where the small certain bugs live. Look for: a file written with a trailing newline and read back without trimming it; a directory or path assumed to exist that only exists because some earlier step on some other machine created it; the very first run on a clean machine, where no config, cache, or credential is present yet; the second run, where a stale artifact from the first is still sitting there; a partial write or an interrupted step that leaves the system in a state no code path expects; two invocations racing for the same path; values that round-trip through a shell, a JSON encoder, or an env var and come back subtly different, especially quotes, backslashes and whitespace; and any ordering where a step deletes or moves something a later step still needs. Prefer the small, certain, cheap-to-fix bug over the large speculative one. Ground every finding in a file:line you have read and quote the exact line."
     },
     "auditor": {
       "agent": "codex-exec",
@@ -146,6 +167,16 @@
         "antigravity",
         "executor-or",
         "cartographer-or"
+      ],
+      "claude_reviewers": {}
+    },
+    "union": {
+      "description": "Two Executor seats with different prompts, one tracing control flow and one tracing state and lifecycle. Two angles catch more than one seat at a higher effort, because each prompt is blind to what the other looks for. Luna is cheap enough that this is the better lever.",
+      "reviewers": [
+        "executor",
+        "executor-b",
+        "auditor",
+        "antigravity"
       ],
       "claude_reviewers": {}
     }
