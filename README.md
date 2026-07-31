@@ -121,7 +121,11 @@ These have native Agent Client Protocol support. Install the CLI, and acpx handl
 
 ### The repo-aware seat: `codex-exec`
 
-Every agent above is prompt-only. They see the text you send them and nothing else — acpx makes no tool calls, and `agy` is deliberately run from a throwaway workspace because it has no read-only mode. That is the right design for reviewing a plan, but it means no reviewer can check a claim against the actual code.
+The agents above are prompt-only or close to it. `agy` is deliberately run from a throwaway workspace because it has no read-only mode, so it genuinely sees only the text you send.
+
+The acpx agents are not uniformly prompt-only, despite an earlier version of this section saying so. It depends on the backend: an opencode-backed agent does make read tool calls. What holds for all of them is the boundary, not the absence of tools — reviewers run under `--approve-reads --non-interactive-permissions deny`, which auto-approves reads inside the working directory and denies everything outside it. Measured: a read of a file in `$HOME` came back `The user rejected permission to use this specific tool call`; `README.md` in the repo was read normally.
+
+Either way, none of them can check a claim against code outside the repo, and several cannot run commands at all.
 
 The `codex-exec` agent can. It bypasses acpx and calls `codex exec` directly, which reads files and runs commands in your repo. Use it when you want a reviewer that verifies rather than infers.
 
@@ -150,9 +154,9 @@ Two mitigations are applied, and neither is a sandbox:
 
 **What is still reachable, stated plainly.** An absolute path works regardless of where `HOME` points, and an injected instruction can construct one. That includes `$CODEX_HOME` (`~/.codex`), which holds codex's own `auth.json` — the credential has to be reachable by codex or the seat cannot authenticate at all, so a command codex runs can reach it too. Redirecting `HOME` and scrubbing the environment raise the cost of the easy attacks; they do not contain a determined one. Nothing short of an OS-level sandbox would, and this plugin does not ship one.
 
-So: review your own branches with repo-aware seats, and use the `untrusted` preset for a diff from someone you do not trust. Every seat in it is prompt-only — no reviewer there can read the filesystem at all. That is the boundary. It is a rule you follow, not a control the tool enforces.
+So: review your own branches with repo-aware seats, and use the `untrusted` preset for a diff from someone you do not trust. Its seats **can** read files, but only inside the working directory: `--approve-reads` auto-approves reads there, and anything outside falls through to `--non-interactive-permissions deny`. Measured both ways — a read of `~/.debate-canary2` came back `The user rejected permission to use this specific tool call`, while `README.md` in the repo was read normally. Reading your repo is not the risk; your repo is what the reviewer is for. Reading `~/.aws` is, and that is the part that is blocked.
 
-Check any preset you substitute for it. `quick` is *not* a safe stand-in despite being small: it contains `executor`, which is a `codex-exec` seat. "Few reviewers" and "no filesystem access" are unrelated properties, and the sample's coherence test now enforces that `untrusted` contains no repo-aware agent.
+Check any preset you substitute for it. `quick` is *not* a safe stand-in despite being small: it contains `executor`, which is a `codex-exec` seat, and `codex exec` reads the whole filesystem. "Few reviewers" and "confined to the repo" are unrelated properties, and the sample's coherence test enforces that `untrusted` contains no repo-aware agent.
 
 Three implementation details, all handled for you.
 
