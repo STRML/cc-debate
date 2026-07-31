@@ -565,6 +565,40 @@ if [ "$AGENT" = "codex-exec" ]; then
     exit 1
   fi
 
+  # --- codex exec requires a git repo, and says so misleadingly ---
+  # Outside one it refuses with:
+  #   "Not inside a trusted directory and --skip-git-repo-check was not specified."
+  # That names `trust_level`, a real ~/.codex/config.toml key -- and setting it does
+  # NOT help. Verified against codex-cli 0.146.0: a directory carrying an explicit
+  # [projects."<path>"] trust_level = "trusted" entry is still refused when it is not
+  # a repo, while any repo is accepted with no trust entry at all. trust_level governs
+  # approval prompting; this gate is purely "is cwd inside a git work tree".
+  #
+  # It matters because debate-setup.sh deliberately falls back to PWD when not in a
+  # repo. A panel launched from a multi-repo workspace root therefore gets its work
+  # dir, runs its other seats, and loses only the codex ones -- to an error naming a
+  # config key that is set correctly and is irrelevant.
+  #
+  # --skip-git-repo-check is not passed by default: this seat already reads outside
+  # the repo (see the containment notes below), and aiming it at an arbitrary
+  # non-repo directory widens that with no boundary left to reason about.
+  if [ "${DEBATE_CODEX_ALLOW_NON_REPO:-}" != "1" ] \
+     && ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    echo "[$REVIEWER] cwd is not inside a git repo; codex exec refuses to run there." >&2
+    {
+      echo "The \`codex-exec\` seat requires the working directory to be inside a git repository."
+      echo
+      echo "\`$PWD\` is not one, so codex refuses with \"Not inside a trusted directory\" --"
+      echo "an error naming \`trust_level\`, which does not affect this check."
+      echo
+      echo "Run the review from a repository, or set \`DEBATE_CODEX_ALLOW_NON_REPO=1\` to pass"
+      echo "\`--skip-git-repo-check\` and let this seat read an arbitrary directory."
+    } > "$WORK_DIR/${REVIEWER}-output.md"
+    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    trap - EXIT
+    exit 1
+  fi
+
   echo "[$REVIEWER] Submitting to codex exec, repo-aware (timeout: ${TIMEOUT}s)..." >&2
 
   # --- Containing a repo-aware reviewer ---
@@ -630,6 +664,10 @@ if [ "$AGENT" = "codex-exec" ]; then
   # up a secret, and codex's session JSONL lands outside the work dir where cleanup
   # never reaches it — world-readable under a traversable home on a shared box.
   CODEX_CMD+=(codex exec --ephemeral -s read-only -o "$WORK_DIR/${REVIEWER}-output.md")
+  # Only reachable via the opt-in above; the default path has already returned.
+  if [ "${DEBATE_CODEX_ALLOW_NON_REPO:-}" = "1" ]; then
+    CODEX_CMD+=(--skip-git-repo-check)
+  fi
   # `if` rather than `&&`: under `set -e` a false test on the last command of
   # the branch would exit the script.
   if [ -n "$CONFIG_MODEL" ]; then CODEX_CMD+=(-m "$CONFIG_MODEL"); fi

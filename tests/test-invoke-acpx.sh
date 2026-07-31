@@ -577,6 +577,63 @@ test_opus_skips_session_ensure() {
 
 # --- codex exec (repo-aware seat) ---
 
+# Three-sided. Without the inside-a-repo half an implementation that refused
+# unconditionally would pass; without the opt-in half the escape hatch could be
+# documented and never wired to the flag.
+test_codex_exec_refuses_outside_git_repo() {
+  local work_dir config outside
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  outside=$(mktemp -d)      # a fresh mktemp -d is not inside a git work tree
+
+  ( cd "$outside" && \
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_CODEX_RESPONSE="should never run. VERDICT: APPROVED" \
+      bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null )
+
+  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "1" ] || { rm -rf "$outside"; return 1; }
+  grep -q "inside a git repository" "$work_dir/codex-exec-reviewer-output.md" \
+    || { rm -rf "$outside"; return 1; }
+  ! grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" \
+    || { rm -rf "$outside"; return 1; }
+
+  # the opt-in reaches codex AND actually carries --skip-git-repo-check
+  rm -f "$work_dir/codex-exec-reviewer-output.md" "$work_dir/codex-exec-reviewer-exit.txt"
+  ( cd "$outside" && \
+    SKIP_SESSION_CHECK=1 \
+    DEBATE_CODEX_ALLOW_NON_REPO=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_CODEX_LOG="$work_dir/codex-args.txt" \
+    MOCK_CODEX_RESPONSE="Reads fine. VERDICT: APPROVED" \
+      bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null )
+
+  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || { rm -rf "$outside"; return 1; }
+  grep -q -- "--skip-git-repo-check" "$work_dir/codex-args.txt" || { rm -rf "$outside"; return 1; }
+
+  rm -rf "$outside" "$work_dir"
+}
+
+test_codex_exec_inside_repo_passes_no_skip_flag() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  git rev-parse --is-inside-work-tree > /dev/null 2>&1 || return 1
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_LOG="$work_dir/codex-args.txt" \
+  MOCK_CODEX_RESPONSE="Reads fine. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" || return 1
+  ! grep -q -- "--skip-git-repo-check" "$work_dir/codex-args.txt" || return 1
+
+  rm -rf "$work_dir"
+}
+
 test_codex_exec_happy_path() {
   local work_dir config
   work_dir=$(setup_work_dir)
@@ -1380,6 +1437,8 @@ ln -sf "$MOCK_CODEX" "$SCRIPT_DIR/codex"
 chmod +x "$SCRIPT_DIR/codex"
 trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/agy" "$SCRIPT_DIR/claude" "$SCRIPT_DIR/codex"' EXIT
 
+run_test "codex exec refuses outside a git repo" test_codex_exec_refuses_outside_git_repo
+run_test "codex exec inside repo passes no skip flag" test_codex_exec_inside_repo_passes_no_skip_flag
 run_test "codex exec happy path" test_codex_exec_happy_path
 run_test "codex exec closes stdin" test_codex_exec_closes_stdin
 run_test "codex exec read-only + output flags" test_codex_exec_is_read_only_and_uses_output_flag
