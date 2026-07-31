@@ -573,9 +573,13 @@ if [ "$AGENT" = "codex-exec" ]; then
   #   Secret-shaped environment variables are dropped, closing the cheaper channel:
   #   env needs no filesystem guess at all.
   #
-  # The residual risk is real and cannot be closed here: do not point a repo-aware
-  # reviewer at a diff from someone you do not trust. Use a prompt-only preset for
-  # that. See README, "The repo-aware seat".
+  # The residual risk is real and cannot be closed here. An absolute path works
+  # wherever HOME points, and that includes CODEX_HOME below: codex's auth.json has
+  # to be reachable by codex or the seat cannot authenticate, so a command codex runs
+  # can reach it too. These two measures raise the cost of the easy attacks; only an
+  # OS-level sandbox would contain a determined one, and this ships none. Do not point
+  # a repo-aware reviewer at a diff from someone you do not trust — use a prompt-only
+  # preset. See README, "The repo-aware seat".
   CODEX_FAKE_HOME="$WORK_DIR/.codex-home-${REVIEWER}"
   mkdir -p "$CODEX_FAKE_HOME"
   chmod 700 "$CODEX_FAKE_HOME" 2>/dev/null || true
