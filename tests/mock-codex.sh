@@ -58,6 +58,17 @@ fi
 # Transcript noise on stdout, mirroring the real binary.
 echo "mock codex transcript: reading repo..."
 
+# Record the environment the reviewer actually runs under, so the containment
+# wrapper (redirected HOME, scrubbed secrets) is testable without a live model.
+if [ -n "${MOCK_CODEX_ENV_OUT:-}" ]; then
+  {
+    echo "HOME=${HOME:-}"
+    echo "CODEX_HOME=${CODEX_HOME:-}"
+    echo "SECRET_PRESENT=${DEBATE_TEST_API_KEY+yes}"
+    echo "BENIGN_PRESENT=${DEBATE_TEST_BENIGN+yes}"
+  } > "$MOCK_CODEX_ENV_OUT"
+fi
+
 # Simulate codex exiting 0 without writing a final message for its first N runs.
 # The real binary does this, which is why the branch clears a stale output file.
 BLANK_ATTEMPTS="${MOCK_CODEX_BLANK_ATTEMPTS:-0}"

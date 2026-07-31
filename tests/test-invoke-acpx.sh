@@ -1197,6 +1197,54 @@ test_unknown_mode_warns_and_uses_session() {
   rm -rf "$work_dir"
 }
 
+# --- repo-aware seat containment ---
+#
+# The repo-aware reviewer reads files, and its prompt carries a changeset that may
+# not be yours. `codex exec -s read-only` blocks writes, not reads outside the repo:
+# a canary in $HOME came back verbatim under it, and sandbox_permissions=[] did not
+# change that. Neither of the two mitigations below is a sandbox, and the residual
+# risk (absolute paths) stays open — but both are cheap and both are load-bearing,
+# so a regression in either should fail here rather than in someone's credentials.
+
+test_codex_exec_runs_with_redirected_home() {
+  local work_dir config env_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  env_out="$work_dir/seen-env.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_ENV_OUT="$env_out" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  # HOME must point inside the work dir, not at the real one.
+  grep -q "^HOME=${work_dir}/" "$env_out" || return 1
+  # ...and codex must still find its own config, or auth breaks.
+  grep -q "^CODEX_HOME=." "$env_out" || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_codex_exec_scrubs_secret_env_vars() {
+  local work_dir config env_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  env_out="$work_dir/seen-env.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_ENV_OUT="$env_out" \
+  DEBATE_TEST_API_KEY="should-not-survive" \
+  DEBATE_TEST_BENIGN="should-survive" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  grep -q "^SECRET_PRESENT=$" "$env_out" || { echo "  secret-shaped var reached codex"; return 1; }
+  # The scrub must be targeted, not a blanket wipe — codex needs a working env.
+  grep -q "^BENIGN_PRESENT=yes$" "$env_out" || { echo "  benign var was wrongly stripped"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
 # --- changeset fallback ---
 
 test_changeset_reviewed_when_no_plan() {
@@ -1284,6 +1332,8 @@ run_test "exec mode skips session ensure" test_exec_mode_skips_session_ensure
 run_test "exec mode repeatable across runs" test_exec_mode_repeatable_across_runs
 run_test "session mode is the default" test_session_mode_is_the_default
 run_test "unknown mode warns and uses session" test_unknown_mode_warns_and_uses_session
+run_test "codex exec runs with redirected HOME" test_codex_exec_runs_with_redirected_home
+run_test "codex exec scrubs secret env vars" test_codex_exec_scrubs_secret_env_vars
 run_test "changeset reviewed when no plan" test_changeset_reviewed_when_no_plan
 run_test "plan wins over changeset" test_plan_wins_over_changeset
 run_test "happy path" test_happy_path
