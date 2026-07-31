@@ -281,6 +281,11 @@ Then add to `~/.claude/debate-acpx.json`:
 
 Reviewers live in `~/.claude/debate-acpx.json`. This is the only file you need to edit to change your panel.
 
+A working panel to start from ships as [`debate-acpx.sample.json`](debate-acpx.sample.json): copy
+it to `~/.claude/debate-acpx.json` and edit. Most of its seats run on the local Codex CLI
+(`codex-exec`), which reads the repo and bills against a subscription rather than per token, with
+one Gemini seat for a non-OpenAI opinion and a `fallback` preset for when the Codex CLI breaks.
+
 ```json
 {
   "claude_reviewers": {

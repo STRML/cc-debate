@@ -132,6 +132,7 @@ test_new_files_exist() {
     commands/acpx-setup.md \
     tests/mock-agy.sh \
     tests/mock-claude.sh \
+    debate-acpx.sample.json \
     MIGRATING.md; do
     if [ ! -f "$PROJECT_DIR/$f" ]; then
       echo "  Missing: $f"
@@ -139,6 +140,52 @@ test_new_files_exist() {
     fi
   done
   [ "$missing" -eq 0 ]
+}
+
+# The sample config is what people copy. A preset naming a reviewer that is not
+# defined fails at run time with "preset selects no reviewers", which is a poor
+# way to learn your starting config was wrong.
+test_sample_config_is_coherent() {
+  local f="$PROJECT_DIR/debate-acpx.sample.json"
+  jq -e . "$f" > /dev/null 2>&1 || { echo "  not valid JSON"; return 1; }
+
+  local bad
+  bad=$(jq -r '
+    (.reviewers | keys) as $known
+    | .presets // {}
+    | to_entries[]
+    | . as $p
+    | ($p.value.reviewers // [])[]
+    | select(. as $r | $known | index($r) | not)
+    | "\($p.key) -> \(.)"
+  ' "$f")
+  if [ -n "$bad" ]; then
+    echo "  preset references an undefined reviewer: $bad"
+    return 1
+  fi
+
+  # Every reviewer needs an agent, or invoke-acpx.sh exits 1 on it.
+  bad=$(jq -r '.reviewers | to_entries[] | select(.value.agent == null) | .key' "$f")
+  if [ -n "$bad" ]; then
+    echo "  reviewer with no agent: $bad"
+    return 1
+  fi
+
+  # Reviewers sharing one acpx agent must be one-shot, or they collide in a
+  # single session and one of them returns blank. codex-exec and antigravity
+  # are direct-CLI agents and never get an acpx session, so they are exempt.
+  bad=$(jq -r '
+    [.reviewers | to_entries[]
+     | select(.value.agent as $a | ["codex-exec","antigravity","opus"] | index($a) | not)]
+    | group_by(.value.agent)[]
+    | select(length > 1)
+    | select(any(.[]; .value.mode != "exec"))
+    | .[0].value.agent
+  ' "$f")
+  if [ -n "$bad" ]; then
+    echo "  agent shared by reviewers without mode:exec: $bad"
+    return 1
+  fi
 }
 
 test_new_scripts_executable() {
@@ -242,6 +289,7 @@ run_test "no probe-model references" test_no_probe_model_refs
 run_test "no old work dir paths" test_no_old_work_dir_in_active_files
 run_test "deleted files gone" test_deleted_files_dont_exist
 run_test "new files exist" test_new_files_exist
+run_test "sample config is coherent" test_sample_config_is_coherent
 run_test "new scripts executable" test_new_scripts_executable
 run_test "all scripts parse" test_scripts_parse
 run_test "skeptic bodies single-source" test_skeptic_bodies_single_source
