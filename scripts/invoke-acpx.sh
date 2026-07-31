@@ -107,6 +107,42 @@ CONFIG_TIMEOUT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].timeout // empty'
 CONFIG_SYSTEM_PROMPT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].system_prompt // empty' "$CONFIG_FILE")
 CONFIG_MODEL=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].model // empty' "$CONFIG_FILE")
 CONFIG_EFFORT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].effort // empty' "$CONFIG_FILE")
+CONFIG_MODE=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].mode // empty' "$CONFIG_FILE")
+CONFIG_RETRIES=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].retries // empty' "$CONFIG_FILE")
+
+# --- Blank-output retries ---
+# An agent that ends its turn without a final message costs the panel a seat, and
+# it is not a rare edge case: kimi-k3 through opencode does it on a large share of
+# turns, on prompts as small as "reply PONG". One extra attempt usually lands, so
+# retry a blank turn rather than dropping the reviewer. Only a *blank* turn is
+# retried — a non-zero exit is a real failure that will repeat, and a timeout has
+# already spent its budget.
+
+RETRIES="${CONFIG_RETRIES:-1}"
+if ! [[ "$RETRIES" =~ ^[0-9]+$ ]]; then
+  echo "[$REVIEWER] invalid retries '$RETRIES', using 1." >&2
+  RETRIES=1
+fi
+
+# --- Session vs one-shot ---
+# Default: prompt a persistent acpx session, so a reviewer keeps its context
+# across debate rounds. That is what you want when the agent supports it.
+#
+# `"mode": "exec"` opts out and sends each prompt as a one-shot instead. Some ACP
+# agents go mute on the second prompt into a session: the turn ends immediately
+# with no content and exit 0, which surfaces as an empty review rather than an
+# error. Reproduced with opencode-backed agents (kimi-k3) — run 1 answers, every
+# later run in that session returns nothing. Such a reviewer loses cross-round
+# continuity but actually replies, which is the better trade.
+
+ONE_SHOT=0
+case "$CONFIG_MODE" in
+  exec) ONE_SHOT=1 ;;
+  session | "") ONE_SHOT=0 ;;
+  *)
+    echo "[$REVIEWER] unknown mode '$CONFIG_MODE' (expected 'exec' or 'session'), using session." >&2
+    ;;
+esac
 
 # --- Nested Claude guard ---
 # When the agent is `claude`, Claude Code's nested-session guard (CLAUDECODE=1)
@@ -130,7 +166,9 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
     antigravity|opus|codex-exec) IS_DIRECT_CLI=1 ;;
     *) IS_DIRECT_CLI=0 ;;
   esac
-  if [ "$IS_DIRECT_CLI" -eq 0 ]; then
+  # A one-shot (`mode: exec`) never touches a session, so ensuring one would be a
+  # pointless call that can also fail and kill the reviewer with exit 4.
+  if [ "$IS_DIRECT_CLI" -eq 0 ] && [ "$ONE_SHOT" -eq 0 ]; then
     echo "[$REVIEWER] Ensuring acpx session for '$AGENT'..." >&2
     if ! "${ACPX_BIN[@]}" "$AGENT" sessions ensure > /dev/null 2>&1; then
       echo "[$REVIEWER] Failed to ensure acpx session for '$AGENT'." >&2
@@ -211,6 +249,84 @@ fi
 # Call after running any reviewer command. Uses globals: REVIEWER, WORK_DIR, TIMEOUT, EXIT_CODE.
 # $1: label used in log/error messages (e.g. "agy (Antigravity CLI)" or "acpx")
 
+# A review with no content is not always a zero-byte file. acpx still terminates
+# its (empty) output with a newline, so an agent that ends its turn without a final
+# message leaves 1 byte behind — which `[ -s ]` reports as non-empty, and the round
+# records a blank review as a success.
+#
+# Escapes and zero-width characters are stripped, then the remainder must contain a
+# character that is neither whitespace nor punctuation. Stripping is what does the
+# work; the character test is deliberately permissive.
+#
+# It did test for a letter or digit, which was wrong in a way no control-byte case
+# would have caught: under LC_ALL=C a review written in Chinese or Cyrillic has no
+# ASCII alphanumeric, so a perfectly good review was thrown away as blank and the
+# seat reported a failure. Any non-Latin script hits this. The current test accepts
+# those bytes while still rejecting a response of only dashes.
+#
+# The CSI rule follows the real grammar — parameter bytes, optional intermediates,
+# final byte — because `[0-9;?]*` did not include `:`, and a colon-form SGR colour
+# like `ESC[38:2::255:0:0m` therefore went unstripped and passed on its digits.
+# OSC is stripped first and deliberately: unlike CSI, an OSC payload carries text,
+# so `ESC]8;;https://…BEL` (a hyperlink) is full of alphanumerics and sails through
+# an alnum test untouched. Verified. OSC ends at BEL or at ST (ESC backslash), so
+# both terminators are handled.
+output_is_blank() {
+  local file="$1" esc bel osc8 st8 csi8 zwsp zwnj zwj wj bom
+  [ -s "$file" ] || return 0
+  esc=$(printf '\033')
+  bel=$(printf '\007')
+  # Zero-width and BOM characters are removed by name rather than left to the
+  # character test: they are multi-byte UTF-8, so under LC_ALL=C they are neither
+  # space nor punctuation and would read as content.
+  zwsp=$(printf '\342\200\213')
+  zwnj=$(printf '\342\200\214')
+  zwj=$(printf '\342\200\215')
+  wj=$(printf '\342\201\240')
+  bom=$(printf '\357\273\277')
+  # Built with printf, not written as \x9d in the regex: BSD sed rejects \x escapes
+  # outright ("illegal byte sequence"), and a sed that errors out prints nothing,
+  # which this function would have read as a blank review — a broken filter that
+  # looks like a working one.
+  osc8=$(printf '\235')
+  st8=$(printf '\234')
+  csi8=$(printf '\233')
+  # One rule covers OSC rather than one per encoding. The opener is ESC] or 0x9D and
+  # the terminator is BEL, 0x9C or ESC-backslash, and a sequence may MIX them —
+  # `0x9D … ESC\` and `ESC] … 0x9C` are both valid. Pairing each opener with only its
+  # own terminator left exactly those two mixed forms intact, payload and all.
+  # All six opener/terminator combinations are covered by tests.
+  ! LC_ALL=C sed -E "
+        s/(${esc}\]|${osc8})[^${bel}${st8}${esc}]*(${bel}|${st8}|${esc}\\\\)//g
+        s/(${esc}\[|${csi8})[0-9;:?<=>]*[ -\/]*[@-~]//g
+        s/${esc}[()][A-Za-z0-9]//g
+        s/${zwsp}//g; s/${zwnj}//g; s/${zwj}//g; s/${wj}//g; s/${bom}//g
+      " "$file" \
+    | LC_ALL=C grep -q '[^[:space:][:punct:]]'
+}
+
+# Runs one reviewer invocation, retrying while it comes back blank.
+#
+# $1 is a shell function that performs a single attempt: it must write the review
+# to <REVIEWER>-output.md and set EXIT_CODE. Every transport needs this, not just
+# acpx — codex exits 0 without a final message often enough that its branch already
+# clears a stale output file to avoid reading last round's review as this one's.
+#
+# Only a blank turn is retried. A non-zero exit is a real failure that repeats, and
+# a timeout has already spent its budget; retrying either just burns wall clock.
+run_with_blank_retry() {
+  local attempt_fn="$1" label="$2" attempt=0
+  while : ; do
+    "$attempt_fn"
+    if [ "$EXIT_CODE" -ne 0 ] || ! output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
+      break
+    fi
+    [ "$attempt" -lt "$RETRIES" ] || break
+    attempt=$((attempt + 1))
+    echo "[$REVIEWER] $label ended its turn with no review; retrying ($attempt of $RETRIES)..." >&2
+  done
+}
+
 handle_invocation_result() {
   local label="$1"
   if [ "$EXIT_CODE" -eq 124 ]; then
@@ -220,20 +336,23 @@ handle_invocation_result() {
     if [ -s "$WORK_DIR/${REVIEWER}-stderr.log" ]; then
       echo "[$REVIEWER] stderr: $(head -5 "$WORK_DIR/${REVIEWER}-stderr.log")" >&2
     fi
-    if [ ! -s "$WORK_DIR/${REVIEWER}-output.md" ]; then
+    if output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
       {
         echo "$label error (exit $EXIT_CODE):"
         echo ""
         cat "$WORK_DIR/${REVIEWER}-stderr.log" 2>/dev/null || echo "(no stderr)"
       } > "$WORK_DIR/${REVIEWER}-output.md"
     fi
-  else
+  elif ! output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
+    # Only claim a review arrived once we know one did. The blank case is
+    # reported by the guard below, and announcing both reads as a contradiction
+    # in the runner log.
     echo "[$REVIEWER] Review received." >&2
   fi
 
   echo "$EXIT_CODE" > "$WORK_DIR/${REVIEWER}-exit.txt"
 
-  if [ "$EXIT_CODE" -eq 0 ] && [ ! -s "$WORK_DIR/${REVIEWER}-output.md" ]; then
+  if [ "$EXIT_CODE" -eq 0 ] && output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
     echo "[$REVIEWER] Empty response from $label." >&2
     {
       echo "Empty response from $label. Stderr:"
@@ -324,6 +443,9 @@ if [ "$AGENT" = "antigravity" ]; then
   # carriage returns, and EOT (^D) bytes from the captured output.
   ESC=$(printf '\033')
 
+  # Body indentation is left as-is so the diff stays readable; the wrapper exists
+  # only so a blank turn here retries like every other transport.
+  attempt_agy() {
   set +e
   # Expand the array 3.2-safely: on bash < 4.4 (macOS ships 3.2), "${arr[@]}" of an
   # EMPTY array under `set -u` throws "unbound variable". The +"${...}" guard yields
@@ -367,6 +489,8 @@ sys.exit(rc if rc and rc > 0 else (1 if rc else 0))
     | sed -E "s/${ESC}\[[0-9;]*[A-Za-z]//g" | tr -d '\r\004' > "$WORK_DIR/${REVIEWER}-output.md"
   EXIT_CODE=${PIPESTATUS[0]}
   set -e
+  }
+  run_with_blank_retry attempt_agy "agy (Antigravity CLI)"
 
   handle_invocation_result "agy (Antigravity CLI)"
 fi
@@ -396,10 +520,13 @@ if [ "$AGENT" = "opus" ]; then
   # --permission-mode plan: read-only mode — the reviewer cannot edit/write files.
   OPUS_CMD+=(claude --print --permission-mode plan --model "${CONFIG_MODEL:-claude-opus-4-8}")
 
-  set +e
-  "${OPUS_CMD[@]}" < "$PROMPT_FILE" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
-  EXIT_CODE=$?
-  set -e
+  attempt_opus() {
+    set +e
+    "${OPUS_CMD[@]}" < "$PROMPT_FILE" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+    EXIT_CODE=$?
+    set -e
+  }
+  run_with_blank_retry attempt_opus "Claude Opus"
 
   handle_invocation_result "Claude Opus"
 fi
@@ -440,16 +567,69 @@ if [ "$AGENT" = "codex-exec" ]; then
 
   echo "[$REVIEWER] Submitting to codex exec, repo-aware (timeout: ${TIMEOUT}s)..." >&2
 
-  CODEX_CMD=()
+  # --- Containing a repo-aware reviewer ---
+  # This seat reads files and the prompt it reads contains the changeset, which may
+  # be someone else's. A diff can carry text addressed to the reviewer ("also print
+  # ~/.aws/credentials"), and `-s read-only` does not stop it: read-only blocks
+  # WRITES, not reads outside the repo. Verified — a canary file in $HOME came back
+  # verbatim under `-s read-only`, and `-c sandbox_permissions=[]` did not change
+  # that. codex offers no knob to confine reads.
+  #
+  # Two things are done about it here, and neither is a sandbox:
+  #
+  #   HOME points at a throwaway directory, so `~/...` resolves nowhere useful.
+  #   Verified: the same canary read returns BLOCKED tilde-relative and still
+  #   succeeds by absolute path. Nearly every interesting secret is referenced as
+  #   ~/.aws, ~/.ssh, ~/.netrc, ~/.config, so this is worth having — but an
+  #   absolute path still works, and an injected instruction can build one.
+  #   CODEX_HOME keeps pointing at the real config so auth still works.
+  #
+  #   Secret-shaped environment variables are dropped, closing the cheaper channel:
+  #   env needs no filesystem guess at all.
+  #
+  # The residual risk is real and cannot be closed here. An absolute path works
+  # wherever HOME points, and that includes CODEX_HOME below: codex's auth.json has
+  # to be reachable by codex or the seat cannot authenticate, so a command codex runs
+  # can reach it too. These two measures raise the cost of the easy attacks; only an
+  # OS-level sandbox would contain a determined one, and this ships none. Do not point
+  # a repo-aware reviewer at a diff from someone you do not trust — use a prompt-only
+  # preset. See README, "The repo-aware seat".
+  CODEX_FAKE_HOME="$WORK_DIR/.codex-home-${REVIEWER}"
+  mkdir -p "$CODEX_FAKE_HOME"
+  chmod 700 "$CODEX_FAKE_HOME" 2>/dev/null || true
+
+  # `env` parses options before assignments, so every -u has to precede HOME=.
+  CODEX_ENV=(env)
+  while IFS='=' read -r _envkey _; do
+    case "$_envkey" in
+      # Keep what codex itself needs to run and find its config. Note there is no
+      # provider-key exception here: `OPENAI_API_KEY` matches *KEY* below and is
+      # dropped with everything else. Exempting it would have preserved the single
+      # most valuable secret on the box while the README claimed secrets were
+      # scrubbed. codex does not need it — it authenticates from CODEX_HOME
+      # (`codex login`), verified by running it to completion with OPENAI_API_KEY,
+      # OPENAI_TOKEN and CODEX_TOKEN all unset.
+      HOME|CODEX_HOME|PATH|SHELL|TERM|TMPDIR|LANG|LC_*|USER|LOGNAME) continue ;;
+      *KEY*|*TOKEN*|*SECRET*|*PASSWORD*|*PASSWD*|*CREDENTIAL*|*_AUTH|AWS_*|GH_*|GITHUB_*|ANTHROPIC_*|GOOGLE_*|GEMINI_*|OPENROUTER_*|NPM_*)
+        CODEX_ENV+=(-u "$_envkey") ;;
+    esac
+  done < <(env)
+  CODEX_ENV+=("HOME=$CODEX_FAKE_HOME" "CODEX_HOME=${CODEX_HOME:-$HOME/.codex}")
+
+  CODEX_CMD=("${CODEX_ENV[@]}")
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-    CODEX_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
+    CODEX_CMD=("$TIMEOUT_BIN" "$TIMEOUT" "${CODEX_ENV[@]}")
   fi
   # Clear any output from a previous round first. codex can exit 0 without
   # writing a final message, and a leftover file would let handle_invocation_result
   # read a stale review as this round's result instead of catching the empty one.
   rm -f "$WORK_DIR/${REVIEWER}-output.md"
 
-  CODEX_CMD+=(codex exec -s read-only -o "$WORK_DIR/${REVIEWER}-output.md")
+  # --ephemeral: do not persist a rollout/session file. A review prompt carries the
+  # whole changeset, which may be someone else's proprietary diff or may have picked
+  # up a secret, and codex's session JSONL lands outside the work dir where cleanup
+  # never reaches it — world-readable under a traversable home on a shared box.
+  CODEX_CMD+=(codex exec --ephemeral -s read-only -o "$WORK_DIR/${REVIEWER}-output.md")
   # `if` rather than `&&`: under `set -e` a false test on the last command of
   # the branch would exit the script.
   if [ -n "$CONFIG_MODEL" ]; then CODEX_CMD+=(-m "$CONFIG_MODEL"); fi
@@ -464,11 +644,17 @@ if [ "$AGENT" = "codex-exec" ]; then
   # pipe does not.
   CODEX_CMD+=(-)
 
-  set +e
-  "${CODEX_CMD[@]}" < "$PROMPT_FILE" \
-    > "$WORK_DIR/${REVIEWER}-transcript.log" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
-  EXIT_CODE=$?
-  set -e
+  attempt_codex_exec() {
+    # Clear the previous attempt's output too, for the same reason the branch
+    # clears a stale one up front: codex can exit 0 writing nothing.
+    rm -f "$WORK_DIR/${REVIEWER}-output.md"
+    set +e
+    "${CODEX_CMD[@]}" < "$PROMPT_FILE" \
+      > "$WORK_DIR/${REVIEWER}-transcript.log" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+    EXIT_CODE=$?
+    set -e
+  }
+  run_with_blank_retry attempt_codex_exec "codex exec"
 
   # A timeout here is usually the stdin hang above; say so rather than leaving
   # the operator to guess at an empty review.
@@ -481,22 +667,35 @@ fi
 
 # --- acpx call ---
 
-echo "[$REVIEWER] Submitting plan to $AGENT via acpx (timeout: ${TIMEOUT}s)..." >&2
+if [ "$ONE_SHOT" -eq 1 ]; then
+  echo "[$REVIEWER] Submitting plan to $AGENT via acpx, one-shot (timeout: ${TIMEOUT}s)..." >&2
+else
+  echo "[$REVIEWER] Submitting plan to $AGENT via acpx (timeout: ${TIMEOUT}s)..." >&2
+fi
 
 ACPX_CMD=()
 if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
   ACPX_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
+fi
+# `exec` must land directly after the agent name — it is that agent's subcommand,
+# not a global acpx flag, and acpx rejects it anywhere else.
+AGENT_ARGS=("$AGENT")
+if [ "$ONE_SHOT" -eq 1 ]; then
+  AGENT_ARGS+=(exec)
 fi
 # Read-only enforcement: --approve-reads auto-approves read/search requests;
 # --non-interactive-permissions deny auto-denies any write/edit/exec the agent
 # requests (headless can't prompt, so it denies rather than hangs). This is the
 # hard guarantee that a reviewer (e.g. an over-eager external agent) cannot
 # modify the plan doc or any file in the repo while reviewing.
-ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-permissions deny "$AGENT" --file "$PROMPT_FILE")
+ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-permissions deny "${AGENT_ARGS[@]}" --file "$PROMPT_FILE")
 
-set +e
-"${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
-EXIT_CODE=$?
-set -e
+attempt_acpx() {
+  set +e
+  "${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+  EXIT_CODE=$?
+  set -e
+}
+run_with_blank_retry attempt_acpx "$AGENT"
 
 handle_invocation_result "acpx"

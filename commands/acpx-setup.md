@@ -256,6 +256,18 @@ Built-in agents do not need `model_id`. OpenRouter agents (created via Step 2c) 
 
 Set timeout to 240-300 for larger/slower agents, 120 for faster ones.
 
+`mode` is optional and defaults to `session`. Set `"mode": "exec"` when an agent
+answers the first prompt into a session and then returns an empty turn for every
+later one — the round records a blank review with exit 0 rather than an error. Seen
+with opencode-backed agents such as `kimi-k3`. The Step 3 probe below only ever sends
+one prompt, so it cannot detect this; the symptom is a reviewer that goes blank on
+round 2 of a real debate.
+
+`retries` is also optional and defaults to 1. It covers a different failure: an
+agent that ends a turn with no final message at all, session or not. Raise it to
+2-3 for an agent you know to be flaky (`kimi-k3` through opencode qualifies), or
+set 0 to turn retrying off. Errors and timeouts are never retried.
+
 For system prompts, suggest unique review personas for each reviewer. Examples:
 - **The Executor** — shell correctness, exit codes, race conditions, file I/O
 - **The Architect** — structural integrity, over-engineering, missing phases, graceful degradation
@@ -269,10 +281,18 @@ For system prompts, suggest unique review personas for each reviewer. Examples:
 
 For each configured reviewer:
 
-- **Non-antigravity, non-opus agents:** ensure a session exists and run a quick test via acpx:
+- **Session-mode acpx agents** (anything that is not `antigravity`, `opus` or
+  `codex-exec`, and whose reviewer does not set `mode: "exec"`): ensure a session
+  exists and run a quick test via acpx:
   ```bash
   $ACPX_CMD <agent> sessions ensure 2>&1
   echo "Reply with only the word PONG." | $ACPX_CMD --format quiet --approve-reads <agent>
+  ```
+- **`mode: "exec"` reviewers:** skip `sessions ensure` — a one-shot never opens a
+  session, and probing for one reports a working agent as broken. Probe with the
+  one-shot form instead:
+  ```bash
+  echo "Reply with only the word PONG." | $ACPX_CMD --format quiet --approve-reads <agent> exec
   ```
 - **antigravity agent:** probe using the Antigravity CLI directly (see below):
   ```bash

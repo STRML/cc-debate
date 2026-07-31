@@ -50,6 +50,30 @@ setup_config() {
       "model": "gpt-5.6-sol",
       "effort": "high",
       "system_prompt": "You are The Auditor."
+    },
+    "oneshot-reviewer": {
+      "agent": "kimi-k3",
+      "timeout": 60,
+      "mode": "exec",
+      "system_prompt": "You are The Cartographer."
+    },
+    "retry-reviewer": {
+      "agent": "codex",
+      "timeout": 60,
+      "retries": 2,
+      "system_prompt": "You retry."
+    },
+    "no-retry-reviewer": {
+      "agent": "codex",
+      "timeout": 60,
+      "retries": 0,
+      "system_prompt": "You never retry."
+    },
+    "bad-mode-reviewer": {
+      "agent": "codex",
+      "timeout": 60,
+      "mode": "sesion",
+      "system_prompt": "You have a typo in your mode."
     }
   }
 }
@@ -766,6 +790,538 @@ test_codex_exec_handles_oversized_prompt() {
   rm -rf "$work_dir"
 }
 
+# An agent that ends its turn with no final message still gets a trailing newline
+# from acpx, so the output file is 1 byte and `[ -s ]` calls it non-empty. Before
+# this was caught, the round logged "Review received", wrote exit 0, and handed the
+# synthesizer a blank review.
+test_whitespace_only_response_is_empty() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="   " \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "1" ] || return 1
+  grep -q "Empty response" "$work_dir/test-reviewer-output.md" || return 1
+
+  rm -rf "$work_dir"
+}
+
+# Same trap for a response that is only newlines.
+test_newline_only_response_is_empty() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE=$'\n\n' \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# The blank check must not swallow a real one-line review.
+test_short_real_response_still_passes() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="OK" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "^OK$" "$work_dir/test-reviewer-output.md" || return 1
+
+  rm -rf "$work_dir"
+}
+
+# The runner log must not say a review arrived and then say it was empty. An
+# operator scanning stderr for "Review received" would count a seat that failed.
+test_blank_output_does_not_log_review_received() {
+  local work_dir config stderr_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  stderr_out="$work_dir/invoke-stderr.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>"$stderr_out" || true
+
+  grep -q "Empty response" "$stderr_out" || return 1
+  grep -q "Review received" "$stderr_out" && return 1
+
+  rm -rf "$work_dir"
+}
+
+# A terminal reset or a zero-width space is not whitespace by POSIX, so a review
+# containing only control bytes used to pass as delivered. Both verified to match
+# `[^[:space:]]`, which is why the gate tests for alphanumerics instead.
+test_control_bytes_only_response_is_empty() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\033[0m')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# OSC payloads carry text, so a lone hyperlink escape is full of alphanumerics and
+# survives the alnum test unless OSC is stripped specifically. CSI has no payload,
+# which is why stripping it was not enough.
+test_osc_only_response_is_empty() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\033]8;;https://example.invalid/x\007\033]8;;\007')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# OSC openers (ESC] and 0x9D) and terminators (BEL, 0x9C, ESC-backslash) combine
+# freely, including mixed 7-bit/8-bit. Pairing each opener with only its own
+# terminator left two live bypasses, so every combination is checked here.
+test_osc_all_encodings_count_as_empty() {
+  local work_dir config combo n=0
+  for combo in \
+    '\033]8;;https://example.invalid/x\007' \
+    '\033]8;;https://example.invalid/x\033\\' \
+    '\033]8;;https://example.invalid/x\234' \
+    '\2358;;https://example.invalid/x\234' \
+    '\2358;;https://example.invalid/x\007' \
+    '\2358;;https://example.invalid/x\033\\'
+  do
+    n=$((n + 1))
+    work_dir=$(setup_work_dir)
+    config=$(setup_config "$work_dir")
+
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_ACPX_RESPONSE="$(printf "$combo")" \
+      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
+      echo "  OSC encoding $n was accepted as a delivered review"
+      rm -rf "$work_dir"
+      return 1
+    fi
+    rm -rf "$work_dir"
+  done
+}
+
+# A review that merely mentions a URL must survive the OSC strip.
+test_review_containing_a_url_still_passes() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="See https://example.invalid/x for context. VERDICT: REVISE" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "VERDICT: REVISE" "$work_dir/no-retry-reviewer-output.md" || return 1
+
+  rm -rf "$work_dir"
+}
+
+# A colon-form SGR colour is a control sequence whose parameter bytes include ':'.
+# A CSI pattern of [0-9;?]* does not match it, and its digits then read as content.
+test_colon_sgr_only_response_is_empty() {
+  local work_dir config combo
+  for combo in '\033[38:2::255:0:0m' '\23338:2::255:0:0m'; do
+    work_dir=$(setup_work_dir)
+    config=$(setup_config "$work_dir")
+
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_ACPX_RESPONSE="$(printf "$combo")" \
+      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
+      echo "  colon-form SGR accepted as a delivered review"
+      rm -rf "$work_dir"; return 1
+    fi
+    rm -rf "$work_dir"
+  done
+}
+
+# A review needs no ASCII at all. Testing for [[:alnum:]] under LC_ALL=C threw away
+# every review written in a non-Latin script and reported the seat as failed.
+test_non_latin_review_is_not_empty() {
+  local work_dir config script
+  for script in '\345\220\214\346\204\217\343\200\202' '\320\236\321\210\320\270\320\261\320\272\320\260'; do
+    work_dir=$(setup_work_dir)
+    config=$(setup_config "$work_dir")
+
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_ACPX_RESPONSE="$(printf "$script")" \
+      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+
+    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
+      echo "  a non-Latin review was discarded as empty"
+      rm -rf "$work_dir"; return 1
+    fi
+    rm -rf "$work_dir"
+  done
+}
+
+# Punctuation-only output is likewise not a review.
+test_punctuation_only_response_is_empty() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="---" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# codex-exec is a direct-CLI transport and used to bypass the retry loop entirely,
+# so a blank Codex turn cost the seat despite `retries` being configured.
+test_codex_exec_retries_a_blank_turn() {
+  local work_dir config log_file counter
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/codex-log.txt"
+  counter="$work_dir/attempts.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_LOG="$log_file" \
+  MOCK_CODEX_COUNTER_FILE="$counter" \
+  MOCK_CODEX_BLANK_ATTEMPTS=1 \
+  MOCK_CODEX_RESPONSE="Second time. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" || return 1
+  [ "$(grep -c "codex exec" "$log_file")" = "2" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# --- blank-output retry ---
+#
+# kimi-k3 through opencode ends a large share of its turns with no final message,
+# on prompts as small as "reply PONG". One blank turn should cost a retry, not the
+# reviewer's seat on the panel.
+
+test_blank_output_is_retried_then_succeeds() {
+  local work_dir config log_file counter
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+  counter="$work_dir/attempts.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_COUNTER_FILE="$counter" \
+  MOCK_ACPX_BLANK_ATTEMPTS=1 \
+  MOCK_ACPX_RESPONSE="Second time lucky. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "retry-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/retry-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "VERDICT: APPROVED" "$work_dir/retry-reviewer-output.md" || return 1
+  # Exactly two prompt calls: the blank one and the retry.
+  [ "$(grep -c -- "--file" "$log_file")" = "2" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_retries_are_bounded() {
+  local work_dir config log_file counter
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+  counter="$work_dir/attempts.txt"
+
+  # Blank forever. retries=2 means 3 prompt calls total, then give up.
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_COUNTER_FILE="$counter" \
+  MOCK_ACPX_BLANK_ATTEMPTS=99 \
+    bash "$INVOKE" "$config" "$work_dir" "retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/retry-reviewer-exit.txt")" = "1" ] || return 1
+  grep -q "Empty response" "$work_dir/retry-reviewer-output.md" || return 1
+  [ "$(grep -c -- "--file" "$log_file")" = "3" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_no_retry_when_first_attempt_answers() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_RESPONSE="Answered first time. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "retry-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/retry-reviewer-exit.txt")" = "0" ] || return 1
+  [ "$(grep -c -- "--file" "$log_file")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_retries_zero_disables_retry() {
+  local work_dir config log_file counter
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+  counter="$work_dir/attempts.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_COUNTER_FILE="$counter" \
+  MOCK_ACPX_BLANK_ATTEMPTS=99 \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
+  [ "$(grep -c -- "--file" "$log_file")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# A crashed agent is not a quiet one. Retrying a real error burns the timeout
+# budget on something that will fail the same way.
+test_hard_failure_is_not_retried() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_EXIT=1 \
+  MOCK_ACPX_RESPONSE="" \
+  MOCK_ACPX_STDERR="agent exploded" \
+    bash "$INVOKE" "$config" "$work_dir" "retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/retry-reviewer-exit.txt")" = "1" ] || return 1
+  [ "$(grep -c -- "--file" "$log_file")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# Default when a reviewer sets no `retries` at all: one retry, so a single blank
+# turn does not cost the seat.
+test_default_allows_one_retry() {
+  local work_dir config log_file counter
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+  counter="$work_dir/attempts.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_COUNTER_FILE="$counter" \
+  MOCK_ACPX_BLANK_ATTEMPTS=99 \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "1" ] || return 1
+  [ "$(grep -c -- "--file" "$log_file")" = "2" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# --- one-shot (mode: exec) ---
+#
+# Some ACP agents go mute on the second prompt into a persistent session: the turn
+# ends immediately with no content, exit 0, empty output file. Reproduced against
+# opencode-backed agents (kimi-k3), where run 1 answers and every later run in the
+# same session returns nothing. `mode: "exec"` opts a reviewer out of the session.
+
+test_exec_mode_uses_exec_subcommand() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_RESPONSE="One-shot. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "oneshot-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/oneshot-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "VERDICT: APPROVED" "$work_dir/oneshot-reviewer-output.md" || return 1
+
+  # `exec` must sit immediately after the agent name, before --file.
+  grep -q "kimi-k3 exec --file" "$log_file" || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_exec_mode_skips_session_ensure() {
+  # A one-shot needs no session, so a failing `sessions ensure` must not sink it.
+  # Deliberately does NOT set SKIP_SESSION_CHECK.
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_SESSION_ENSURE_EXIT=1 \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_RESPONSE="One-shot. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "oneshot-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/oneshot-reviewer-exit.txt")" = "0" ] || return 1
+  ! grep -q "sessions ensure" "$log_file" 2>/dev/null || return 1
+
+  rm -rf "$work_dir"
+}
+
+# Two successive runs must both produce a review. Under the session path the
+# second one comes back empty for opencode-backed agents; the mock cannot
+# reproduce that, so this asserts the invariant that matters: neither run
+# touches a shared session.
+test_exec_mode_repeatable_across_runs() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  for _ in 1 2; do
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_ACPX_SESSION_ENSURE_EXIT=1 \
+    MOCK_ACPX_LOG="$log_file" \
+    MOCK_ACPX_RESPONSE="Round output. VERDICT: REVISE" \
+      bash "$INVOKE" "$config" "$work_dir" "oneshot-reviewer" 2>/dev/null
+
+    [ "$(cat "$work_dir/oneshot-reviewer-exit.txt")" = "0" ] || return 1
+    [ -s "$work_dir/oneshot-reviewer-output.md" ] || return 1
+  done
+
+  [ "$(grep -c "kimi-k3 exec --file" "$log_file")" = "2" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# Default is unchanged: no `mode` key means the persistent session, as before.
+test_session_mode_is_the_default() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "sessions ensure" "$log_file" || return 1
+  grep -q "codex exec --file" "$log_file" && return 1
+
+  rm -rf "$work_dir"
+}
+
+# A typo'd mode must be loud, not silently treated as one-shot or as a session.
+test_unknown_mode_warns_and_uses_session() {
+  local work_dir config stderr_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  stderr_out="$work_dir/invoke-stderr.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+    bash "$INVOKE" "$config" "$work_dir" "bad-mode-reviewer" 2>"$stderr_out"
+
+  [ "$(cat "$work_dir/bad-mode-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "unknown mode 'sesion'" "$stderr_out" || return 1
+
+  rm -rf "$work_dir"
+}
+
+# --- repo-aware seat containment ---
+#
+# The repo-aware reviewer reads files, and its prompt carries a changeset that may
+# not be yours. `codex exec -s read-only` blocks writes, not reads outside the repo:
+# a canary in $HOME came back verbatim under it, and sandbox_permissions=[] did not
+# change that. Neither of the two mitigations below is a sandbox, and the residual
+# risk (absolute paths) stays open — but both are cheap and both are load-bearing,
+# so a regression in either should fail here rather than in someone's credentials.
+
+test_codex_exec_runs_with_redirected_home() {
+  local work_dir config env_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  env_out="$work_dir/seen-env.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_ENV_OUT="$env_out" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  # HOME must point inside the work dir, not at the real one.
+  grep -q "^HOME=${work_dir}/" "$env_out" || return 1
+  # ...and codex must still find its own config, or auth breaks.
+  grep -q "^CODEX_HOME=." "$env_out" || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_codex_exec_scrubs_secret_env_vars() {
+  local work_dir config env_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  env_out="$work_dir/seen-env.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_ENV_OUT="$env_out" \
+  DEBATE_TEST_API_KEY="should-not-survive" \
+  DEBATE_TEST_BENIGN="should-survive" \
+  OPENAI_API_KEY="sk-should-not-survive" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+
+  grep -q "^SECRET_PRESENT=$" "$env_out" || { echo "  secret-shaped var reached codex"; return 1; }
+  # The provider key specifically: an earlier version exempted OPENAI_* ahead of the
+  # secret patterns, so the most valuable secret on the box was the one kept.
+  grep -q "^PROVIDER_KEY_PRESENT=$" "$env_out" || { echo "  OPENAI_API_KEY reached codex"; return 1; }
+  # The scrub must be targeted, not a blanket wipe — codex needs a working env.
+  grep -q "^BENIGN_PRESENT=yes$" "$env_out" || { echo "  benign var was wrongly stripped"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
 # --- changeset fallback ---
 
 test_changeset_reviewed_when_no_plan() {
@@ -833,6 +1389,31 @@ run_test "codex exec skips the acpx session check" test_codex_exec_skips_session
 run_test "codex exec clears stale output" test_codex_exec_clears_stale_output
 run_test "codex exec prompt travels on stdin" test_codex_exec_prompt_travels_on_stdin
 run_test "codex exec handles an oversized prompt" test_codex_exec_handles_oversized_prompt
+run_test "blank output does not log Review received" test_blank_output_does_not_log_review_received
+run_test "blank output is retried then succeeds" test_blank_output_is_retried_then_succeeds
+run_test "retries are bounded" test_retries_are_bounded
+run_test "no retry when first attempt answers" test_no_retry_when_first_attempt_answers
+run_test "retries 0 disables retry" test_retries_zero_disables_retry
+run_test "hard failure is not retried" test_hard_failure_is_not_retried
+run_test "default allows one retry" test_default_allows_one_retry
+run_test "control-bytes-only response counts as empty" test_control_bytes_only_response_is_empty
+run_test "OSC-only response counts as empty" test_osc_only_response_is_empty
+run_test "OSC in every encoding counts as empty" test_osc_all_encodings_count_as_empty
+run_test "review containing a URL still passes" test_review_containing_a_url_still_passes
+run_test "colon-form SGR counts as empty" test_colon_sgr_only_response_is_empty
+run_test "non-Latin review is not empty" test_non_latin_review_is_not_empty
+run_test "punctuation-only response counts as empty" test_punctuation_only_response_is_empty
+run_test "codex exec retries a blank turn" test_codex_exec_retries_a_blank_turn
+run_test "whitespace-only response counts as empty" test_whitespace_only_response_is_empty
+run_test "newline-only response counts as empty" test_newline_only_response_is_empty
+run_test "short real response still passes" test_short_real_response_still_passes
+run_test "exec mode uses the exec subcommand" test_exec_mode_uses_exec_subcommand
+run_test "exec mode skips session ensure" test_exec_mode_skips_session_ensure
+run_test "exec mode repeatable across runs" test_exec_mode_repeatable_across_runs
+run_test "session mode is the default" test_session_mode_is_the_default
+run_test "unknown mode warns and uses session" test_unknown_mode_warns_and_uses_session
+run_test "codex exec runs with redirected HOME" test_codex_exec_runs_with_redirected_home
+run_test "codex exec scrubs secret env vars" test_codex_exec_scrubs_secret_env_vars
 run_test "changeset reviewed when no plan" test_changeset_reviewed_when_no_plan
 run_test "plan wins over changeset" test_plan_wins_over_changeset
 run_test "happy path" test_happy_path

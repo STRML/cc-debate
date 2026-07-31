@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.9.0] — 2026-07-30 (one-shot reviewers, blank-turn retries, and blank reviews stop passing as success)
+
+- **A blank turn now costs a retry instead of the reviewer's seat.** Some agents end a turn with no final message at random — `kimi-k3` through opencode does it on a large share of turns, on prompts as small as "reply PONG". The new `retries` field (default 1) re-prompts on a blank turn only. A non-zero exit is a real failure that will repeat, and a timeout has already spent its budget, so neither is retried. Set `retries: 0` to switch it off, or 2-3 for an agent you know to be unreliable.
+
+- **A review containing nothing but whitespace no longer counts as delivered.** The empty-output guard tested `[ -s ]`, but acpx terminates even a contentless run with a newline, so an agent that ends its turn without a final message left a 1-byte file that the guard read as a real review. The round logged "Review received", wrote exit 0, and handed the synthesizer a blank. The check now looks for an actual non-whitespace character, so these surface as the failures they always were. This is not hypothetical: `kimi-k3` through opencode ends a large share of its turns with no final message.
+
+- **New reviewer field `mode`, for agents that go quiet after their first turn.** Every acpx reviewer prompted a persistent session, which is right when the agent supports it: context carries across debate rounds. Some do not. An opencode-backed agent such as `kimi-k3` answers the first prompt into a session and then ends every later turn with no content and exit 0, so round 2 records an empty review instead of an error, and the panel silently shrinks. Setting `"mode": "exec"` on a reviewer sends each prompt as a one-shot instead, and skips the `sessions ensure` call it no longer needs. Such a reviewer gives up cross-round continuity and answers every round, which is the better trade when the alternative is a blank file. `mode` defaults to `session`, so existing configs behave exactly as before, and an unrecognized value warns and falls back rather than guessing.
+
 ## [2.8.2] — 2026-07-30 (changeset gates hash the diff, not the placeholder)
 
 - **The round SHA and the cleanup gate now follow what was actually reviewed.** `run-parallel-acpx.sh` learned that in 2.8.0. `record-round.sh` and `safe-cleanup.sh` did not, and both kept hashing `plan.md`, which in changeset mode is an empty placeholder. Every changeset round recorded the SHA of the empty string, and `safe-cleanup.sh`'s APPROVED gate compared that constant against itself and passed no matter what had changed. The runner now writes `review-target.txt` and both scripts read it, so one file decides the target instead of three copies of the rule drifting apart.

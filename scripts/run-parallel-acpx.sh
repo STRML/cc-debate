@@ -40,6 +40,10 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$WORK_DIR" || { echo "Failed to create $WORK_DIR" >&2; exit 1; }
+# The work dir holds the full changeset and every reviewer transcript. On a shared
+# machine the default 0755 lets any local account read a diff that may carry
+# proprietary code or a secret someone committed by accident.
+chmod 700 "$WORK_DIR" 2>/dev/null || true
 
 # No plan staged? Debate the current changeset instead. A review of what
 # actually changed is almost always what someone wants when they run this
@@ -96,13 +100,26 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 # Get reviewer names: CLI arg or all from config
+# With no explicit subset, prefer a configured `default_reviewers` list over "every
+# key in .reviewers". Without it, a config that defines fallback-only seats — an
+# agent for when the usual one is broken — runs them on every review, which is the
+# opposite of what a fallback is for. Falls back to all keys so existing configs
+# that predate the field behave exactly as before.
 if [ -n "$REVIEWER_LIST" ]; then
   IFS=',' read -ra RAW_REVIEWERS <<< "$REVIEWER_LIST"
 else
   RAW_REVIEWERS=()
   while IFS= read -r line; do
     RAW_REVIEWERS+=("$line")
-  done < <(jq -r '.reviewers | keys[]' "$CONFIG_FILE")
+  # Absent and explicitly-empty are different answers. `default_reviewers: []` means
+  # "no default panel, always select explicitly", matching what an empty `reviewers`
+  # array already means on a preset. Treating it as absent would hand back the full
+  # panel — including the fallback seats this field exists to keep out of it.
+  done < <(jq -r '
+    if (.default_reviewers | type) == "array"
+    then .default_reviewers[]
+    else (.reviewers | keys[])
+    end' "$CONFIG_FILE")
 fi
 
 # Trim whitespace and drop empty tokens
@@ -125,8 +142,10 @@ fi
 # which the per-reviewer error mislabels as "not authenticated". Warming each
 # agent's session sequentially first (ensure is idempotent — it reuses an existing
 # session) makes the subsequent parallel submits all find their session.
-# Skipped when SKIP_SESSION_CHECK is set (tests / mock acpx), and for agents that
-# bypass acpx sessions entirely (antigravity and opus use direct CLI invocation).
+# Skipped when SKIP_SESSION_CHECK is set (tests / mock acpx), for agents that bypass
+# acpx sessions entirely (antigravity, opus and codex-exec are invoked as direct CLIs
+# — keep this list in step with IS_DIRECT_CLI in invoke-acpx.sh), and for reviewers
+# running one-shot (`mode: "exec"`), which never open a session to warm.
 if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
   if command -v acpx >/dev/null 2>&1; then
     WARM_ACPX=(acpx)
@@ -141,7 +160,12 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
       [[ "$NAME" =~ ^[a-zA-Z0-9_-]+$ ]] || continue
       AGENT=$(jq -r --arg name "$NAME" '.reviewers[$name].agent // empty' "$CONFIG_FILE")
       [ -z "$AGENT" ] && continue
-      [ "$AGENT" = "antigravity" ] || [ "$AGENT" = "opus" ] && continue
+      case "$AGENT" in antigravity|opus|codex-exec) continue ;; esac
+      # A one-shot reviewer never touches a session, so warming one for it is
+      # wasted work — and a hang or failure here would delay a run that does not
+      # need the session at all.
+      MODE=$(jq -r --arg name "$NAME" '.reviewers[$name].mode // empty' "$CONFIG_FILE")
+      [ "$MODE" = "exec" ] && continue
       [ -n "${WARMED[$AGENT]:-}" ] && continue   # one ensure per distinct agent
       WARMED[$AGENT]=1
       echo "[debate] Warming acpx session for '$AGENT'..." >&2
@@ -153,7 +177,7 @@ fi
 
 EXIT_FILES=()
 PIDS=()
-MAX_REVIEWER_TIMEOUT=0
+MAX_REVIEWER_BUDGET=0
 
 for NAME in "${REVIEWERS[@]}"; do
   # Sanitize reviewer name — must be alphanumeric/dash/underscore only
@@ -169,8 +193,17 @@ for NAME in "${REVIEWERS[@]}"; do
   fi
 
   TIMEOUT=$(jq -r --arg name "$NAME" '.reviewers[$name].timeout // 120' "$CONFIG_FILE")
-  if [[ "$TIMEOUT" =~ ^[0-9]+$ ]] && [ "$TIMEOUT" -gt "$MAX_REVIEWER_TIMEOUT" ]; then
-    MAX_REVIEWER_TIMEOUT="$TIMEOUT"
+  # The wait budget must cover a reviewer's WORST case, not its best. invoke-acpx.sh
+  # retries a blank turn, and every attempt gets the full timeout, so a reviewer can
+  # legitimately need timeout × (retries + 1). Budgeting only one attempt kills it
+  # mid-retry and turns a recoverable blank turn into a lost seat on the panel.
+  RETRIES=$(jq -r --arg name "$NAME" '.reviewers[$name].retries // 1' "$CONFIG_FILE")
+  [[ "$RETRIES" =~ ^[0-9]+$ ]] || RETRIES=1
+  if [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
+    WORST=$(( TIMEOUT * (RETRIES + 1) ))
+    if [ "$WORST" -gt "$MAX_REVIEWER_BUDGET" ]; then
+      MAX_REVIEWER_BUDGET="$WORST"
+    fi
   fi
 
   echo "[debate] Spawning $NAME ($AGENT, timeout: ${TIMEOUT}s)..." >&2
@@ -192,16 +225,20 @@ echo "[debate] Waiting for ${#EXIT_FILES[@]} reviewer(s)..." >&2
 
 POLL_INTERVAL=2
 ELAPSED=0
-# MAX_WAIT must be >= max reviewer timeout + startup buffer.
-# Default: max configured reviewer timeout + 60s buffer, minimum 120s.
+# MAX_WAIT must be >= the worst-case budget of the slowest reviewer + a startup
+# buffer. Worst case is timeout × (retries + 1), not timeout: a reviewer that
+# retries a blank turn spends the full timeout on every attempt, and budgeting for
+# one attempt would SIGTERM it mid-retry.
 # Override with POLL_MAX_WAIT env var.
 if [ -n "${POLL_MAX_WAIT:-}" ]; then
   MAX_WAIT="$POLL_MAX_WAIT"
-elif [ "$MAX_REVIEWER_TIMEOUT" -gt 0 ]; then
-  MAX_WAIT=$(( MAX_REVIEWER_TIMEOUT + 60 ))
+elif [ "$MAX_REVIEWER_BUDGET" -gt 0 ]; then
+  MAX_WAIT=$(( MAX_REVIEWER_BUDGET + 60 ))
 else
   MAX_WAIT=450
 fi
+
+echo "[debate] Waiting for reviewers (max wait: ${MAX_WAIT}s)..." >&2
 
 while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
   DONE=0

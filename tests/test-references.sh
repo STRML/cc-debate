@@ -132,6 +132,7 @@ test_new_files_exist() {
     commands/acpx-setup.md \
     tests/mock-agy.sh \
     tests/mock-claude.sh \
+    debate-acpx.sample.json \
     MIGRATING.md; do
     if [ ! -f "$PROJECT_DIR/$f" ]; then
       echo "  Missing: $f"
@@ -139,6 +140,68 @@ test_new_files_exist() {
     fi
   done
   [ "$missing" -eq 0 ]
+}
+
+# The sample config is what people copy. A preset naming a reviewer that is not
+# defined fails at run time with "preset selects no reviewers", which is a poor
+# way to learn your starting config was wrong.
+test_sample_config_is_coherent() {
+  local f="$PROJECT_DIR/debate-acpx.sample.json"
+  jq -e . "$f" > /dev/null 2>&1 || { echo "  not valid JSON"; return 1; }
+
+  local bad
+  bad=$(jq -r '
+    (.reviewers | keys) as $known
+    | .presets // {}
+    | to_entries[]
+    | . as $p
+    | ($p.value.reviewers // [])[]
+    | select(. as $r | $known | index($r) | not)
+    | "\($p.key) -> \(.)"
+  ' "$f")
+  if [ -n "$bad" ]; then
+    echo "  preset references an undefined reviewer: $bad"
+    return 1
+  fi
+
+  # Every reviewer needs an agent, or invoke-acpx.sh exits 1 on it.
+  bad=$(jq -r '.reviewers | to_entries[] | select(.value.agent == null) | .key' "$f")
+  if [ -n "$bad" ]; then
+    echo "  reviewer with no agent: $bad"
+    return 1
+  fi
+
+  # The `untrusted` preset is the one the README points at for a diff you did not
+  # write, so every seat in it must be prompt-only. A repo-aware agent here would
+  # make the documented safe path the unsafe one — which is exactly what happened
+  # when the docs recommended `quick`, a preset that contains a codex-exec seat.
+  if jq -e '.presets.untrusted' "$f" > /dev/null 2>&1; then
+    bad=$(jq -r '
+      .reviewers as $r
+      | .presets.untrusted.reviewers[]
+      | select($r[.].agent == "codex-exec")
+    ' "$f")
+    if [ -n "$bad" ]; then
+      echo "  untrusted preset contains a repo-aware seat: $bad"
+      return 1
+    fi
+  fi
+
+  # Reviewers sharing one acpx agent must be one-shot, or they collide in a
+  # single session and one of them returns blank. codex-exec and antigravity
+  # are direct-CLI agents and never get an acpx session, so they are exempt.
+  bad=$(jq -r '
+    [.reviewers | to_entries[]
+     | select(.value.agent as $a | ["codex-exec","antigravity","opus"] | index($a) | not)]
+    | group_by(.value.agent)[]
+    | select(length > 1)
+    | select(any(.[]; .value.mode != "exec"))
+    | .[0].value.agent
+  ' "$f")
+  if [ -n "$bad" ]; then
+    echo "  agent shared by reviewers without mode:exec: $bad"
+    return 1
+  fi
 }
 
 test_new_scripts_executable() {
@@ -211,11 +274,29 @@ test_run_is_canonical_orchestrator() {
 }
 
 test_all_is_alias_to_run() {
-  # commands/all.md must be a thin alias, NOT a second copy of the orchestrator.
+  # commands/all.md must stay a thin alias, NOT a second copy of the orchestrator.
+  # It carries exactly one documented difference from run.md — the Claude teammates —
+  # and that difference has to be stated, or the two commands silently converge again.
   local f="$PROJECT_DIR/commands/all.md"
   [ -f "$f" ] || { echo "  commands/all.md missing"; return 1; }
   grep -q "alias for \`/debate:run\`" "$f" || { echo "  all.md: does not declare itself an alias"; return 1; }
   ! grep -q "## Step 2: Parallel Review" "$f" || { echo "  all.md: contains full orchestrator (should be alias only)"; return 1; }
+  grep -q "exactly one difference" "$f" || { echo "  all.md: does not state its one difference from run.md"; return 1; }
+  grep -qi "claude_reviewers" "$f" || { echo "  all.md: does not name claude_reviewers as the difference"; return 1; }
+}
+
+# The split only works if run.md actually documents the opt-out. If someone reverts
+# rule 3 to "run all reviewers with the top-level claude_reviewers", the two commands
+# become identical again and nothing else in the suite would notice.
+test_run_defaults_to_no_claude_teammates() {
+  local f="$PROJECT_DIR/commands/run.md" flat
+  # Prose wraps; match against the file with newlines collapsed so the assertion
+  # tracks the wording rather than the line breaks.
+  flat=$(tr '\n' ' ' < "$f" | tr -s ' ')
+  echo "$flat" | grep -q "Spawn no Claude teammates" \
+    || { echo "  run.md: rule 3 does not opt out of Claude teammates"; return 1; }
+  echo "$flat" | grep -q "default_reviewers" \
+    || { echo "  run.md: rule 3 does not honor default_reviewers"; return 1; }
 }
 
 test_alias_allowed_tools_parity() {
@@ -242,6 +323,7 @@ run_test "no probe-model references" test_no_probe_model_refs
 run_test "no old work dir paths" test_no_old_work_dir_in_active_files
 run_test "deleted files gone" test_deleted_files_dont_exist
 run_test "new files exist" test_new_files_exist
+run_test "sample config is coherent" test_sample_config_is_coherent
 run_test "new scripts executable" test_new_scripts_executable
 run_test "all scripts parse" test_scripts_parse
 run_test "skeptic bodies single-source" test_skeptic_bodies_single_source
@@ -250,6 +332,7 @@ run_test ".gitignore updated" test_gitignore_updated
 run_test "version consistent" test_version_consistent
 run_test "run.md is canonical orchestrator" test_run_is_canonical_orchestrator
 run_test "all.md is alias to run" test_all_is_alias_to_run
+run_test "run defaults to no Claude teammates" test_run_defaults_to_no_claude_teammates
 run_test "alias allowed-tools parity" test_alias_allowed_tools_parity
 
 echo ""

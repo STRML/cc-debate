@@ -430,6 +430,156 @@ test_whitespace_trimmed_reviewer_list() {
   rm -rf "$work_dir" "$tmp_dir"
 }
 
+# A config can define seats that only make sense as a fallback — an agent for when
+# the usual one is broken. Defaulting to every key in .reviewers runs those on every
+# review, which is the opposite of what a fallback is for.
+test_default_reviewers_limits_the_default_set() {
+  local tmp_dir review_id work_dir
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-defset"
+  work_dir=".tmp/ai-review-${review_id}"
+
+  cat > "$tmp_dir/config.json" << 'EOF'
+{
+  "default_reviewers": ["alpha"],
+  "reviewers": {
+    "alpha": { "agent": "codex", "timeout": 10 },
+    "fallback-only": { "agent": "codex", "timeout": 10, "mode": "exec" }
+  }
+}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null
+
+  [ -f "$work_dir/alpha-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  # The fallback seat must not have run.
+  [ ! -f "$work_dir/fallback-only-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
+# An explicit empty array is a choice, not an omission: "no default panel, always
+# select explicitly". Falling through to every reviewer would do the opposite.
+test_empty_default_reviewers_runs_none() {
+  local tmp_dir review_id work_dir
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-emptydef"
+  work_dir=".tmp/ai-review-${review_id}"
+
+  cat > "$tmp_dir/config.json" << 'EOF'
+{
+  "default_reviewers": [],
+  "reviewers": {
+    "alpha": { "agent": "codex", "timeout": 10 },
+    "beta":  { "agent": "codex", "timeout": 10, "mode": "exec" }
+  }
+}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  local rc=0
+  PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null || rc=$?
+
+  # Assert the status explicitly. `set -e` does not fire for a command inside a
+  # function called as `if "$@"`, so without capturing rc a non-zero exit here
+  # would pass silently and the test would prove nothing.
+  [ "$rc" -ne 0 ] || { echo "  runner exited 0 with an empty default set"; rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ ! -f "$work_dir/alpha-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ ! -f "$work_dir/beta-exit.txt" ]  || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
+# Absent the field, behave exactly as before: every reviewer runs.
+test_missing_default_reviewers_runs_all() {
+  local tmp_dir review_id work_dir
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-alldef"
+  work_dir=".tmp/ai-review-${review_id}"
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null
+
+  [ -f "$work_dir/alpha-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ -f "$work_dir/beta-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ -f "$work_dir/gamma-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
+# The wait budget has to cover retries. Each attempt gets the full timeout, so
+# budgeting one attempt SIGTERMs a reviewer mid-retry and loses the seat.
+test_wait_budget_accounts_for_retries() {
+  local tmp_dir review_id work_dir out
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-budget"
+  work_dir=".tmp/ai-review-${review_id}"
+
+  cat > "$tmp_dir/config.json" << 'EOF'
+{
+  "reviewers": {
+    "alpha": { "agent": "codex", "timeout": 100, "retries": 3 }
+  }
+}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  # POLL_MAX_WAIT unset so the runner reports its computed budget.
+  # 100 x (3+1) + 60 = 460; the old formula gave 160.
+  out=$(PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>&1)
+
+  echo "$out" | grep -q "max wait: 460s" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
+# Warm-up exists to avoid a races on the shared session index. A one-shot reviewer
+# has no session, and a direct-CLI agent has no acpx session at all.
+test_warmup_skips_exec_mode_and_direct_cli() {
+  local tmp_dir review_id work_dir log_file
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-warm"
+  work_dir=".tmp/ai-review-${review_id}"
+  log_file="$tmp_dir/acpx-log.txt"
+
+  cat > "$tmp_dir/config.json" << 'EOF'
+{
+  "reviewers": {
+    "one-shot":  { "agent": "codex",      "timeout": 10, "mode": "exec" },
+    "direct":    { "agent": "codex-exec", "timeout": 10 },
+    "sessioned": { "agent": "cursor",     "timeout": 10 }
+  }
+}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  # No SKIP_SESSION_CHECK: the warm-up loop must actually run.
+  PATH="$SCRIPT_DIR:$PATH" MOCK_ACPX_LOG="$log_file" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null
+
+  # Only the sessioned agent gets warmed.
+  grep -q "cursor sessions ensure" "$log_file" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  grep -q "codex sessions ensure" "$log_file" && { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  grep -q "codex-exec sessions ensure" "$log_file" && { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
 test_invoke_logs_created() {
   # Verify invoke stderr is captured to <name>-invoke.log
   local tmp_dir review_id work_dir
@@ -517,6 +667,11 @@ run_test "prompt files cleaned up" test_prompt_files_cleaned_up
 run_test "invalid review ID rejected" test_invalid_review_id_rejected
 run_test "reviewer name sanitization" test_reviewer_name_sanitization
 run_test "whitespace trimmed reviewer list" test_whitespace_trimmed_reviewer_list
+run_test "default_reviewers limits the default set" test_default_reviewers_limits_the_default_set
+run_test "empty default_reviewers runs none" test_empty_default_reviewers_runs_none
+run_test "missing default_reviewers runs all" test_missing_default_reviewers_runs_all
+run_test "wait budget accounts for retries" test_wait_budget_accounts_for_retries
+run_test "warm-up skips exec mode and direct CLI" test_warmup_skips_exec_mode_and_direct_cli
 run_test "invoke logs created" test_invoke_logs_created
 run_test "one failure doesnt block others" test_one_failure_doesnt_block_others
 

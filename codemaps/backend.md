@@ -53,6 +53,8 @@ No exit file — a teammate has delivered iff its output file exists and is non-
     "<name>": {
       "agent": "<acpx-agent-name>",
       "timeout": 120,
+      "mode": "session | exec",
+      "retries": 1,
       "system_prompt": "optional persona prompt"
     }
   }
@@ -60,6 +62,17 @@ No exit file — a teammate has delivered iff its output file exists and is non-
 ```
 
 Available acpx agents: codex, claude, cursor, copilot, kimi, kiro, qwen, opencode, kilocode. The `antigravity` (agy) and `opus` reviewers are invoked directly, not via acpx.
+
+`mode` defaults to `session` (persistent acpx session, context kept across rounds).
+`mode: "exec"` sends one-shots and skips `sessions ensure` — needed for agents that
+return an empty turn on the second prompt into a session (seen with opencode-backed
+agents such as `kimi-k3`).
+
+`retries` defaults to 1 and covers a different failure: an agent that ends a turn
+with no final message at all. Only a blank turn is retried; a non-zero exit or a
+timeout goes straight to `handle_invocation_result`. A blank review is detected by
+`output_is_blank`, not `[ -s ]` — acpx writes a trailing newline even when the agent
+said nothing, so a contentless run is 1 byte, not 0.
 
 ## Plugin Metadata (`.claude-plugin/`)
 
