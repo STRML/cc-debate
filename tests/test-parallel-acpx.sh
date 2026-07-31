@@ -462,6 +462,36 @@ EOF
   rm -rf "$work_dir" "$tmp_dir"
 }
 
+# An explicit empty array is a choice, not an omission: "no default panel, always
+# select explicitly". Falling through to every reviewer would do the opposite.
+test_empty_default_reviewers_runs_none() {
+  local tmp_dir review_id work_dir
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-emptydef"
+  work_dir=".tmp/ai-review-${review_id}"
+
+  cat > "$tmp_dir/config.json" << 'EOF'
+{
+  "default_reviewers": [],
+  "reviewers": {
+    "alpha": { "agent": "codex", "timeout": 10 },
+    "beta":  { "agent": "codex", "timeout": 10, "mode": "exec" }
+  }
+}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null
+
+  [ ! -f "$work_dir/alpha-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ ! -f "$work_dir/beta-exit.txt" ]  || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
 # Absent the field, behave exactly as before: every reviewer runs.
 test_missing_default_reviewers_runs_all() {
   local tmp_dir review_id work_dir
@@ -633,6 +663,7 @@ run_test "invalid review ID rejected" test_invalid_review_id_rejected
 run_test "reviewer name sanitization" test_reviewer_name_sanitization
 run_test "whitespace trimmed reviewer list" test_whitespace_trimmed_reviewer_list
 run_test "default_reviewers limits the default set" test_default_reviewers_limits_the_default_set
+run_test "empty default_reviewers runs none" test_empty_default_reviewers_runs_none
 run_test "missing default_reviewers runs all" test_missing_default_reviewers_runs_all
 run_test "wait budget accounts for retries" test_wait_budget_accounts_for_retries
 run_test "warm-up skips exec mode and direct CLI" test_warmup_skips_exec_mode_and_direct_cli

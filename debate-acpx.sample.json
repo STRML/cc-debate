@@ -132,6 +132,7 @@
       "reviewers": [
         "executor-or",
         "cartographer-or",
+        "cartographer-k3",
         "antigravity"
       ],
       "claude_reviewers": {}

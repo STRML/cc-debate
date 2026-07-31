@@ -111,8 +111,12 @@ else
   RAW_REVIEWERS=()
   while IFS= read -r line; do
     RAW_REVIEWERS+=("$line")
+  # Absent and explicitly-empty are different answers. `default_reviewers: []` means
+  # "no default panel, always select explicitly", matching what an empty `reviewers`
+  # array already means on a preset. Treating it as absent would hand back the full
+  # panel — including the fallback seats this field exists to keep out of it.
   done < <(jq -r '
-    if (.default_reviewers | type) == "array" and (.default_reviewers | length) > 0
+    if (.default_reviewers | type) == "array"
     then .default_reviewers[]
     else (.reviewers | keys[])
     end' "$CONFIG_FILE")

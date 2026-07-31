@@ -261,11 +261,21 @@ fi
 # with no content register as delivered — whether the bytes come from a misbehaving
 # backend or a reviewer that a hostile changeset talked into emitting them.
 # LC_ALL=C keeps multi-byte UTF-8 controls out of [[:alnum:]].
+# OSC is stripped first and deliberately: unlike CSI, an OSC payload carries text,
+# so `ESC]8;;https://…BEL` (a hyperlink) is full of alphanumerics and sails through
+# an alnum test untouched. Verified. OSC ends at BEL or at ST (ESC backslash), so
+# both terminators are handled.
 output_is_blank() {
-  local file="$1" esc
+  local file="$1" esc bel
   [ -s "$file" ] || return 0
   esc=$(printf '\033')
-  ! LC_ALL=C sed -E "s/${esc}\[[0-9;?]*[A-Za-z]//g; s/${esc}[()][A-Za-z0-9]//g" "$file" \
+  bel=$(printf '\007')
+  ! LC_ALL=C sed -E "
+        s/${esc}\][^${bel}]*${bel}//g
+        s/${esc}\][^${esc}]*${esc}\\\\//g
+        s/${esc}\[[0-9;?]*[A-Za-z]//g
+        s/${esc}[()][A-Za-z0-9]//g
+      " "$file" \
     | LC_ALL=C grep -q '[[:alnum:]]'
 }
 

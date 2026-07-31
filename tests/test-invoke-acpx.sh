@@ -880,6 +880,41 @@ test_control_bytes_only_response_is_empty() {
   rm -rf "$work_dir"
 }
 
+# OSC payloads carry text, so a lone hyperlink escape is full of alphanumerics and
+# survives the alnum test unless OSC is stripped specifically. CSI has no payload,
+# which is why stripping it was not enough.
+test_osc_only_response_is_empty() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\033]8;;https://example.invalid/x\007\033]8;;\007')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# A review that merely mentions a URL must survive the OSC strip.
+test_review_containing_a_url_still_passes() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="See https://example.invalid/x for context. VERDICT: REVISE" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "0" ] || return 1
+  grep -q "VERDICT: REVISE" "$work_dir/no-retry-reviewer-output.md" || return 1
+
+  rm -rf "$work_dir"
+}
+
 # Punctuation-only output is likewise not a review.
 test_punctuation_only_response_is_empty() {
   local work_dir config
@@ -1237,6 +1272,8 @@ run_test "retries 0 disables retry" test_retries_zero_disables_retry
 run_test "hard failure is not retried" test_hard_failure_is_not_retried
 run_test "default allows one retry" test_default_allows_one_retry
 run_test "control-bytes-only response counts as empty" test_control_bytes_only_response_is_empty
+run_test "OSC-only response counts as empty" test_osc_only_response_is_empty
+run_test "review containing a URL still passes" test_review_containing_a_url_still_passes
 run_test "punctuation-only response counts as empty" test_punctuation_only_response_is_empty
 run_test "codex exec retries a blank turn" test_codex_exec_retries_a_blank_turn
 run_test "whitespace-only response counts as empty" test_whitespace_only_response_is_empty
