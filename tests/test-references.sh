@@ -171,6 +171,22 @@ test_sample_config_is_coherent() {
     return 1
   fi
 
+  # The `untrusted` preset is the one the README points at for a diff you did not
+  # write, so every seat in it must be prompt-only. A repo-aware agent here would
+  # make the documented safe path the unsafe one — which is exactly what happened
+  # when the docs recommended `quick`, a preset that contains a codex-exec seat.
+  if jq -e '.presets.untrusted' "$f" > /dev/null 2>&1; then
+    bad=$(jq -r '
+      .reviewers as $r
+      | .presets.untrusted.reviewers[]
+      | select($r[.].agent == "codex-exec")
+    ' "$f")
+    if [ -n "$bad" ]; then
+      echo "  untrusted preset contains a repo-aware seat: $bad"
+      return 1
+    fi
+  fi
+
   # Reviewers sharing one acpx agent must be one-shot, or they collide in a
   # single session and one of them returns blank. codex-exec and antigravity
   # are direct-CLI agents and never get an acpx session, so they are exempt.

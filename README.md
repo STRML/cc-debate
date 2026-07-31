@@ -150,7 +150,9 @@ Two mitigations are applied, and neither is a sandbox:
 
 **What is still reachable, stated plainly.** An absolute path works regardless of where `HOME` points, and an injected instruction can construct one. That includes `$CODEX_HOME` (`~/.codex`), which holds codex's own `auth.json` — the credential has to be reachable by codex or the seat cannot authenticate at all, so a command codex runs can reach it too. Redirecting `HOME` and scrubbing the environment raise the cost of the easy attacks; they do not contain a determined one. Nothing short of an OS-level sandbox would, and this plugin does not ship one.
 
-So: review your own branches with repo-aware seats, and use a prompt-only preset (`quick`, or any panel without a `codex-exec` agent) for a diff from someone you do not trust. That is the boundary. It is a rule you follow, not a control the tool enforces.
+So: review your own branches with repo-aware seats, and use the `untrusted` preset for a diff from someone you do not trust. Every seat in it is prompt-only — no reviewer there can read the filesystem at all. That is the boundary. It is a rule you follow, not a control the tool enforces.
+
+Check any preset you substitute for it. `quick` is *not* a safe stand-in despite being small: it contains `executor`, which is a `codex-exec` seat. "Few reviewers" and "no filesystem access" are unrelated properties, and the sample's coherence test now enforces that `untrusted` contains no repo-aware agent.
 
 Three implementation details, all handled for you.
 

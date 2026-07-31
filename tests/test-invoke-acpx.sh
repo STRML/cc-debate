@@ -898,21 +898,35 @@ test_osc_only_response_is_empty() {
   rm -rf "$work_dir"
 }
 
-# The same hyperlink in 8-bit C1 form: OSC is 0x9D, ST is 0x9C, no ESC byte anywhere.
-# A 7-bit-only filter leaves the URL intact and the review reads as delivered.
-test_c1_osc_only_response_is_empty() {
-  local work_dir config
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
+# OSC openers (ESC] and 0x9D) and terminators (BEL, 0x9C, ESC-backslash) combine
+# freely, including mixed 7-bit/8-bit. Pairing each opener with only its own
+# terminator left two live bypasses, so every combination is checked here.
+test_osc_all_encodings_count_as_empty() {
+  local work_dir config combo n=0
+  for combo in \
+    '\033]8;;https://example.invalid/x\007' \
+    '\033]8;;https://example.invalid/x\033\\' \
+    '\033]8;;https://example.invalid/x\234' \
+    '\2358;;https://example.invalid/x\234' \
+    '\2358;;https://example.invalid/x\007' \
+    '\2358;;https://example.invalid/x\033\\'
+  do
+    n=$((n + 1))
+    work_dir=$(setup_work_dir)
+    config=$(setup_config "$work_dir")
 
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_ACPX_RESPONSE="$(printf '\2358;;https://example.invalid/x\234')" \
-    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_ACPX_RESPONSE="$(printf "$combo")" \
+      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
 
-  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
-
-  rm -rf "$work_dir"
+    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
+      echo "  OSC encoding $n was accepted as a delivered review"
+      rm -rf "$work_dir"
+      return 1
+    fi
+    rm -rf "$work_dir"
+  done
 }
 
 # A review that merely mentions a URL must survive the OSC strip.
@@ -930,6 +944,48 @@ test_review_containing_a_url_still_passes() {
   grep -q "VERDICT: REVISE" "$work_dir/no-retry-reviewer-output.md" || return 1
 
   rm -rf "$work_dir"
+}
+
+# A colon-form SGR colour is a control sequence whose parameter bytes include ':'.
+# A CSI pattern of [0-9;?]* does not match it, and its digits then read as content.
+test_colon_sgr_only_response_is_empty() {
+  local work_dir config combo
+  for combo in '\033[38:2::255:0:0m' '\23338:2::255:0:0m'; do
+    work_dir=$(setup_work_dir)
+    config=$(setup_config "$work_dir")
+
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_ACPX_RESPONSE="$(printf "$combo")" \
+      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+
+    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
+      echo "  colon-form SGR accepted as a delivered review"
+      rm -rf "$work_dir"; return 1
+    fi
+    rm -rf "$work_dir"
+  done
+}
+
+# A review needs no ASCII at all. Testing for [[:alnum:]] under LC_ALL=C threw away
+# every review written in a non-Latin script and reported the seat as failed.
+test_non_latin_review_is_not_empty() {
+  local work_dir config script
+  for script in '\345\220\214\346\204\217\343\200\202' '\320\236\321\210\320\270\320\261\320\272\320\260'; do
+    work_dir=$(setup_work_dir)
+    config=$(setup_config "$work_dir")
+
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_ACPX_RESPONSE="$(printf "$script")" \
+      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+
+    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
+      echo "  a non-Latin review was discarded as empty"
+      rm -rf "$work_dir"; return 1
+    fi
+    rm -rf "$work_dir"
+  done
 }
 
 # Punctuation-only output is likewise not a review.
@@ -1342,8 +1398,10 @@ run_test "hard failure is not retried" test_hard_failure_is_not_retried
 run_test "default allows one retry" test_default_allows_one_retry
 run_test "control-bytes-only response counts as empty" test_control_bytes_only_response_is_empty
 run_test "OSC-only response counts as empty" test_osc_only_response_is_empty
-run_test "C1 OSC-only response counts as empty" test_c1_osc_only_response_is_empty
+run_test "OSC in every encoding counts as empty" test_osc_all_encodings_count_as_empty
 run_test "review containing a URL still passes" test_review_containing_a_url_still_passes
+run_test "colon-form SGR counts as empty" test_colon_sgr_only_response_is_empty
+run_test "non-Latin review is not empty" test_non_latin_review_is_not_empty
 run_test "punctuation-only response counts as empty" test_punctuation_only_response_is_empty
 run_test "codex exec retries a blank turn" test_codex_exec_retries_a_blank_turn
 run_test "whitespace-only response counts as empty" test_whitespace_only_response_is_empty

@@ -254,22 +254,36 @@ fi
 # message leaves 1 byte behind — which `[ -s ]` reports as non-empty, and the round
 # records a blank review as a success.
 #
-# Terminal escapes are stripped before the test, and the test is for a letter or
-# digit rather than merely a non-space byte. Both halves are needed: a zero-width
-# space is non-space by POSIX, and an ANSI reset survives an alnum test because
-# `ESC[0m` literally contains a digit and a letter. Either one alone lets a review
-# with no content register as delivered — whether the bytes come from a misbehaving
-# backend or a reviewer that a hostile changeset talked into emitting them.
-# LC_ALL=C keeps multi-byte UTF-8 controls out of [[:alnum:]].
+# Escapes and zero-width characters are stripped, then the remainder must contain a
+# character that is neither whitespace nor punctuation. Stripping is what does the
+# work; the character test is deliberately permissive.
+#
+# It did test for a letter or digit, which was wrong in a way no control-byte case
+# would have caught: under LC_ALL=C a review written in Chinese or Cyrillic has no
+# ASCII alphanumeric, so a perfectly good review was thrown away as blank and the
+# seat reported a failure. Any non-Latin script hits this. The current test accepts
+# those bytes while still rejecting a response of only dashes.
+#
+# The CSI rule follows the real grammar — parameter bytes, optional intermediates,
+# final byte — because `[0-9;?]*` did not include `:`, and a colon-form SGR colour
+# like `ESC[38:2::255:0:0m` therefore went unstripped and passed on its digits.
 # OSC is stripped first and deliberately: unlike CSI, an OSC payload carries text,
 # so `ESC]8;;https://…BEL` (a hyperlink) is full of alphanumerics and sails through
 # an alnum test untouched. Verified. OSC ends at BEL or at ST (ESC backslash), so
 # both terminators are handled.
 output_is_blank() {
-  local file="$1" esc bel osc8 st8 csi8
+  local file="$1" esc bel osc8 st8 csi8 zwsp zwnj zwj wj bom
   [ -s "$file" ] || return 0
   esc=$(printf '\033')
   bel=$(printf '\007')
+  # Zero-width and BOM characters are removed by name rather than left to the
+  # character test: they are multi-byte UTF-8, so under LC_ALL=C they are neither
+  # space nor punctuation and would read as content.
+  zwsp=$(printf '\342\200\213')
+  zwnj=$(printf '\342\200\214')
+  zwj=$(printf '\342\200\215')
+  wj=$(printf '\342\201\240')
+  bom=$(printf '\357\273\277')
   # Built with printf, not written as \x9d in the regex: BSD sed rejects \x escapes
   # outright ("illegal byte sequence"), and a sed that errors out prints nothing,
   # which this function would have read as a blank review — a broken filter that
@@ -277,18 +291,18 @@ output_is_blank() {
   osc8=$(printf '\235')
   st8=$(printf '\234')
   csi8=$(printf '\233')
-  # The 8-bit C1 forms are stripped too: OSC is 0x9D and ST is 0x9C, so
-  # `0x9D 8;;https://… 0x9C` is the same hyperlink without a single ESC byte in it,
-  # and a 7-bit-only filter leaves its payload intact.
+  # One rule covers OSC rather than one per encoding. The opener is ESC] or 0x9D and
+  # the terminator is BEL, 0x9C or ESC-backslash, and a sequence may MIX them —
+  # `0x9D … ESC\` and `ESC] … 0x9C` are both valid. Pairing each opener with only its
+  # own terminator left exactly those two mixed forms intact, payload and all.
+  # All six opener/terminator combinations are covered by tests.
   ! LC_ALL=C sed -E "
-        s/${esc}\][^${bel}]*${bel}//g
-        s/${esc}\][^${esc}]*${esc}\\\\//g
-        s/${osc8}[^${st8}${bel}]*[${st8}${bel}]//g
-        s/${esc}\[[0-9;?]*[A-Za-z]//g
-        s/${csi8}[0-9;?]*[A-Za-z]//g
+        s/(${esc}\]|${osc8})[^${bel}${st8}${esc}]*(${bel}|${st8}|${esc}\\\\)//g
+        s/(${esc}\[|${csi8})[0-9;:?<=>]*[ -\/]*[@-~]//g
         s/${esc}[()][A-Za-z0-9]//g
+        s/${zwsp}//g; s/${zwnj}//g; s/${zwj}//g; s/${wj}//g; s/${bom}//g
       " "$file" \
-    | LC_ALL=C grep -q '[[:alnum:]]'
+    | LC_ALL=C grep -q '[^[:space:][:punct:]]'
 }
 
 # Runs one reviewer invocation, retrying while it comes back blank.

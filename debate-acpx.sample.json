@@ -136,6 +136,15 @@
         "antigravity"
       ],
       "claude_reviewers": {}
+    },
+    "untrusted": {
+      "description": "Prompt-only seats for a diff you do not trust - no reviewer here can read the filesystem",
+      "reviewers": [
+        "antigravity",
+        "executor-or",
+        "cartographer-or"
+      ],
+      "claude_reviewers": {}
     }
   }
 }
