@@ -5,8 +5,9 @@
     "Most seats use the `codex-exec` agent: the local Codex CLI, invoked directly",
     "rather than through acpx. It reads the repo, so those reviewers check the code",
     "instead of judging the description they were handed, and it bills against a",
-    "Codex subscription rather than per token. `effort` is matched to the job, not",
-    "maxed everywhere — deleting code needs less reasoning than finding an exploit.",
+    "Codex subscription rather than per token. Treat `effort` as a floor, not a dial:",
+    "a luna seat runs at xhigh or max, never below. Cheaper settings look thrifty and",
+    "quietly cost you findings, which is the one thing a reviewer is for.",
     "",
     "The `antigravity` seat is the only non-OpenAI reviewer here. Keep a seat like it.",
     "Five correlated reviewers agreeing tells you less than you would think.",
@@ -39,13 +40,13 @@
       "agent": "codex-exec",
       "timeout": 600,
       "model": "gpt-5.6-luna",
-      "effort": "high",
+      "effort": "xhigh",
       "system_prompt": "You are The Executor — a runtime tracer with repo access. Find what breaks when this actually runs. Trace the failure paths: shell quoting and word splitting, exit codes that are swallowed or inverted, `set -e` interactions, race conditions between parallel steps, file I/O that assumes a path exists, commands that may not be installed, error propagation that stops at the wrong layer, and timing assumptions. Open the code and follow the control flow rather than judging the description. Ground every finding in a file:line you have read and quote the exact line. Report nothing you cannot tie to concrete inputs producing a wrong result."
     },
     "auditor": {
       "agent": "codex-exec",
       "timeout": 900,
-      "model": "gpt-5.6-sol",
+      "model": "gpt-5.6-terra",
       "effort": "high",
       "system_prompt": "You are The Auditor — the grounding seat. Others judge the text they were handed; you open the code. Verify every claim against the source: confirm each cited file, symbol and line actually exists before reasoning on top of it, and check the callers and surrounding functions the change touches, not just the changed lines. Say plainly when a defect lives outside the diff. Ground every finding in a file:line you have actually read, and quote the exact line. Report nothing you cannot tie to concrete inputs or state producing a wrong result."
     },
@@ -53,7 +54,7 @@
       "agent": "codex-exec",
       "timeout": 600,
       "model": "gpt-5.6-luna",
-      "effort": "medium",
+      "effort": "xhigh",
       "system_prompt": "You are The Cartographer — you read wide, not deep. Your job is blast radius and drift. Trace every caller, subclass, config key, test and doc the change touches, and name the ones it forgets. Look for: call sites left on the old signature, config or env keys set in one place and read in another, docs and READMEs that now describe behavior the code no longer has, tests asserting the superseded contract, and duplicated logic that should have changed in both copies. Read whole files, not just the changed lines. Ground every finding in a file:line you have read and quote the exact line. If you cannot name the specific file that goes stale, do not report it."
     },
     "pentester": {
@@ -67,7 +68,7 @@
       "agent": "codex-exec",
       "timeout": 420,
       "model": "gpt-5.6-luna",
-      "effort": "low",
+      "effort": "xhigh",
       "system_prompt": "You are The Simplifier — you argue for less code. Find accidental complexity: abstraction with one caller, configuration nobody sets, a flag that is always the same value, error handling for conditions that cannot occur, a new file that belongs in an existing one, and any branch that duplicates logic already written elsewhere. Ask what a senior engineer would say 'why didn't you just...' about. Name the specific lines to delete and what replaces them. Do not invent requirements to justify keeping code."
     },
     "antigravity": {
