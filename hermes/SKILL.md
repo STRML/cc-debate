@@ -1,99 +1,110 @@
 ---
 name: debate
 description: "Debate a plan across AI reviewers to a consensus verdict."
-version: 1.0.0
+version: 1.1.0
 author: Hermes Agent (port of STRML/cc-debate)
 license: MIT
 platforms: [linux, macos]
 metadata:
   hermes:
-    tags: [debate, review, plan, multi-agent, subagents, verification]
-    related_skills: [codex, claude-code, opencode, hermes-agent]
+    tags: [debate, review, plan, multi-agent, subagents, verification, model-registry]
+    related_skills: [codex, claude-code, opencode, hermes-agent, code-review]
 ---
 
 # Debate: Multi-AI Plan Review
 
 Send the user's implementation plan (or current git changeset) to multiple independent
 reviewer agents **in parallel**, collect their feedback, synthesize it, have them argue
-out contradictions, and drive to a consensus verdict (APPROVE / REVISE). Max **3 revision
-rounds**; a post-fix verification pass does not count against the budget.
+out contradictions, and drive to a consensus verdict (APPROVE / REVISE). Max 3 revision
+rounds; a post-fix verification pass does not count against the budget.
 
-**Hermes-native port of [STRML/cc-debate](https://github.com/strml/cc-debate).** This
-subdirectory is the Hermes delivery of this repo: it uses Hermes **`delegate_task`** for
-the reviewer panel instead of the acpx/codex/gemini CLI machinery in `scripts/` and
-`commands/`. For model diversity you can optionally point a reviewer at an external CLI
-(codex, claude-code, gemini, opencode) — see "External-CLI reviewer backends" below.
+## Architecture (v3)
+
+This is the Hermes **plugin** that orchestrates the debate workflow. Model access is
+**transport-agnostic** — acpx, opencode, and Hermes all reach the same providers (OpenRouter,
+Nous, DeepSeek, Z.AI, OpenAI...). Reviewers are dispatched through **acpx**
+(`run-acpx-review.sh` -> `run-parallel-acpx.sh`; one CLI, any provider/model from the
+registry). A `subagent` backend stays as the cheap same-model default. No bespoke "hermes
+backend". `codex-exec` is gone (repo reading is generic via acpx; Codex subscription credits
+work via the plain acpx codex agent's OAuth).
+
+## The model registry + dynamic selection
+
+Instead of a fixed seat list, the panel is chosen per run from
+**`$HERMES_HOME/debate-models.json`** (seed: `templates/debate-models.json`). Each entry:
+model + price (cost_per_task + $/M) + strengths + effort (+effort_range) + harness +
+repo_aware + family/lab + available.
+
+1. **(Optional) Refresh** metrics from Artificial Analysis (primary) + LMArena (complement):
+   `python3 scripts/refresh-models.py --registry $HERMES_HOME/debate-models.json --ttl-hours 168`.
+   Merges strengths/effort/price; never touches harness/available/repo_aware; offline-safe.
+2. **Route the panel**: `python3 scripts/select-panel.py --registry $HERMES_HOME/debate-models.json
+   --seats simplifier,operator,pentester --deepest pentester --installed-harnesses acpx,subagent`
+   -> seat -> {model, harness, provider, model_id, effort, cost_per_task, repo_aware}.
+   Selection: harness-feasibility -> lab diversity -> strong-reasoning model on the deepest seat
+   at effort>=xhigh -> cheapest cost_per_task elsewhere -> no duplicate model -> low-diversity
+   warning.
+3. **Dispatch** each seat via its harness (`subagent` -> delegate_task; else acpx), optionally
+   sandboxed (`run-acpx-review.sh ... --sandbox --repo-sandbox --repo ROOT` wraps bwrap /
+   sandbox-exec / docker, read-only repo mount + isolated HOME for repo-aware seats).
+
+Seed `debate-models.json` (and refresh) marks `available:false` for harnesses you haven't
+configured; only `available:true` + an installed harness are selectable.
 
 ## When to use
 
 - A plan is about to become code and you want it stress-tested before writing anything.
-- You want competing vantage points (e.g. simplifier vs operator vs pentester) on the same plan.
+- You want competing vantage points (simplifier / operator / pentester) on the same plan.
 - You want a second/third/fourth opinion in one shot without sequencing.
 
 ## Reviewers on the default panel
 
-Each reviewer is a subagent with a distinct persona. Defaults (define your own in config
-at `$HERMES_HOME/debate.json`, template in `templates/debate.json`):
+| Reviewer (seat) | Persona / angle | Selection |
+|---|---|---|
+| `simplifier` | Cut scope; over-engineering, YAGNI, complexity to defer. | cheap/speed model, low effort |
+| `operator` | Will it run/ship? Ordering, deps, rollback, observability, ops gaps. | mid model |
+| `pentester` | Security/robustness; auth, injection, failure modes, edge cases. | strongest reasoning at xhigh |
 
-| Reviewer | Persona / angle |
-|---|---|
-| `simplifier` | Cut scope. Over-engineering, YAGNI, complexity to defer. |
-| `operator` | Will it run/ship? Ordering, deps, rollback, observability, ops gaps. |
-| `pentester` | Security/robustness. Auth, injection, failure modes, data-integrity. |
-
-Config shape:
-
-```json
-{
-  "reviewers": {
-    "simplifier": { "persona": "…", "backend": "subagent" },
-    "operator":   { "persona": "…", "backend": "subagent" },
-    "pentester":  { "persona": "…", "backend": "subagent" }
-  },
-  "presets": { "tight": { "reviewers": ["simplifier"] } },
-  "default_reviewers": ["simplifier", "operator", "pentester"],
-  "max_rounds": 3
-}
-```
-
-- `backend: "subagent"` (default) → Hermes `delegate_task` subagent.
-- `backend: "codex"|"claude"|"gemini"|"opencode"` → shell out to that CLI for true diversity.
-
-**Panel resolution** (mirrors `debate:run`, first non-flag token wins): preset key →
-comma-separated subset → `default_reviewers`, else all. `skip-debate` = skip the debate phase.
+The registry's `strengths` + `effort` govern which model lands on which seat (see
+`references/model-registry.md`).
 
 ## Workflow
 
-1. **Stage the subject.** Plan pasted/present → use it verbatim. No plan → review the current
-   changeset (`git diff` vs the merge base of the default branch; `DEBATE_DIFF_BASE` overrides).
-   Write it to a scratch file (`$HERMES_HOME/debate/<id>/plan.md`) so reviewers read the same bytes.
-2. **Launch the panel in parallel.** One `delegate_task` call with a `tasks` array, one task per
-   reviewer. Concurrency is capped at `delegation.max_concurrent_children` (default 3); larger
-   panels queue. Each reviewer must return:
+1. **Stage the subject.** Plan pasted/present -> use verbatim. No plan -> review the current
+   changeset (`git diff` vs merge base of the default branch; `DEBATE_DIFF_BASE` overrides).
+   Write it to a scratch file (`$HERMES_HOME/debate/<id>/plan.md`) so reviewers read the same
+   bytes. **Empty diff -> stop** (nothing to review; reviewers would approve a vacuum).
+2. **Route the panel** (above): read registry, run the selector, get seat -> model/harness/effort.
+3. **Dispatch in parallel.** One `delegate_task` with a `tasks` array per `subagent` seat; run
+   acpx seats via `run-acpx-review.sh` in the background (fan-out/timeout/retry owned by
+   `run-parallel-acpx.sh`). Each reviewer returns:
    ```
    ## Findings
    - <CRITICAL|HIGH|MED|LOW> <finding>
    ## VERDICT: APPROVE | REVISE
    ```
-   Do NOT run reviewers sequentially — the whole point is parallel.
-3. **Synthesize.** Group overlapping (2+ reviewers) vs unique findings; order by severity.
-   Unanimous APPROVE with no CRITICAL/HIGH → done.
-4. **Debate** (skip if `skip-debate`/unanimous). For each contradiction, a debate subagent gets
-   both opposing reviews + the plan and returns a resolved position with justification.
-5. **Verdict & revision loop.** REVISE → fix CRITICAL/HIGH (and agreed MED) findings, re-submit
+   Concurrency is capped at `delegation.max_concurrent_children` (default 3); larger panels queue.
+4. **Synthesize.** Group overlapping (2+ reviewers) vs unique findings; order by severity.
+   Unanimous APPROVE with no CRITICAL/HIGH -> done.
+5. **Debate** (skip if `skip-debate`/unanimous). For each contradiction, a debate subagent gets
+   both opposing reviews + the plan, returns a resolved position with justification.
+6. **Verdict + revision loop.** REVISE -> fix CRITICAL/HIGH (and agreed MED) findings, re-submit
    the *revised* plan to the same panel. Max `max_rounds` revision rounds.
-6. **Report.** Verdict per reviewer per round; findings table; debate resolutions; final verdict.
+7. **Report.** Verdict per reviewer per round; findings table; debate resolutions; final verdict;
+   note seats that produced nothing (distinct from seats that approved).
 
-## External-CLI reviewer backends
+## Sandbox / safety
 
-When `backend` isn't `subagent`, don't use delegate_task — shell out via `terminal(..., pty=true)`
-per that CLI's skill. Pass the plan **via file path / stdin**, never stitched into a shell
-string. Treat the output exactly like a subagent review in steps 3-6.
+acpx permission flags are a policy, not a sandbox. For `repo_aware` or untrusted-diff seats,
+run the review inside `scripts/sandbox.py` (bwrap -> sandbox-exec -> docker; read-only repo
+mount, isolated HOME, optional `--no-net`). This is real OS isolation at lightweight cost.
 
 ## Pitfalls
 
-- Never inline the plan into a shell string — always via file.
-- Parallel, not sequential — one `delegate_task` with a `tasks` array.
-- Subagents inherit the parent model by default; for true independence use external-CLI
-  backends or pin reviewer models. Say so when diversity is expected but not configured.
+- Never inline the plan into a shell string — always via file path.
+- Parallel, not sequential — one dispatch fan-out.
+- Selector never assigns one model to two seats; if the panel comes back thin, the
+  low-diversity warning explains why.
+- `available:false` seats are skipped silently by the selector — refresh/seed `available`
+  truthfully, or the panel shrinks without saying so.
 - Stage to `plan.md` first; clean up the scratch dir at the end.
