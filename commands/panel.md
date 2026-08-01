@@ -104,6 +104,14 @@ many were refuted, because those two numbers are what tell the user whether the 
 size was right. A run where nothing was deduplicated and nothing was refuted was
 probably too small; one where most findings collapsed into a handful was too big.
 
+**List the refuted findings too, one line each: file:line, the claim, and the reason it
+was dropped.** A count is not enough. The verifier is a model asked to argue against a
+finding, so it has a refute bias, and the failure that matters here is the one where it
+talks itself out of a true finding. Reported as a number, that finding is gone and
+nobody can tell it ever existed; reported as a line, a reader who knows the code can
+see the kill was wrong. Filtering false positives is only worth doing where the false
+negatives stay visible.
+
 **6. Clean up.**
 
 ```bash

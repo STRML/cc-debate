@@ -245,6 +245,51 @@ test_meta_is_a_pure_literal() {
   return 0
 }
 
+# The classifier judges securitySensitive by reading, and a model that reads a diff
+# touching auth and concludes otherwise silently removes the attacker from the exact
+# panel that needed one. A deterministic grep over the diff forces the seat regardless.
+test_security_grep_forces_the_pentester() {
+  if ! have_node; then
+    echo -n "(no node, skipped) "
+    return 0
+  fi
+  node -e '
+    const fs = require("fs");
+    const src = fs.readFileSync(process.argv[1], "utf8");
+    const lenses = src.slice(src.indexOf("const LENSES = ["), src.indexOf("// A docs-only change"));
+    const picker = src.slice(src.indexOf("function pickSeats"), src.indexOf("const DIFF_SHAPE"));
+    const pickSeats = new Function(lenses + picker + "; return pickSeats;")();
+
+    // The model said no; the grep said yes. The seat must still be bought.
+    const missed = { filesChanged: 2, linesAdded: 20, linesRemoved: 3, docsOnly: false,
+                     securitySensitive: false, securityGrep: true,
+                     touchesFilesystem: false, addsAbstraction: false };
+    if (!pickSeats(missed).includes("pentester")) {
+      console.error("grep hit did not force the pentester"); process.exit(1);
+    }
+    // Neither signal: still no pentester on a trivial diff.
+    const clean = { ...missed, securityGrep: false };
+    if (pickSeats(clean).includes("pentester")) {
+      console.error("pentester bought with no security signal"); process.exit(1);
+    }
+  ' "$WF" 2>&1
+}
+
+# Two seats on one line usually found one defect, but not always. Collapsing to a
+# single entry is fine; letting the merge delete the loser's claim is not.
+test_same_line_claims_are_kept() {
+  # The merge must record a distinct claim rather than only overwriting on severity.
+  local between
+  between=$(sed -n '/const merged = new Map()/,/const unique = /p' "$WF")
+  case "$between" in
+    *'alsoClaimed'*) ;;
+    *) echo -n "(merge drops the losing claim) "; return 1 ;;
+  esac
+  # And it has to reach the caller, not just the internal object.
+  grep -q 'alsoClaimed: f.alsoClaimed' "$WF" || { echo -n "(not returned) "; return 1; }
+  return 0
+}
+
 # --- Run ---
 
 echo ""
@@ -264,6 +309,8 @@ run_test "runner is backgrounded and unsandboxed" test_runner_is_backgrounded_an
 run_test "failed seats are not reported as run" test_failed_seats_are_not_reported_as_run
 run_test "unanchored findings do not collide" test_unanchored_findings_do_not_collide
 run_test "meta is a pure literal" test_meta_is_a_pure_literal
+run_test "security grep forces the pentester" test_security_grep_forces_the_pentester
+run_test "same-line claims are kept" test_same_line_claims_are_kept
 
 echo ""
 echo "  $PASS passed, $FAIL failed"

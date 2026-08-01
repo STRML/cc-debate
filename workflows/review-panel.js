@@ -66,7 +66,11 @@ const LENSES = [
   { seat: 'auditor', why: 'grounding, non-luna model', when: () => true },
   { seat: 'executor-b', why: 'state and lifecycle', when: (d) => d.filesChanged >= 3 || d.touchesFilesystem },
   { seat: 'cartographer', why: 'blast radius and doc drift', when: (d) => d.filesChanged >= 5 },
-  { seat: 'pentester', why: 'attacker', when: (d) => d.securitySensitive },
+  // The one seat that gets a floor under it. Every other lens can be talked out of by
+  // the classifier, and the cost is a smaller panel. Here the cost is no attacker on
+  // the exact diff that needed one, so a grep hit earns the seat whatever the model
+  // concluded from reading.
+  { seat: 'pentester', why: 'attacker', when: (d) => d.securitySensitive || d.securityGrep },
   { seat: 'simplifier', why: 'argues for less code', when: (d) => d.linesAdded >= 150 || d.addsAbstraction },
   { seat: 'antigravity', why: 'the only non-OpenAI seat', when: (d) => !d.docsOnly },
 ]
@@ -82,7 +86,7 @@ const DIFF_SHAPE = {
   type: 'object',
   required: [
     'filesChanged', 'linesAdded', 'linesRemoved', 'docsOnly',
-    'securitySensitive', 'touchesFilesystem', 'addsAbstraction', 'summary',
+    'securitySensitive', 'securityGrep', 'touchesFilesystem', 'addsAbstraction', 'summary',
   ],
   properties: {
     filesChanged: { type: 'integer' },
@@ -94,6 +98,10 @@ const DIFF_SHAPE = {
       description:
         'touches auth, credentials, secrets, crypto, permission checks, untrusted input, ' +
         'shelling out, or network endpoints',
+    },
+    securityGrep: {
+      type: 'boolean',
+      description: 'whether the security grep printed HIT; report what it printed, do not judge it',
     },
     touchesFilesystem: {
       type: 'boolean',
@@ -158,6 +166,13 @@ It prints filesChanged, linesAdded and linesRemoved in that order. Do not count 
 reading. pickSeats branches on these numbers at fixed thresholds, and a long diff is
 truncated before you reach the end of it, so a read count is a guess that silently
 resizes the panel.
+
+Then run this, and set securityGrep true if it prints HIT and false if it prints MISS:
+
+  grep -qiE '(auth|credential|password|passwd|secret|token|api[_-]?key|crypt|hmac|signature|permission|sudo|chmod|eval|exec\\(|subprocess|shell=True|sanitiz|escape|injection)' ${shellArg(`${WORK_DIR}/changeset.diff`)} && echo HIT || echo MISS
+
+Report what it printed. Do not second-guess it: a HIT on a diff you judged harmless is
+the case it exists for, and it only ever adds the attacker seat.
 
 If the file is missing, report every count as 0 and docsOnly true.
 
@@ -226,7 +241,11 @@ load-bearing:
   exactly like a seat that reviewed the diff and found nothing.
 - Unsandboxed, because the seats need outbound network and the antigravity seat writes
   its project config under ~/.gemini before it can open a conversation. Sandboxed, that
-  write is denied and the seat returns nothing.
+  write is denied and the seat returns nothing. What keeps the seats read-only is not
+  the sandbox but their own permission mode: acpx runs them with --approve-reads and
+  --non-interactive-permissions deny, and antigravity gets a throwaway workspace plus
+  --sandbox. Dropping the outer sandbox removes a second layer, not the only one — but
+  it does mean a seat's read-only guarantee now rests entirely on that flag being right.
 
 Then wait for every one of these to exist:
 
@@ -313,6 +332,16 @@ function key(f) {
   return `${file}:0:${(f.claim || '').trim().toLowerCase().replace(/\s+/g, ' ')}`
 }
 
+// Two seats on one line usually found one defect, which is why the key stays
+// file:line. Usually is not always: "missing error handling" and "the argument is not
+// sanitized" can both be true of line 42, and promoting only the harshest would delete
+// the other outright. So collapse to one entry per location, but keep every claim that
+// is not a restatement of one already there. Merging is for presentation; it should
+// never be the thing that loses a finding.
+function claimId(f) {
+  return (f.claim || '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
 const merged = new Map()
 for (const { seat, findings } of bySeat) {
   for (const f of findings) {
@@ -320,6 +349,10 @@ for (const { seat, findings } of bySeat) {
     const prev = merged.get(k)
     if (prev) {
       prev.seats.push(seat)
+      if (!prev.claims.has(claimId(f))) {
+        prev.claims.add(claimId(f))
+        prev.alsoClaimed.push({ severity: f.severity, claim: f.claim, failure: f.failure, seat })
+      }
       // Keep the harshest severity anyone assigned; a seat that saw it as critical
       // saw something the others did not.
       if (RANK[f.severity] < RANK[prev.severity]) {
@@ -328,9 +361,15 @@ for (const { seat, findings } of bySeat) {
         prev.failure = f.failure
       }
     } else {
-      merged.set(k, { ...f, seats: [seat] })
+      merged.set(k, { ...f, seats: [seat], claims: new Set([claimId(f)]), alsoClaimed: [] })
     }
   }
+}
+
+// alsoClaimed holds every distinct claim at this location including the one promoted to
+// the headline, so drop the headline from it to leave only what would have been lost.
+for (const f of merged.values()) {
+  f.alsoClaimed = f.alsoClaimed.filter((c) => claimId(c) !== claimId(f))
 }
 
 const unique = [...merged.values()]
@@ -418,6 +457,8 @@ return {
     failure: f.failure,
     fix: f.fix,
     foundBy: f.seats,
+    // Other distinct defects reported at this same location. Empty for most findings.
+    alsoClaimed: f.alsoClaimed,
   })),
   refuted: killed.map((f) => ({
     file: f.file,
