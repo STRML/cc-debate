@@ -57,8 +57,15 @@ The workflow reads `<WORK_DIR>/changeset.diff` and does not generate it, because
 workflow script has no filesystem access of its own.
 
 ```bash
-bash ~/.claude/debate-scripts/changeset-diff.sh "<WORK_DIR>" "<WORK_DIR>/changeset.diff"
+bash ~/.claude/debate-scripts/changeset-diff.sh "<WORK_DIR>" "<WORK_DIR>/changeset.diff" \
+  > "<WORK_DIR>/changeset-base.txt"
 ```
+
+The redirect is required, not decorative. `changeset-diff.sh` prints the base it resolved
+and writes it nowhere; the runner normally persists it, but on the frozen path it *reads*
+that file instead of regenerating. Skip the redirect and the base is empty, which
+`safe-cleanup.sh` later uses to regenerate the diff for its APPROVED gate — comparing
+against nothing.
 
 Set `DEBATE_DIFF_BASE` first if you want a base other than the merge base with the
 default branch. If the diff comes back empty, stop and say so; there is nothing to
@@ -76,7 +83,16 @@ Workflow({
 Pass `args` as a real object, not a JSON string — a string reaches the script as a
 string and every field reads `undefined`.
 
-It returns `{ diff, seats, seatsSkipped }`. Keep all three; step 6 needs them.
+It returns `{ diff, seats, seatsSkipped }`. **Write that object to disk before going on:**
+
+```bash
+cat > "<WORK_DIR>/panel-state.json"   # paste the returned object
+```
+
+Step 6 needs all three fields, and half an hour of seats running separates the two. Held
+only in your context, that state is one compaction or one dropped session away from
+gone, and the run cannot be finished without re-classifying. On disk it survives both.
+Read it back in step 6 rather than trusting recall.
 
 **5. Run the seats. This step is yours, not the workflow's.**
 
@@ -119,7 +135,8 @@ done
 ```
 
 A seat with no exit file never ran at all — `run-parallel-acpx.sh` skips a seat your
-config has no entry for, and says nothing about it. Feed the split back in:
+config has no entry for, and says nothing about it. Read `<WORK_DIR>/panel-state.json`
+back for `diff` and `seatsSkipped`, and feed the split in with them:
 
 ```
 Workflow({

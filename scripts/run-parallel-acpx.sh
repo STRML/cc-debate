@@ -62,6 +62,14 @@ if [ ! -s "$WORK_DIR/plan.md" ]; then
   if [ "${DEBATE_FREEZE_DIFF:-}" = "1" ] && [ -s "$WORK_DIR/changeset.diff" ]; then
     DIFF_BASE=$(cat "$WORK_DIR/changeset-base.txt" 2>/dev/null || echo "")
     echo "[debate] Frozen changeset: reviewing $WORK_DIR/changeset.diff as written." >&2
+    # changeset-diff.sh prints the base and writes it nowhere, so a caller that froze the
+    # diff without capturing that output leaves nothing to read here. Say so: the empty
+    # value gets persisted below and safe-cleanup.sh regenerates against it later, which
+    # silently compares the working tree to nothing at all.
+    if [ -z "$DIFF_BASE" ]; then
+      echo "[debate] WARNING: frozen diff has no recorded base ($WORK_DIR/changeset-base.txt is missing or empty)." >&2
+      echo "  hint: redirect changeset-diff.sh stdout into that file when you write the diff." >&2
+    fi
   elif git rev-parse --git-dir >/dev/null 2>&1; then
     DIFF_BASE=$(bash "$SCRIPT_DIR/changeset-diff.sh" "$WORK_DIR" "$WORK_DIR/changeset.diff") \
       || DIFF_BASE=""
