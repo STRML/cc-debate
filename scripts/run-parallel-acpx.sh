@@ -199,11 +199,19 @@ for NAME in "${REVIEWERS[@]}"; do
   # mid-retry and turns a recoverable blank turn into a lost seat on the panel.
   RETRIES=$(jq -r --arg name "$NAME" '.reviewers[$name].retries // 1' "$CONFIG_FILE")
   [[ "$RETRIES" =~ ^[0-9]+$ ]] || RETRIES=1
-  if [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
-    WORST=$(( TIMEOUT * (RETRIES + 1) ))
-    if [ "$WORST" -gt "$MAX_REVIEWER_BUDGET" ]; then
-      MAX_REVIEWER_BUDGET="$WORST"
-    fi
+  # Same fallback RETRIES gets on the line above, and for the same reason. A value
+  # like "600s" or 900.5 used to skip the budget entirely, because the guard below
+  # had no else — so the seat contributed nothing to MAX_WAIT while invoke-acpx.sh
+  # separately rewrote it to 120 and said so only in that seat's own log. The two
+  # layers disagreed and both were quiet about it. Warn once, here, where the
+  # operator is already reading, and hand the child the value we actually used.
+  if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || [ "$TIMEOUT" -le 0 ]; then
+    echo "[debate] $NAME: invalid timeout '$TIMEOUT', using 120s" >&2
+    TIMEOUT=120
+  fi
+  WORST=$(( TIMEOUT * (RETRIES + 1) ))
+  if [ "$WORST" -gt "$MAX_REVIEWER_BUDGET" ]; then
+    MAX_REVIEWER_BUDGET="$WORST"
   fi
 
   echo "[debate] Spawning $NAME ($AGENT, timeout: ${TIMEOUT}s)..." >&2
