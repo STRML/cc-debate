@@ -244,10 +244,26 @@ test_sample_config_is_coherent() {
     return 1
   fi
 
+  # A timeout has to be a positive integer, and the shape has to be checked before
+  # the floor below, because jq sorts strings above numbers: "600s" < 900 is false,
+  # so a malformed value sails through a bare comparison. Both layers fail quietly on
+  # one — invoke-acpx.sh matches ^[0-9]+$ and silently substitutes 120, while
+  # run-parallel-acpx.sh drops the seat from the wait budget entirely. A fraction like
+  # 900.5 clears the floor here and still gets rewritten to 120 there.
+  bad=$(jq -r '.reviewers | to_entries[]
+    | select(.value.timeout != null)
+    | .value.timeout as $t
+    | select((($t | type) != "number") or (($t | floor) != $t) or ($t <= 0))
+    | .key' "$f") || { echo "  timeout-shape lint failed to run"; return 1; }
+  if [ -n "$bad" ]; then
+    echo "  timeout is not a positive integer: $bad"
+    return 1
+  fi
+
   # Measured: a luna xhigh seat spent 271s reviewing a single-file, 13-line diff.
-  # That is near the floor cost of the seat, not a typical one. A repo-aware seat at
-  # this effort needs a budget it can finish in, and 900 costs nothing, because
-  # auditor and pentester already fix MAX_WAIT at 900*(1+1)+60.
+  # That is near the floor cost of the seat, not a typical one. Any repo-aware seat at
+  # this effort needs a budget it can finish in, whatever model it runs, and 900 costs
+  # nothing because auditor and pentester already fix MAX_WAIT at 900*(1+1)+60.
   bad=$(jq -r '.reviewers | to_entries[]
     | select(.value.agent == "codex-exec")
     | (.value.effort // "") as $e
