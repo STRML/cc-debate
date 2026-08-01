@@ -30,9 +30,22 @@ def detect_sandbox():
         return "docker"
     return None
 
+def _bwrap_supports(feature):
+    """True if this bwrap build accepts the given long option (older builds vary)."""
+    try:
+        import subprocess
+        out = subprocess.run(["bwrap", "--help"], capture_output=True, text=True, timeout=5)
+        return feature in (out.stdout + out.stderr)
+    except Exception:
+        return False  # can't tell; be conservative and drop non-essential flags
+
 def bwrap_cmd(repo, repo_sandbox, no_net, bind_pwd):
     home_tmp = os.path.join("/tmp", "debate-home-%s" % os.getpid())
-    cmd = ["bwrap", "--die-with-parent", "--unshare-pid", "--new-session"]
+    cmd = ["bwrap"]
+    # --die-with-parent isn't in every bwrap build (e.g. 0.11.0); probe before using.
+    if _bwrap_supports("die-with-parent"):
+        cmd.append("--die-with-parent")
+    cmd += ["--unshare-pid", "--new-session"]
     if no_net:
         cmd += ["--unshare-net"]
     cmd += ["--ro-bind", "/", "/", "--tmpfs", home_tmp, "--setenv", "HOME", home_tmp]
