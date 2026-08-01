@@ -41,6 +41,19 @@ if [ -z "$CONFIG_FILE" ] || [ -z "$WORK_DIR" ] || [ -z "$REVIEWER" ]; then
   exit 1
 fi
 
+# --- Exit-file publication ---
+# run-parallel-acpx.sh polls for this file's existence and then reads it, so the file
+# must never exist while empty. A plain `echo N > file` creates it first and writes a
+# moment later; a scheduler pause in that gap hands the parent an empty read, which it
+# scores as a failed seat. Write to a temporary name and rename, which is atomic within
+# a directory: the parent sees no file at all, or the finished one.
+publish_exit() {
+  local code="$1"
+  [ -n "$WORK_DIR" ] && [ -n "$REVIEWER" ] || return 0
+  printf '%s\n' "$code" > "$WORK_DIR/${REVIEWER}-exit.txt.tmp" &&
+    mv -f "$WORK_DIR/${REVIEWER}-exit.txt.tmp" "$WORK_DIR/${REVIEWER}-exit.txt"
+}
+
 # --- Resolve acpx binary (support npx fallback) ---
 
 ACPX_BIN=()
@@ -52,7 +65,7 @@ else
   echo "invoke-acpx: acpx not found. Install: npm install -g acpx@latest" >&2
   # Write a meaningful exit file if we can
   if [ -n "$WORK_DIR" ] && [ -n "$REVIEWER" ] && [ -d "$WORK_DIR" ]; then
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    publish_exit 1
     echo "acpx not installed. Run: npm install -g acpx@latest" > "$WORK_DIR/${REVIEWER}-output.md"
   fi
   exit 1
@@ -64,7 +77,7 @@ fi
 create_exit_file() {
   local code="${1:-1}"
   if [ -n "$WORK_DIR" ] && [ -n "$REVIEWER" ]; then
-    echo "$code" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    publish_exit "$code"
     if [ ! -f "$WORK_DIR/${REVIEWER}-output.md" ]; then
       echo "invoke-acpx: process terminated unexpectedly (exit $code)" > "$WORK_DIR/${REVIEWER}-output.md"
     fi
@@ -174,7 +187,7 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
       echo "[$REVIEWER] Failed to ensure acpx session for '$AGENT'." >&2
       echo "  Check that the agent CLI is installed and authenticated." >&2
       echo "  Run /debate:acpx-setup to diagnose." >&2
-      echo "4" > "$WORK_DIR/${REVIEWER}-exit.txt"
+      publish_exit 4
       echo "Failed to ensure acpx session for '$AGENT'. Run /debate:acpx-setup to diagnose." > "$WORK_DIR/${REVIEWER}-output.md"
       trap - EXIT
       exit 4
@@ -365,7 +378,7 @@ handle_invocation_result() {
     EXIT_CODE=1
   fi
 
-  echo "$EXIT_CODE" > "$WORK_DIR/${REVIEWER}-exit.txt"
+  publish_exit "$EXIT_CODE"
 
   trap - EXIT
   exit "$EXIT_CODE"
@@ -391,7 +404,7 @@ if [ "$AGENT" = "antigravity" ]; then
   if ! command -v agy > /dev/null 2>&1; then
     echo "[$REVIEWER] agy CLI not found. Install the Antigravity CLI and run 'agy' once to sign in." >&2
     echo "agy CLI not installed. Install the Antigravity CLI (https://antigravity.google) and run 'agy' to sign in." > "$WORK_DIR/${REVIEWER}-output.md"
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    publish_exit 1
     trap - EXIT
     exit 1
   fi
@@ -412,7 +425,7 @@ if [ "$AGENT" = "antigravity" ]; then
   else
     echo "[$REVIEWER] python3 not found — required to run agy under a PTY." >&2
     echo "python3 not installed. Install Python 3 to use the antigravity reviewer." > "$WORK_DIR/${REVIEWER}-output.md"
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    publish_exit 1
     trap - EXIT
     exit 1
   fi
@@ -509,7 +522,7 @@ if [ "$AGENT" = "opus" ]; then
   if ! command -v claude > /dev/null 2>&1; then
     echo "[$REVIEWER] claude CLI not found — is Claude Code installed?" >&2
     echo "claude CLI not installed. Ensure Claude Code is on PATH." > "$WORK_DIR/${REVIEWER}-output.md"
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    publish_exit 1
     trap - EXIT
     exit 1
   fi
@@ -563,7 +576,7 @@ if [ "$AGENT" = "codex-exec" ]; then
   if ! command -v codex > /dev/null 2>&1; then
     echo "[$REVIEWER] codex CLI not found." >&2
     echo "codex CLI not installed. Install the Codex CLI and run 'codex' once to sign in." > "$WORK_DIR/${REVIEWER}-output.md"
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    publish_exit 1
     trap - EXIT
     exit 1
   fi

@@ -119,22 +119,65 @@ test_docs_only_diff_picks_one_seat() {
   ' "$WF" 2>&1
 }
 
-# The workflow quotes every path it interpolates, because a repo path can contain
-# spaces. A tilde inside double quotes is never expanded, so a `~/...` default reaches
-# the shell as a literal directory that does not exist and the panel cannot start.
-test_runner_command_expands_its_paths() {
+# Every path interpolated into a command must go through shellArg. A bare ${VAR} splits
+# on spaces, and a `~/...` default that is merely quoted is never expanded — either way
+# the panel dies before a seat runs. Catching this by eye failed once already: the
+# comment above shellArg claimed every path was quoted while two were not.
+test_interpolated_paths_are_escaped() {
+  local line
+  # Any line that runs a command and mentions a path variable must use shellArg for it.
+  while IFS= read -r line; do
+    case "$line" in
+      *'${WORK_DIR}'*|*'${REPO}'*|*'${SCRIPTS}'*|*'${CONFIG}'*)
+        case "$line" in
+          *'shellArg('*) ;;
+          *) echo -n "(unescaped path: ${line#"${line%%[![:space:]]*}"}) "; return 1 ;;
+        esac
+        ;;
+    esac
+  done < <(grep -nE "^\s+(cd |bash |awk |sh )" "$WF")
+  # And the runner command specifically must escape all four of its arguments.
   local cmd
   cmd=$(grep 'run-parallel-acpx.sh' "$WF" | grep 'bash ')
   [ -n "$cmd" ] || return 1
   case "$cmd" in
-    *'shellPath(SCRIPTS)'*) ;;
-    *) echo -n "(script dir not expanded) "; return 1 ;;
+    *'shellArg(REPO)'*) ;;
+    *) echo -n "(repo not escaped) "; return 1 ;;
   esac
   case "$cmd" in
-    *'shellPath(CONFIG)'*) ;;
-    *) echo -n "(config path not expanded) "; return 1 ;;
+    *'shellArg(CONFIG)'*) ;;
+    *) echo -n "(config not escaped) "; return 1 ;;
   esac
   return 0
+}
+
+# shellArg has to survive the three cases that actually break a shell: a space, a
+# single quote, and a leading tilde that must still expand.
+test_shellarg_handles_hostile_paths() {
+  if ! have_node; then
+    echo -n "(no node, skipped) "
+    return 0
+  fi
+  node -e '
+    const fs = require("fs");
+    const src = fs.readFileSync(process.argv[1], "utf8");
+    const body = src.slice(src.indexOf("function shellArg(p)"), src.indexOf("// --- lenses"));
+    const shellArg = new Function(body + "; return shellArg;")();
+
+    const cases = [
+      ["/My Repo/x",  "'"'"'/My Repo/x'"'"'"],
+      ["~/a/b",       "\"$HOME\"'"'"'/a/b'"'"'"],
+      ["/plain/path", "'"'"'/plain/path'"'"'"],
+    ];
+    for (const [input, want] of cases) {
+      const got = shellArg(input);
+      if (got !== want) { console.error(`shellArg(${input}) = ${got}, want ${want}`); process.exit(1); }
+    }
+    // A single quote must not terminate the quoting.
+    const q = shellArg("/it\x27s/here");
+    if (q.includes("s/here'"'"'") === false && !q.startsWith("'"'"'")) { console.error("quote not escaped: " + q); process.exit(1); }
+    if (q === "'"'"'/it'"'"'s/here'"'"'") { console.error("single quote passed through unescaped"); process.exit(1); }
+  ' "$WF" 2>&1
 }
 
 # The runner budgets timeout x (retries + 1) + 60s for its slowest seat — over half an
@@ -180,6 +223,28 @@ test_unanchored_findings_do_not_collide() {
   ' "$WF" 2>&1
 }
 
+# The loader parses meta as a pure literal and refuses anything else. A string built
+# with + is a BinaryExpression, and it fails the whole workflow before the first phase
+# runs — with a message about meta, not about the line that caused it. `node --check`
+# does not catch this because the concatenation is valid JavaScript.
+test_meta_is_a_pure_literal() {
+  local block
+  block=$(sed -n '/^export const meta = {/,/^}/p' "$WF")
+  [ -n "$block" ] || return 1
+  # A comment may legitimately contain either, so judge the code lines only.
+  block=$(printf '%s\n' "$block" | grep -v '^\s*//')
+  case "$block" in
+    *'+'*) echo -n "(concatenation in meta) "; return 1 ;;
+  esac
+  case "$block" in
+    *'${'*) echo -n "(interpolation in meta) "; return 1 ;;
+  esac
+  case "$block" in
+    *'...'*) echo -n "(spread in meta) "; return 1 ;;
+  esac
+  return 0
+}
+
 # --- Run ---
 
 echo ""
@@ -193,10 +258,12 @@ run_test "lens seats exist in sample config" test_lens_seats_exist_in_sample_con
 run_test "reviews still go through the runner" test_reviews_still_go_through_the_runner
 run_test "dedupe is code, not an agent" test_dedupe_is_code_not_an_agent
 run_test "seat count scales with the diff" test_docs_only_diff_picks_one_seat
-run_test "runner command expands its paths" test_runner_command_expands_its_paths
+run_test "interpolated paths are escaped" test_interpolated_paths_are_escaped
+run_test "shellArg handles hostile paths" test_shellarg_handles_hostile_paths
 run_test "runner is backgrounded and unsandboxed" test_runner_is_backgrounded_and_unsandboxed
 run_test "failed seats are not reported as run" test_failed_seats_are_not_reported_as_run
 run_test "unanchored findings do not collide" test_unanchored_findings_do_not_collide
+run_test "meta is a pure literal" test_meta_is_a_pure_literal
 
 echo ""
 echo "  $PASS passed, $FAIL failed"

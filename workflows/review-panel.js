@@ -1,9 +1,10 @@
 export const meta = {
   name: 'review-panel',
   description: 'Pick reviewer lenses from the diff, run them, dedupe the findings, verify what survives',
-  whenToUse:
-    'A code review where the panel size should follow the change rather than a fixed list. ' +
-    'Needs a work dir already prepared by debate-setup.sh and a changeset.diff already written.',
+  // One string literal, not two joined by +. The loader parses meta as a pure literal
+  // and rejects a BinaryExpression, so a concatenation here fails the whole workflow
+  // before the first phase runs.
+  whenToUse: 'A code review where the panel size should follow the change rather than a fixed list. Needs a work dir already prepared by debate-setup.sh and a changeset.diff already written.',
   phases: [
     { title: 'Classify', detail: 'read the diff, measure it' },
     { title: 'Review', detail: 'run the selected seats through the existing runner' },
@@ -20,7 +21,11 @@ export const meta = {
 // invoke-acpx.sh. Ten agent() calls would be ten correlated reviewers, which is the
 // failure debate-acpx.sample.json warns about in as many words.
 
-const A = args || {}
+// args arrives verbatim from the caller. A caller that JSON-encodes it — easy to do,
+// and the failure reads as "needs args {workDir, reviewId}" while the args are sitting
+// right there in the invocation — would otherwise land here as a string, where every
+// property lookup is undefined.
+const A = (typeof args === 'string' ? JSON.parse(args) : args) || {}
 const WORK_DIR = A.workDir
 const CONFIG = A.configPath || '~/.claude/debate-acpx.json'
 const REVIEW_ID = A.reviewId
@@ -31,14 +36,20 @@ if (!WORK_DIR || !REVIEW_ID) {
   throw new Error('review-panel needs args {workDir, reviewId}; run debate-setup.sh first')
 }
 
-// A workflow script has no filesystem access, so it cannot resolve `~` itself, and the
-// shell does not expand a tilde inside double quotes. Every path below is quoted
-// because a repo path can contain spaces, so a caller passing the documented
-// `~/.claude/debate-scripts` default would produce a command that looks right and opens
-// a literal `~` directory that does not exist. `$HOME` does expand inside double
-// quotes; rewriting the prefix is what makes the tilde form work at all.
-function shellPath(p) {
-  return String(p).replace(/^~(?=\/|$)/, '$HOME')
+// Every path this script puts in a command goes through here. Two problems at once:
+// a workflow has no filesystem access, so it cannot resolve `~` itself, and a repo
+// path can contain spaces or quotes, which split a command into the wrong arguments.
+// Single quotes solve the second and defeat the first, so a leading `~` is emitted as
+// a separate "$HOME" token and the remainder is single-quoted:
+//   ~/a/b       -> "$HOME"'/a/b'
+//   /My Repo    -> '/My Repo'
+//   /it's/here  -> '/it'\''s/here'
+function shellArg(p) {
+  const s = String(p)
+  const tilde = /^~(?=\/|$)/.test(s)
+  const rest = tilde ? s.slice(1) : s
+  const quoted = `'${rest.replace(/'/g, `'\\''`)}'`
+  return tilde ? `"$HOME"${quoted}` : quoted
 }
 
 // --- lenses -----------------------------------------------------------------
@@ -141,7 +152,7 @@ do not judge it. Report only what is observably true of the diff.
 
 Get the three counts by running exactly this and reporting what it prints:
 
-  awk '/^diff --git /{f++} /^\\+\\+\\+ |^--- /{next} /^\\+/{a++} /^-/{r++} END{printf "%d %d %d\\n", f+0, a+0, r+0}' ${WORK_DIR}/changeset.diff
+  awk '/^diff --git /{f++} /^\\+\\+\\+ |^--- /{next} /^\\+/{a++} /^-/{r++} END{printf "%d %d %d\\n", f+0, a+0, r+0}' ${shellArg(`${WORK_DIR}/changeset.diff`)}
 
 It prints filesChanged, linesAdded and linesRemoved in that order. Do not count by
 reading. pickSeats branches on these numbers at fixed thresholds, and a long diff is
@@ -204,7 +215,7 @@ const RUN_STATUS = {
 const run = await agent(
   `Run the review panel and report what each seat did. Review nothing yourself.
 
-  cd ${shellPath(REPO)} && bash "${shellPath(SCRIPTS)}/run-parallel-acpx.sh" "${shellPath(CONFIG)}" "${REVIEW_ID}" "${seats.join(',')}"
+  cd ${shellArg(REPO)} && bash ${shellArg(`${SCRIPTS}/run-parallel-acpx.sh`)} ${shellArg(CONFIG)} ${shellArg(REVIEW_ID)} ${shellArg(seats.join(','))}
 
 Start that with run_in_background: true AND dangerouslyDisableSandbox: true. Both are
 load-bearing:
