@@ -69,19 +69,35 @@ Workflow({
     reviewId:   "<REVIEW_ID>",
     workDir:    "<WORK_DIR>",
     repoRoot:   "<REPO_ROOT>",
-    scriptDir:  "~/.claude/debate-scripts",
-    configPath: "~/.claude/debate-acpx.json"
+    scriptDir:  "<SCRIPT_DIR>",
+    configPath: "<HOME>/.claude/debate-acpx.json"
   }
 })
 ```
+
+Use the absolute `SCRIPT_DIR` that `debate-setup.sh` printed, and an absolute
+`configPath`. The workflow builds a shell command out of these and quotes each one, so
+a `~` would arrive at the shell inside double quotes where it is never expanded. The
+workflow rewrites a leading `~/` to `$HOME/` to cover the tilde form, but passing the
+resolved path is the version that cannot go wrong.
 
 It runs in the background and notifies you when it finishes. Do not poll it.
 
 **5. Report what it returns.**
 
-The workflow returns the seats it ran, the seats it skipped and why the diff did not
-earn them, the raw and deduplicated finding counts, the surviving findings ranked, and
-the refuted ones with the reason each was dropped.
+The workflow returns the seats it ran, the seats it asked for that produced no review,
+the seats it skipped with the reason the diff did not earn each one, the raw and
+deduplicated finding counts, the surviving findings ranked, the refuted ones with the
+reason each was dropped, and any finding whose verifier never returned.
+
+Show the unverified findings too, and label them as unverified. Nobody refuted them —
+the verify step just did not come back — so they are reviewer claims that have not been
+checked, which is not the same as findings that survived a check.
+
+Report `seatsFailed` whenever it is non-empty, and say so before the findings rather
+than after. A seat that did not run contributes no findings, which is indistinguishable
+from a seat that reviewed the diff and approved it — the count of seats that actually
+reported is what tells the user how much the review is worth.
 
 Show the surviving findings in full. Then say plainly how many were duplicates and how
 many were refuted, because those two numbers are what tell the user whether the panel

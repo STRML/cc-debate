@@ -31,6 +31,16 @@ if (!WORK_DIR || !REVIEW_ID) {
   throw new Error('review-panel needs args {workDir, reviewId}; run debate-setup.sh first')
 }
 
+// A workflow script has no filesystem access, so it cannot resolve `~` itself, and the
+// shell does not expand a tilde inside double quotes. Every path below is quoted
+// because a repo path can contain spaces, so a caller passing the documented
+// `~/.claude/debate-scripts` default would produce a command that looks right and opens
+// a literal `~` directory that does not exist. `$HOME` does expand inside double
+// quotes; rewriting the prefix is what makes the tilde form work at all.
+function shellPath(p) {
+  return String(p).replace(/^~(?=\/|$)/, '$HOME')
+}
+
 // --- lenses -----------------------------------------------------------------
 //
 // A lens is a seat plus the condition that earns it. Order matters only for
@@ -126,16 +136,36 @@ const VERDICT = {
 phase('Classify')
 
 const shape = await agent(
-  `Read ${WORK_DIR}/changeset.diff and measure it. Do not review it and do not judge it.
-Report only what is observably true of the diff.
+  `Report the shape of the changeset at ${WORK_DIR}/changeset.diff. Do not review it and
+do not judge it. Report only what is observably true of the diff.
 
-If the file is missing or empty, say so by reporting every count as 0 and docsOnly true.
+Get the three counts by running exactly this and reporting what it prints:
 
-Repo root is ${REPO}. Read with absolute paths.`,
+  awk '/^diff --git /{f++} /^\\+\\+\\+ |^--- /{next} /^\\+/{a++} /^-/{r++} END{printf "%d %d %d\\n", f+0, a+0, r+0}' ${WORK_DIR}/changeset.diff
+
+It prints filesChanged, linesAdded and linesRemoved in that order. Do not count by
+reading. pickSeats branches on these numbers at fixed thresholds, and a long diff is
+truncated before you reach the end of it, so a read count is a guess that silently
+resizes the panel.
+
+If the file is missing, report every count as 0 and docsOnly true.
+
+Judge docsOnly, the three booleans and the summary by reading the diff — those are the
+part that needs a reader. Repo root is ${REPO}. Read with absolute paths.`,
   { label: 'classify-diff', phase: 'Classify', schema: DIFF_SHAPE, effort: 'low' },
 )
 
 if (!shape) throw new Error('could not classify the diff; nothing downstream is safe')
+
+// An empty diff classifies as zero-everything, which pickSeats reads as docsOnly and
+// buys one seat for. But run-parallel-acpx.sh regenerates the changeset itself when no
+// plan is staged, so the seats would go on to review a real change that was sized as a
+// docs edit. Refuse rather than review one diff having measured another.
+if (!shape.filesChanged && !shape.linesAdded && !shape.linesRemoved) {
+  throw new Error(
+    `${WORK_DIR}/changeset.diff is empty — write it with changeset-diff.sh before running the panel`,
+  )
+}
 
 const seats = pickSeats(shape)
 log(`${shape.filesChanged} files, +${shape.linesAdded}/-${shape.linesRemoved}: ${shape.summary}`)
@@ -152,18 +182,80 @@ for (const l of LENSES) {
 
 phase('Review')
 
-await agent(
-  `Run the review panel and report nothing else.
+const RUN_STATUS = {
+  type: 'object',
+  required: ['seats'],
+  properties: {
+    seats: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['seat', 'exit', 'bytes'],
+        properties: {
+          seat: { type: 'string' },
+          exit: { type: 'integer', description: '-1 if the seat never wrote an exit file' },
+          bytes: { type: 'integer', description: 'size of <seat>-output.md, 0 if missing' },
+        },
+      },
+    },
+  },
+}
 
-  cd ${REPO} && bash "${SCRIPTS}/run-parallel-acpx.sh" "${CONFIG}" "${REVIEW_ID}" "${seats.join(',')}"
+const run = await agent(
+  `Run the review panel and report what each seat did. Review nothing yourself.
 
-It blocks until every seat finishes or its budget runs out, and it can take fifteen
-minutes. Let it run. Do not kill it, do not poll it, do not summarise the reviews.
+  cd ${shellPath(REPO)} && bash "${shellPath(SCRIPTS)}/run-parallel-acpx.sh" "${shellPath(CONFIG)}" "${REVIEW_ID}" "${seats.join(',')}"
 
-When it returns, reply with one line per seat: the seat name, the contents of
-${WORK_DIR}/<seat>-exit.txt, and the byte size of ${WORK_DIR}/<seat>-output.md.`,
-  { label: 'run-panel', phase: 'Review' },
+Start that with run_in_background: true AND dangerouslyDisableSandbox: true. Both are
+load-bearing:
+
+- Background, because the runner budgets timeout x (retries + 1) + 60s for its slowest
+  seat — up to 31 minutes for the 900s seats — and one Bash call is capped at 10. A
+  foreground call is killed mid-panel, and every seat it was still waiting on then looks
+  exactly like a seat that reviewed the diff and found nothing.
+- Unsandboxed, because the seats need outbound network and the antigravity seat writes
+  its project config under ~/.gemini before it can open a conversation. Sandboxed, that
+  write is denied and the seat returns nothing.
+
+Then wait for every one of these to exist:
+
+  ${seats.map((s) => `${WORK_DIR}/${s}-exit.txt`).join('\n  ')}
+
+Wait with Monitor and an until-loop over those paths. A foreground sleep is blocked by
+the harness, so if Monitor is unavailable, re-check with a fresh short Bash call each
+time instead of sleeping between checks. Give up after 35 minutes. Do not kill the
+runner, do not read the reviews, do not summarise them.
+
+Report one entry per seat: its name, the integer in ${WORK_DIR}/<seat>-exit.txt (-1 if
+that file never appeared), and the byte size of ${WORK_DIR}/<seat>-output.md (0 if it is
+missing).`,
+  { label: 'run-panel', phase: 'Review', schema: RUN_STATUS },
 )
+
+// What the runner did is the difference between "reviewed and found nothing" and "never
+// ran". The extract stage maps a missing output file to an empty findings array, so
+// without this check a runner that failed to start returns the cleanest report the panel
+// can produce. A seat is only counted as run if it exited 0 and wrote something.
+const reported = new Map(((run && run.seats) || []).map((s) => [s.seat, s]))
+const ran = seats.filter((s) => {
+  const st = reported.get(s)
+  return st && st.exit === 0 && st.bytes > 0
+})
+const failed = seats.filter((s) => !ran.includes(s))
+
+for (const s of failed) {
+  const st = reported.get(s)
+  // exit -1 also covers a lens the config has no entry for: run-parallel-acpx.sh skips
+  // an unknown seat without failing, so the only trace is the exit file never appearing.
+  log(`  ${s}: no review (exit ${st ? st.exit : 'unknown'}, ${st ? st.bytes : 0} bytes) — not counted as run`)
+}
+
+if (!ran.length) {
+  throw new Error(
+    `no seat produced a review (asked for: ${seats.join(', ')}). The runner did not start, ` +
+      `was killed, or none of these seats exists in ${CONFIG}.`,
+  )
+}
 
 // --- 3. extract --------------------------------------------------------------
 //
@@ -174,7 +266,7 @@ ${WORK_DIR}/<seat>-exit.txt, and the byte size of ${WORK_DIR}/<seat>-output.md.`
 phase('Extract')
 
 const perSeat = await pipeline(
-  seats,
+  ran,
   (seat) =>
     agent(
       `Read ${WORK_DIR}/${seat}-output.md and transcribe its findings into the schema.
@@ -198,8 +290,16 @@ for (const s of bySeat) log(`${s.seat}: ${s.findings.length} finding(s)`)
 // Plain code, deliberately. On #22 five seats independently found one README drift,
 // and the orchestrator deduped by reading twelve files. Same key, same finding.
 
+// file:line is the right key for a line-anchored finding — two seats pointing at one
+// line found one thing. It is the wrong key at line 0, which the schema tells a seat to
+// use whenever a finding is not line-anchored: every file-level finding in a file would
+// collide on `readme.md:0` and all but the harshest would be dropped as a duplicate.
+// There the claim is the only identity available, so use it.
 function key(f) {
-  return `${(f.file || '').trim().toLowerCase()}:${f.line || 0}`
+  const file = (f.file || '').trim().toLowerCase()
+  const line = f.line || 0
+  if (line > 0) return `${file}:${line}`
+  return `${file}:0:${(f.claim || '').trim().toLowerCase().replace(/\s+/g, ' ')}`
 }
 
 const merged = new Map()
@@ -256,10 +356,16 @@ alone unless the code shows the reviewer misjudged the impact.`,
   ),
 )
 
+// filter(Boolean) drops nothing here: the .then above wraps every finding in a fresh
+// object, so a verifier that timed out or came back malformed yields {..., verdict:
+// null} — truthy, but in neither survived nor killed. Left implicit, an unrefuted
+// finding disappears from the report with nothing said. Nobody argued it away, so it
+// is reported separately rather than dropped.
 const checked = judged.filter(Boolean)
+const unverified = checked.filter((f) => !f.verdict)
 const survived = checked.filter((f) => f.verdict && !f.verdict.refuted)
 const killed = checked.filter((f) => f.verdict && f.verdict.refuted)
-log(`${survived.length} finding(s) survived, ${killed.length} refuted`)
+log(`${survived.length} finding(s) survived, ${killed.length} refuted, ${unverified.length} unverified`)
 
 // --- 6. rank -----------------------------------------------------------------
 
@@ -278,13 +384,20 @@ survived.sort((a, b) => {
 
 return {
   diff: shape,
-  seatsRun: seats,
-  seatsSkipped: LENSES.filter((l) => !seats.includes(l.seat)).map((l) => l.seat),
+  // seatsRun is what reported, not what was asked for. Reporting the request would
+  // credit a seat that never ran with having found nothing.
+  seatsRun: ran,
+  seatsFailed: failed,
+  // The reason a seat was skipped is the interesting half — it is what you argue with
+  // when a lens keeps missing a change you wanted it on — and it was only reaching the
+  // log, not the caller.
+  seatsSkipped: LENSES.filter((l) => !seats.includes(l.seat)).map((l) => ({ seat: l.seat, why: l.why })),
   counts: {
     raw: bySeat.reduce((n, s) => n + s.findings.length, 0),
     distinct: unique.length,
     survived: survived.length,
     refuted: killed.length,
+    unverified: unverified.length,
   },
   findings: survived.map((f) => ({
     file: f.file,
@@ -300,6 +413,16 @@ return {
     line: f.line,
     claim: f.claim,
     why: f.verdict.reason,
+    foundBy: f.seats,
+  })),
+  // Nobody refuted these; the verifier just never came back. They are the reviewers'
+  // claims as filed, unfiltered, and they are reported as exactly that.
+  unverified: unverified.map((f) => ({
+    file: f.file,
+    line: f.line,
+    severity: f.severity,
+    claim: f.claim,
+    failure: f.failure,
     foundBy: f.seats,
   })),
 }

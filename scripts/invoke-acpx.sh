@@ -350,8 +350,11 @@ handle_invocation_result() {
     echo "[$REVIEWER] Review received." >&2
   fi
 
-  echo "$EXIT_CODE" > "$WORK_DIR/${REVIEWER}-exit.txt"
-
+  # A final blank turn is a failure, whatever the process exited with. Decide that
+  # before publishing anything: run-parallel-acpx.sh polls for the exit file's
+  # existence, not its contents, so writing the pre-correction code and overwriting it
+  # a moment later leaves a window where the parent reads 0 for a seat that is about
+  # to be recorded as failed. Publish the code once, after it is final.
   if [ "$EXIT_CODE" -eq 0 ] && output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
     echo "[$REVIEWER] Empty response from $label." >&2
     {
@@ -359,10 +362,10 @@ handle_invocation_result() {
       echo ""
       cat "$WORK_DIR/${REVIEWER}-stderr.log" 2>/dev/null || echo "(no stderr)"
     } > "$WORK_DIR/${REVIEWER}-output.md"
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
-    trap - EXIT
-    exit 1
+    EXIT_CODE=1
   fi
+
+  echo "$EXIT_CODE" > "$WORK_DIR/${REVIEWER}-exit.txt"
 
   trap - EXIT
   exit "$EXIT_CODE"
