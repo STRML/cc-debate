@@ -50,10 +50,19 @@ chmod 700 "$WORK_DIR" 2>/dev/null || true
 # without preparing a plan, and it needs no extra syntax. DEBATE_DIFF_BASE
 # overrides the comparison point (default: the merge base with the default
 # branch, falling back to HEAD so uncommitted work still reviews).
+#
+# DEBATE_FREEZE_DIFF=1 keeps an existing changeset.diff exactly as the caller wrote it.
+# /debate:panel needs that: it measures the diff, picks the seats from what it measured,
+# and only then starts this script. Regenerating here would let an edit landing in
+# between hand the seats a different changeset from the one the panel was sized for, and
+# the report would describe the old shape while the reviews described the new code.
 REVIEW_TARGET="$WORK_DIR/plan.md"
 if [ ! -s "$WORK_DIR/plan.md" ]; then
   DIFF_BASE=""
-  if git rev-parse --git-dir >/dev/null 2>&1; then
+  if [ "${DEBATE_FREEZE_DIFF:-}" = "1" ] && [ -s "$WORK_DIR/changeset.diff" ]; then
+    DIFF_BASE=$(cat "$WORK_DIR/changeset-base.txt" 2>/dev/null || echo "")
+    echo "[debate] Frozen changeset: reviewing $WORK_DIR/changeset.diff as written." >&2
+  elif git rev-parse --git-dir >/dev/null 2>&1; then
     DIFF_BASE=$(bash "$SCRIPT_DIR/changeset-diff.sh" "$WORK_DIR" "$WORK_DIR/changeset.diff") \
       || DIFF_BASE=""
   fi

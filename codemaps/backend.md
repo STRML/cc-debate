@@ -20,7 +20,8 @@ _Updated: 2026-07-11_
 | File | Purpose |
 |------|---------|
 | `debate-setup.sh` | Generates `REVIEW_ID`, `WORK_DIR` (`.tmp/ai-review-<ID>`), outputs `SCRIPT_DIR` |
-| `create-links.sh` | Creates `~/.claude/debate-scripts` symlink to installed scripts dir |
+| `create-links.sh` | Creates `~/.claude/debate-scripts` and `~/.claude/debate-workflows` symlinks to the installed dirs |
+| `changeset-diff.sh` | Writes the changeset under review; builds in a temp file and renames, so a partial diff is never readable as a complete one |
 | `invoke-acpx.sh` | Invokes any acpx agent: reads config, builds prompt, wraps with system `timeout`, captures output |
 | `run-parallel-acpx.sh` | Spawns `invoke-acpx.sh` per reviewer with nohup+disown, polls `*-exit.txt` until done |
 

@@ -12,6 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WF="$PROJECT_DIR/workflows/review-panel.js"
+PANEL_MD="$PROJECT_DIR/commands/panel.md"
 SAMPLE="$PROJECT_DIR/debate-acpx.sample.json"
 
 PASS=0
@@ -72,8 +73,20 @@ test_lens_seats_exist_in_sample_config() {
 # The whole point of the panel is that its reviewers are not Claude. agent() in a
 # workflow spawns Claude subagents, so the review itself must go through the
 # runner. If this ever fails, someone has turned the panel into one vendor.
+#
+# Checked against panel.md, because the runner is invoked from the command: it blocks
+# for up to half an hour and nothing inside a workflow can wait that long. Checking the
+# workflow would pass on a passing mention of the runner in a comment, which is exactly
+# what it now contains.
 test_reviews_still_go_through_the_runner() {
-  grep -q "run-parallel-acpx.sh" "$WF"
+  grep -q "run-parallel-acpx.sh" "$PANEL_MD" || { echo -n "(command never runs the runner) "; return 1; }
+  # And the workflow must not quietly take the job back. Three agent() calls is the
+  # design — classify, extract, verify — and none of them reviews the diff for defects.
+  # Comments discuss agent() at length, so count code lines only.
+  local calls
+  calls=$(grep -v '^\s*//' "$WF" | grep -c "agent(")
+  [ "$calls" -le 3 ] || { echo -n "(workflow grew to $calls agent calls) "; return 1; }
+  return 0
 }
 
 # Dedupe is the reason this workflow exists. Doing it in an agent would put the
@@ -141,18 +154,6 @@ test_interpolated_paths_are_escaped() {
       esac
     done
   done < <(grep -nE "^\s+(cd |bash |awk |sh |grep )" "$WF")
-  # And the runner command specifically must escape all four of its arguments.
-  local cmd
-  cmd=$(grep 'run-parallel-acpx.sh' "$WF" | grep 'bash ')
-  [ -n "$cmd" ] || return 1
-  case "$cmd" in
-    *'shellArg(REPO)'*) ;;
-    *) echo -n "(repo not escaped) "; return 1 ;;
-  esac
-  case "$cmd" in
-    *'shellArg(CONFIG)'*) ;;
-    *) echo -n "(config not escaped) "; return 1 ;;
-  esac
   return 0
 }
 
@@ -191,8 +192,8 @@ test_shellarg_handles_hostile_paths() {
 # It also needs out of the sandbox: antigravity writes under ~/.gemini before it can
 # open a conversation.
 test_runner_is_backgrounded_and_unsandboxed() {
-  grep -q 'run_in_background: true' "$WF" || { echo -n "(not backgrounded) "; return 1; }
-  grep -q 'dangerouslyDisableSandbox: true' "$WF" || { echo -n "(sandboxed) "; return 1; }
+  grep -q 'run_in_background: true' "$PANEL_MD" || { echo -n "(not backgrounded) "; return 1; }
+  grep -q 'dangerouslyDisableSandbox: true' "$PANEL_MD" || { echo -n "(sandboxed) "; return 1; }
   return 0
 }
 
@@ -205,9 +206,11 @@ test_failed_seats_are_not_reported_as_run() {
   return 0
 }
 
-# line 0 is what the schema tells a seat to use for a finding that is not line-anchored.
-# Keyed on file:line alone, every file-level finding in one file collapses into one.
-test_unanchored_findings_do_not_collide() {
+# The claim is part of the key at every line number. Keyed on file:line alone, two real
+# defects on one line became one record, and the version that kept the loser in a side
+# list lost a finding in BOTH arrival orders — minor-then-major and major-then-minor.
+# Six of seven seats found that independently, so both orders are asserted here.
+test_distinct_claims_never_collapse() {
   if ! have_node; then
     echo -n "(no node, skipped) "
     return 0
@@ -215,16 +218,28 @@ test_unanchored_findings_do_not_collide() {
   node -e '
     const fs = require("fs");
     const src = fs.readFileSync(process.argv[1], "utf8");
-    const body = src.slice(src.indexOf("function key(f)"), src.indexOf("const merged = new Map()"));
+    const body = src.slice(src.indexOf("function claimId(f)"), src.indexOf("const merged = new Map()"));
     const key = new Function(body + "; return key;")();
 
+    // Two distinct defects on one line must survive as two records.
+    const minor = { file: "src/a.js", line: 42, severity: "minor", claim: "missing error handling" };
+    const major = { file: "src/a.js", line: 42, severity: "major", claim: "the argument is not sanitized" };
+    if (key(minor) === key(major)) { console.error("two distinct same-line claims collided"); process.exit(1); }
+
+    // Unanchored findings in one file likewise.
     const a = { file: "README.md", line: 0, claim: "the install step is wrong" };
     const b = { file: "README.md", line: 0, claim: "the licence is missing" };
     if (key(a) === key(b)) { console.error("two distinct file-level findings collided"); process.exit(1); }
 
-    const c = { file: "src/a.js", line: 42, claim: "off by one" };
-    const d = { file: "src/a.js", line: 42, claim: "off by one, said differently" };
-    if (key(c) !== key(d)) { console.error("same line did not dedupe"); process.exit(1); }
+    // Two seats wording one finding identically still merge.
+    const s1 = { file: "src/a.js", line: 42, claim: "off by one" };
+    const s2 = { file: "src/a.js", line: 42, claim: "  Off By One  " };
+    if (key(s1) !== key(s2)) { console.error("identical claims stopped deduping"); process.exit(1); }
+
+    // Case-sensitive checkouts: these are different files, not one.
+    const upper = { file: "src/Foo.js", line: 7, claim: "x" };
+    const lower = { file: "src/foo.js", line: 7, claim: "x" };
+    if (key(upper) === key(lower)) { console.error("case-distinct paths merged"); process.exit(1); }
   ' "$WF" 2>&1
 }
 
@@ -280,18 +295,56 @@ test_security_grep_forces_the_pentester() {
   ' "$WF" 2>&1
 }
 
-# Two seats on one line usually found one defect, but not always. Collapsing to a
-# single entry is fine; letting the merge delete the loser's claim is not.
-test_same_line_claims_are_kept() {
-  # The merge must record a distinct claim rather than only overwriting on severity.
-  local between
-  between=$(sed -n '/const merged = new Map()/,/const unique = /p' "$WF")
-  case "$between" in
-    *'alsoClaimed'*) ;;
-    *) echo -n "(merge drops the losing claim) "; return 1 ;;
-  esac
-  # And it has to reach the caller, not just the internal object.
-  grep -q 'alsoClaimed: f.alsoClaimed' "$WF" || { echo -n "(not returned) "; return 1; }
+# A docs-only diff normally earns one seat, but the shortcut used to run before the
+# lens table and outrank the pentester's floor. A README whose install step was edited
+# to pipe a payload into a shell is docs-only and security-relevant at the same time.
+test_docs_only_does_not_outrank_the_security_floor() {
+  if ! have_node; then
+    echo -n "(no node, skipped) "
+    return 0
+  fi
+  node -e '
+    const fs = require("fs");
+    const src = fs.readFileSync(process.argv[1], "utf8");
+    const lenses = src.slice(src.indexOf("const LENSES = ["), src.indexOf("// A docs-only change"));
+    const picker = src.slice(src.indexOf("function pickSeats"), src.indexOf("const DIFF_SHAPE"));
+    const pickSeats = new Function(lenses + picker + "; return pickSeats;")();
+
+    const base = { filesChanged: 1, linesAdded: 4, linesRemoved: 1, docsOnly: true,
+                   securitySensitive: false, securityGrep: false,
+                   touchesFilesystem: false, addsAbstraction: false };
+    // Plain docs: still exactly one seat.
+    if (pickSeats(base).length !== 1) {
+      console.error("plain docs diff stopped being one seat"); process.exit(1);
+    }
+    // Docs that tripped the grep must still buy the attacker.
+    const risky = { ...base, securityGrep: true };
+    if (!pickSeats(risky).includes("pentester")) {
+      console.error("docs-only shortcut skipped the pentester on a security hit"); process.exit(1);
+    }
+    const judged = { ...base, securitySensitive: true };
+    if (!pickSeats(judged).includes("pentester")) {
+      console.error("docs-only shortcut skipped the pentester on a judged risk"); process.exit(1);
+    }
+  ' "$WF" 2>&1
+}
+
+# The panel's whole purpose is that a review which did not happen never looks like a
+# review that found nothing. Extract is the last place that can go wrong: agent()
+# returns null when a subagent dies, and `(r && r.findings) || []` turns that into an
+# empty findings array. Observed on the first successful end-to-end run — seven seats
+# wrote real reviews, every transcriber hit a session limit, and the panel reported
+# zero findings and looked clean.
+test_failed_extraction_is_not_zero_findings() {
+  # The seat's result must carry whether the transcriber survived.
+  grep -q 'ok: !!r' "$WF" || { echo -n "(extract result drops liveness) "; return 1; }
+  # A null result must map back to its seat rather than being filtered away.
+  grep -q 'perSeat\[i\] ||' "$WF" || { echo -n "(null result silently dropped) "; return 1; }
+  # Losing every transcription must be an error, never an empty report.
+  grep -q 'extractFailed.length === ran.length' "$WF" || { echo -n "(total failure not fatal) "; return 1; }
+  # And a partial loss must reach the caller.
+  grep -q 'seatsNotTranscribed' "$WF" || { echo -n "(partial loss not reported) "; return 1; }
+  grep -q 'seatsNotTranscribed' "$PANEL_MD" || { echo -n "(command does not report it) "; return 1; }
   return 0
 }
 
@@ -312,10 +365,11 @@ run_test "interpolated paths are escaped" test_interpolated_paths_are_escaped
 run_test "shellArg handles hostile paths" test_shellarg_handles_hostile_paths
 run_test "runner is backgrounded and unsandboxed" test_runner_is_backgrounded_and_unsandboxed
 run_test "failed seats are not reported as run" test_failed_seats_are_not_reported_as_run
-run_test "unanchored findings do not collide" test_unanchored_findings_do_not_collide
+run_test "distinct claims never collapse" test_distinct_claims_never_collapse
 run_test "meta is a pure literal" test_meta_is_a_pure_literal
 run_test "security grep forces the pentester" test_security_grep_forces_the_pentester
-run_test "same-line claims are kept" test_same_line_claims_are_kept
+run_test "docs-only does not outrank the security floor" test_docs_only_does_not_outrank_the_security_floor
+run_test "failed extraction is not zero findings" test_failed_extraction_is_not_zero_findings
 
 echo ""
 echo "  $PASS passed, $FAIL failed"

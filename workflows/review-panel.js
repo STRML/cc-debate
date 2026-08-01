@@ -7,7 +7,6 @@ export const meta = {
   whenToUse: 'A code review where the panel size should follow the change rather than a fixed list. Needs a work dir already prepared by debate-setup.sh and a changeset.diff already written.',
   phases: [
     { title: 'Classify', detail: 'read the diff, measure it' },
-    { title: 'Review', detail: 'run the selected seats through the existing runner' },
     { title: 'Extract', detail: 'turn each seat markdown into structured findings' },
     { title: 'Verify', detail: 'try to refute each surviving finding' },
     { title: 'Rank', detail: 'one ordered document' },
@@ -15,25 +14,38 @@ export const meta = {
 }
 
 // The panel exists because its reviewers are NOT Claude. agent() here spawns Claude
-// subagents, so none of them is a seat: they read the diff, they shell out to the
-// runner that owns the real seats, they turn markdown into JSON, and they argue with
-// findings. Every actual review still comes from acpx or codex-exec via
-// invoke-acpx.sh. Ten agent() calls would be ten correlated reviewers, which is the
-// failure debate-acpx.sample.json warns about in as many words.
+// subagents, so none of them is a seat: they measure the diff, they turn markdown into
+// JSON, and they argue with findings. Every actual review comes from an acpx or
+// codex-exec seat that `/debate:panel` runs between this workflow's two stages. Ten
+// agent() calls would be ten correlated reviewers, which is the failure
+// debate-acpx.sample.json warns about in as many words.
+//
+// Two stages, and the split is forced rather than chosen. run-parallel-acpx.sh blocks
+// for as long as its slowest seat is allowed to take, which is half an hour, and there
+// is no way for a workflow agent() to wait that long: a foreground Bash call is capped
+// at ten minutes, a foreground sleep is refused, and Monitor schedules a callback into
+// a turn that has already ended. The subagent returns, the harness reaps the runner it
+// backgrounded, and every seat dies mid-review. Only the main loop can wait on a long
+// command, so the runner belongs to the command and this script runs either side of it.
+//
+//   stage: 'classify' -> measure the diff, pick the seats, return them
+//   ...the command runs the seats and works out which ones reported...
+//   stage: 'report'   -> extract, dedupe, verify and rank what they wrote
 
 // args arrives verbatim from the caller. A caller that JSON-encodes it — easy to do,
-// and the failure reads as "needs args {workDir, reviewId}" while the args are sitting
-// right there in the invocation — would otherwise land here as a string, where every
+// and the failure reads as "needs args {workDir}" while the args are sitting right
+// there in the invocation — would otherwise land here as a string, where every
 // property lookup is undefined.
 const A = (typeof args === 'string' ? JSON.parse(args) : args) || {}
 const WORK_DIR = A.workDir
-const CONFIG = A.configPath || '~/.claude/debate-acpx.json'
-const REVIEW_ID = A.reviewId
-const SCRIPTS = A.scriptDir || '~/.claude/debate-scripts'
 const REPO = A.repoRoot || '.'
+const STAGE = A.stage || 'classify'
 
-if (!WORK_DIR || !REVIEW_ID) {
-  throw new Error('review-panel needs args {workDir, reviewId}; run debate-setup.sh first')
+if (!WORK_DIR) {
+  throw new Error('review-panel needs args {workDir}; run debate-setup.sh first')
+}
+if (STAGE !== 'classify' && STAGE !== 'report') {
+  throw new Error(`review-panel: unknown stage '${STAGE}'; expected 'classify' or 'report'`)
 }
 
 // Every path this script puts in a command goes through here. Two problems at once:
@@ -75,9 +87,13 @@ const LENSES = [
   { seat: 'antigravity', why: 'the only non-OpenAI seat', when: (d) => !d.docsOnly },
 ]
 
-// A docs-only change earns nothing but the floor, and the floor is one seat.
+// A docs-only change earns nothing but the floor, and the floor is one seat — unless
+// something in it tripped a security signal. The shortcut used to run first and return
+// unconditionally, which quietly outranked the pentester's floor: a README whose install
+// step had been edited to pipe a payload into a shell is docs-only, sets securityGrep,
+// and got exactly one auditor. Docs are executable often enough to matter.
 function pickSeats(d) {
-  if (d.docsOnly) return ['auditor']
+  if (d.docsOnly && !d.securitySensitive && !d.securityGrep) return ['auditor']
   const picked = LENSES.filter((l) => l.when(d)).map((l) => l.seat)
   return picked.length ? picked : ['executor', 'auditor']
 }
@@ -152,6 +168,8 @@ const VERDICT = {
 
 // --- 1. classify -------------------------------------------------------------
 
+if (STAGE === 'classify') {
+
 phase('Classify')
 
 const shape = await agent(
@@ -160,19 +178,22 @@ do not judge it. Report only what is observably true of the diff.
 
 Get the three counts by running exactly this and reporting what it prints:
 
-  awk '/^diff --git /{f++} /^\\+\\+\\+ |^--- /{next} /^\\+/{a++} /^-/{r++} END{printf "%d %d %d\\n", f+0, a+0, r+0}' ${shellArg(`${WORK_DIR}/changeset.diff`)}
+  awk '/^diff --git /{f++; h=0; next} /^@@/{h=1; next} !h{next} /^\\+/{a++} /^-/{r++} END{printf "%d %d %d\\n", f+0, a+0, r+0}' ${shellArg(`${WORK_DIR}/changeset.diff`)}
 
-It prints filesChanged, linesAdded and linesRemoved in that order. Do not count by
-reading. pickSeats branches on these numbers at fixed thresholds, and a long diff is
-truncated before you reach the end of it, so a read count is a guess that silently
-resizes the panel.
+It prints filesChanged, linesAdded and linesRemoved in that order. It counts only lines
+inside a hunk, so a added line whose own text starts with +++ is not mistaken for a file
+header. Do not count by reading. pickSeats branches on these numbers at fixed
+thresholds, and a long diff is truncated before you reach the end of it, so a read count
+is a guess that silently resizes the panel.
 
-Then run this, and set securityGrep true if it prints HIT and false if it prints MISS:
+Then run this, and set securityGrep true for HIT, false for MISS:
 
-  grep -qiE '(auth|credential|password|passwd|secret|token|api[_-]?key|crypt|hmac|signature|permission|sudo|chmod|eval|exec\\(|subprocess|shell=True|sanitiz|escape|injection)' ${shellArg(`${WORK_DIR}/changeset.diff`)} && echo HIT || echo MISS
+  grep -qiE '(auth|credential|password|passwd|secret|token|api[_-]?key|crypt|hmac|signature|permission|sudo|chmod|eval|exec\\(|subprocess|shell=True|sanitiz|escape|injection)' ${shellArg(`${WORK_DIR}/changeset.diff`)}; case $? in 0) echo HIT;; 1) echo MISS;; *) echo ERROR;; esac
 
 Report what it printed. Do not second-guess it: a HIT on a diff you judged harmless is
-the case it exists for, and it only ever adds the attacker seat.
+the case it exists for, and it only ever adds the attacker seat. If it prints ERROR then
+grep itself failed and the answer is unknown — say so in the summary and report
+securityGrep true, because an unknown must not read as an all-clear.
 
 If the file is missing, report every count as 0 and docsOnly true.
 
@@ -200,90 +221,35 @@ for (const l of LENSES) {
   if (!seats.includes(l.seat)) log(`  skipped ${l.seat} (${l.why}) — not earned by this diff`)
 }
 
-// --- 2. review ---------------------------------------------------------------
+// Stage one ends here. The command runs these seats and comes back with the ones that
+// actually reported.
+return {
+  stage: 'classify',
+  diff: shape,
+  seats,
+  seatsSkipped: LENSES.filter((l) => !seats.includes(l.seat)).map((l) => ({ seat: l.seat, why: l.why })),
+}
+
+} // end stage: 'classify'
+
+// --- 2. report ---------------------------------------------------------------
 //
-// One agent, not one per seat. run-parallel-acpx.sh already fans out, already owns
-// the per-seat timeouts and the blank-turn retries, and already writes the exit
-// files. Wrapping each seat in its own agent would duplicate that and buy nothing.
+// The seats have run by now. Which of them produced a review is a question about files
+// on disk, so the command answers it — it has a filesystem and this does not — and
+// passes the answer in. Guessing it here is what produced a clean report from a panel
+// that never started.
 
-phase('Review')
+const ran = A.seats || []
+const failed = A.seatsFailed || []
+const shape = A.diff || null
+const seatsSkipped = A.seatsSkipped || []
 
-const RUN_STATUS = {
-  type: 'object',
-  required: ['seats'],
-  properties: {
-    seats: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['seat', 'exit', 'bytes'],
-        properties: {
-          seat: { type: 'string' },
-          exit: { type: 'integer', description: '-1 if the seat never wrote an exit file' },
-          bytes: { type: 'integer', description: 'size of <seat>-output.md, 0 if missing' },
-        },
-      },
-    },
-  },
-}
-
-const run = await agent(
-  `Run the review panel and report what each seat did. Review nothing yourself.
-
-  cd ${shellArg(REPO)} && bash ${shellArg(`${SCRIPTS}/run-parallel-acpx.sh`)} ${shellArg(CONFIG)} ${shellArg(REVIEW_ID)} ${shellArg(seats.join(','))}
-
-Start that with run_in_background: true AND dangerouslyDisableSandbox: true. Both are
-load-bearing:
-
-- Background, because the runner budgets timeout x (retries + 1) + 60s for its slowest
-  seat — up to 31 minutes for the 900s seats — and one Bash call is capped at 10. A
-  foreground call is killed mid-panel, and every seat it was still waiting on then looks
-  exactly like a seat that reviewed the diff and found nothing.
-- Unsandboxed, because the seats need outbound network and the antigravity seat writes
-  its project config under ~/.gemini before it can open a conversation. Sandboxed, that
-  write is denied and the seat returns nothing. What keeps the seats read-only is not
-  the sandbox but their own permission mode: acpx runs them with --approve-reads and
-  --non-interactive-permissions deny, and antigravity gets a throwaway workspace plus
-  --sandbox. Dropping the outer sandbox removes a second layer, not the only one — but
-  it does mean a seat's read-only guarantee now rests entirely on that flag being right.
-
-Then wait for every one of these to exist:
-
-  ${seats.map((s) => `${WORK_DIR}/${s}-exit.txt`).join('\n  ')}
-
-Wait with Monitor and an until-loop over those paths. A foreground sleep is blocked by
-the harness, so if Monitor is unavailable, re-check with a fresh short Bash call each
-time instead of sleeping between checks. Give up after 35 minutes. Do not kill the
-runner, do not read the reviews, do not summarise them.
-
-Report one entry per seat: its name, the integer in ${WORK_DIR}/<seat>-exit.txt (-1 if
-that file never appeared), and the byte size of ${WORK_DIR}/<seat>-output.md (0 if it is
-missing).`,
-  { label: 'run-panel', phase: 'Review', schema: RUN_STATUS },
-)
-
-// What the runner did is the difference between "reviewed and found nothing" and "never
-// ran". The extract stage maps a missing output file to an empty findings array, so
-// without this check a runner that failed to start returns the cleanest report the panel
-// can produce. A seat is only counted as run if it exited 0 and wrote something.
-const reported = new Map(((run && run.seats) || []).map((s) => [s.seat, s]))
-const ran = seats.filter((s) => {
-  const st = reported.get(s)
-  return st && st.exit === 0 && st.bytes > 0
-})
-const failed = seats.filter((s) => !ran.includes(s))
-
-for (const s of failed) {
-  const st = reported.get(s)
-  // exit -1 also covers a lens the config has no entry for: run-parallel-acpx.sh skips
-  // an unknown seat without failing, so the only trace is the exit file never appearing.
-  log(`  ${s}: no review (exit ${st ? st.exit : 'unknown'}, ${st ? st.bytes : 0} bytes) — not counted as run`)
-}
+for (const s of failed) log(`  ${s}: no review — not counted as run`)
 
 if (!ran.length) {
   throw new Error(
-    `no seat produced a review (asked for: ${seats.join(', ')}). The runner did not start, ` +
-      `was killed, or none of these seats exists in ${CONFIG}.`,
+    'review-panel stage report needs args {seats: [...]} naming the seats that produced a ' +
+      'review. None were given, so there is nothing to extract.',
   )
 }
 
@@ -309,37 +275,59 @@ empty findings array.
 Map the reviewer's own words: its P1/CRITICAL/blocker becomes critical, P2/MAJOR becomes
 major, and so on. If a finding has no file or line, use the file it discusses and line 0.`,
       { label: `extract:${seat}`, phase: 'Extract', schema: FINDINGS, effort: 'low' },
-    ).then((r) => ({ seat, findings: (r && r.findings) || [] })),
+    ).then((r) => ({ seat, ok: !!r, findings: (r && r.findings) || [] })),
 )
 
-const bySeat = perSeat.filter(Boolean)
-for (const s of bySeat) log(`${s.seat}: ${s.findings.length} finding(s)`)
+// A transcriber that died tells you nothing about what its seat found, and "nothing to
+// report" is the one thing it must never be mistaken for. agent() returns null when the
+// subagent hits a terminal error — a session limit, an API failure — and pipeline()
+// yields null for an item whose stage threw. Both used to collapse into an empty
+// findings array, which is indistinguishable from a reviewer who approved the diff.
+// Observed for real: seven seats wrote 747-4989 bytes of review each, every extract
+// agent hit a session limit, and the panel reported zero findings and looked clean.
+// Results are positional, so a null maps back to the seat it belonged to.
+const bySeat = ran.map((seat, i) => perSeat[i] || { seat, ok: false, findings: [] })
+const extractFailed = bySeat.filter((s) => !s.ok).map((s) => s.seat)
+
+for (const s of bySeat) {
+  if (s.ok) log(`${s.seat}: ${s.findings.length} finding(s)`)
+  else log(`${s.seat}: review could NOT be transcribed — its findings are missing here`)
+}
+
+if (extractFailed.length === ran.length) {
+  throw new Error(
+    `every seat reviewed but none could be transcribed (${extractFailed.join(', ')}). ` +
+      `The reviews are on disk in ${WORK_DIR}; this is not a clean review, it is no review.`,
+  )
+}
 
 // --- 4. dedupe ---------------------------------------------------------------
 //
 // Plain code, deliberately. On #22 five seats independently found one README drift,
 // and the orchestrator deduped by reading twelve files. Same key, same finding.
 
-// file:line is the right key for a line-anchored finding — two seats pointing at one
-// line found one thing. It is the wrong key at line 0, which the schema tells a seat to
-// use whenever a finding is not line-anchored: every file-level finding in a file would
-// collide on `readme.md:0` and all but the harshest would be dropped as a duplicate.
-// There the claim is the only identity available, so use it.
-function key(f) {
-  const file = (f.file || '').trim().toLowerCase()
-  const line = f.line || 0
-  if (line > 0) return `${file}:${line}`
-  return `${file}:0:${(f.claim || '').trim().toLowerCase().replace(/\s+/g, ' ')}`
-}
-
-// Two seats on one line usually found one defect, which is why the key stays
-// file:line. Usually is not always: "missing error handling" and "the argument is not
-// sanitized" can both be true of line 42, and promoting only the harshest would delete
-// the other outright. So collapse to one entry per location, but keep every claim that
-// is not a restatement of one already there. Merging is for presentation; it should
-// never be the thing that loses a finding.
+// The claim is part of the key, at every line number. An earlier version keyed on
+// file:line alone and kept the alternates in a side list, promoting the harshest to the
+// headline — and lost a finding in both arrival orders, because promotion overwrote the
+// headline without preserving it and the cleanup pass then removed the promoted claim
+// from the alternates. Six of seven seats found that independently. Verification is the
+// other half of the argument: it only ever sees the headline, so an alternate riding
+// along on a refuted headline dies unexamined, which is a place to hide a real defect
+// behind an obvious decoy on the same line.
+//
+// So: one record per distinct claim, each verified on its own. Two seats that word a
+// finding the same way still merge and stack up in foundBy. Two seats that word it
+// differently now produce two records, which over-reports rather than deletes — the
+// right direction to err, and the verify step reads both.
+//
+// The path keeps its case. Lowercasing it merged src/Foo.js with src/foo.js on any
+// case-sensitive checkout, and the survivor kept the other one's path.
 function claimId(f) {
   return (f.claim || '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function key(f) {
+  return `${(f.file || '').trim()}:${f.line || 0}:${claimId(f)}`
 }
 
 const merged = new Map()
@@ -349,27 +337,16 @@ for (const { seat, findings } of bySeat) {
     const prev = merged.get(k)
     if (prev) {
       prev.seats.push(seat)
-      if (!prev.claims.has(claimId(f))) {
-        prev.claims.add(claimId(f))
-        prev.alsoClaimed.push({ severity: f.severity, claim: f.claim, failure: f.failure, seat })
-      }
-      // Keep the harshest severity anyone assigned; a seat that saw it as critical
-      // saw something the others did not.
+      // Same claim, harsher severity: a seat that saw it as critical saw something the
+      // others did not. Nothing is lost here — the claim text is identical by key.
       if (RANK[f.severity] < RANK[prev.severity]) {
         prev.severity = f.severity
-        prev.claim = f.claim
         prev.failure = f.failure
       }
     } else {
-      merged.set(k, { ...f, seats: [seat], claims: new Set([claimId(f)]), alsoClaimed: [] })
+      merged.set(k, { ...f, seats: [seat] })
     }
   }
-}
-
-// alsoClaimed holds every distinct claim at this location including the one promoted to
-// the headline, so drop the headline from it to leave only what would have been lost.
-for (const f of merged.values()) {
-  f.alsoClaimed = f.alsoClaimed.filter((c) => claimId(c) !== claimId(f))
 }
 
 const unique = [...merged.values()]
@@ -433,15 +410,18 @@ survived.sort((a, b) => {
 })
 
 return {
+  stage: 'report',
   diff: shape,
   // seatsRun is what reported, not what was asked for. Reporting the request would
   // credit a seat that never ran with having found nothing.
   seatsRun: ran,
   seatsFailed: failed,
+  // Seats that reviewed but whose review could not be read back. Their findings are
+  // absent from everything below, so the report is incomplete by exactly this much.
+  seatsNotTranscribed: extractFailed,
   // The reason a seat was skipped is the interesting half — it is what you argue with
-  // when a lens keeps missing a change you wanted it on — and it was only reaching the
-  // log, not the caller.
-  seatsSkipped: LENSES.filter((l) => !seats.includes(l.seat)).map((l) => ({ seat: l.seat, why: l.why })),
+  // when a lens keeps missing a change you wanted it on. Carried through from stage one.
+  seatsSkipped,
   counts: {
     raw: bySeat.reduce((n, s) => n + s.findings.length, 0),
     distinct: unique.length,
@@ -457,8 +437,6 @@ return {
     failure: f.failure,
     fix: f.fix,
     foundBy: f.seats,
-    // Other distinct defects reported at this same location. Empty for most findings.
-    alsoClaimed: f.alsoClaimed,
   })),
   refuted: killed.map((f) => ({
     file: f.file,

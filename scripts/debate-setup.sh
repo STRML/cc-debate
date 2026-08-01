@@ -25,6 +25,14 @@ fi
 
 mkdir -p "$WORK_DIR" || { echo "ERROR: failed to create $WORK_DIR" >&2; exit 1; }
 
+# Tighten before the caller writes anything into it. run-parallel-acpx.sh also does this,
+# but it runs much later: the changeset is written and classified in between, and under a
+# normal 022 umask that leaves a 0755 directory holding a 0644 diff of the entire change.
+# On a shared machine any local account can read it, and if the run never reaches the
+# runner the exposure simply stays. Refuse rather than hand back a directory that cannot
+# be protected.
+chmod 700 "$WORK_DIR" || { echo "ERROR: failed to secure $WORK_DIR" >&2; exit 1; }
+
 echo "REVIEW_ID=${REVIEW_ID}"
 echo "WORK_DIR=${WORK_DIR}"
 # Repo root reviewers read source from. The allowlist needs Read(<REPO_ROOT>/**)

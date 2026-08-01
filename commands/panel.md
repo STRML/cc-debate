@@ -20,10 +20,14 @@ debate rounds, which this does not do.
    change gets the full table. The rule is in `workflows/review-panel.js` as plain
    code, so you can read it and argue with it.
 3. Runs those seats through `run-parallel-acpx.sh`, exactly as `/debate:run` does. The
-   reviewers are still acpx and codex-exec seats. Nothing in the panel is Claude.
-4. Turns each review into structured findings, then merges them on `file:line`. On one
-   measured run, five of twelve seats reported the same finding; this collapses that
-   without anyone reading twelve files.
+   reviewers are still acpx and codex-exec seats. Nothing in the panel is Claude. This
+   step runs from here rather than inside the workflow, because it takes up to half an
+   hour and nothing inside a workflow can wait that long.
+4. Turns each review into structured findings, then merges them on `file:line:claim`. On
+   one measured run, five of twelve seats reported the same finding; this collapses that
+   without anyone reading twelve files. The claim is in the key because two seats can
+   report genuinely different defects on one line, and a merge keyed on location alone
+   deletes one of them.
 5. Tries to refute each surviving finding against the actual code, and drops the ones
    that do not hold.
 6. Returns one ranked list.
@@ -60,30 +64,82 @@ Set `DEBATE_DIFF_BASE` first if you want a base other than the merge base with t
 default branch. If the diff comes back empty, stop and say so; there is nothing to
 review and every downstream stage would be measuring an empty file.
 
-**4. Run it.**
+**4. Pick the seats.**
 
 ```
 Workflow({
-  scriptPath: "~/.claude/debate-workflows/review-panel.js",
+  scriptPath: "<HOME>/.claude/debate-workflows/review-panel.js",
+  args: { stage: "classify", workDir: "<WORK_DIR>", repoRoot: "<REPO_ROOT>" }
+})
+```
+
+Pass `args` as a real object, not a JSON string — a string reaches the script as a
+string and every field reads `undefined`.
+
+It returns `{ diff, seats, seatsSkipped }`. Keep all three; step 6 needs them.
+
+**5. Run the seats. This step is yours, not the workflow's.**
+
+```bash
+DEBATE_FREEZE_DIFF=1 bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "<HOME>/.claude/debate-acpx.json" "<REVIEW_ID>" "<seat1,seat2,...>"
+```
+
+`DEBATE_FREEZE_DIFF=1` is required here. Without it the runner regenerates
+`changeset.diff` from the working tree, and any edit landing between step 4 and now
+would hand the seats a different changeset from the one the panel was sized for — the
+report would describe the diff that picked the seats while the reviews described
+something else.
+
+Run it with `run_in_background: true` and `dangerouslyDisableSandbox: true`, then wait
+for the completion notification.
+
+Both flags matter, and so does whose call this is:
+
+- **Background**, because the runner blocks for `timeout x (retries + 1) + 60s` on its
+  slowest seat — half an hour for the 900s seats. You get re-invoked when it exits.
+- **Unsandboxed**, because the seats need outbound network and the antigravity seat
+  writes its project config under `~/.gemini` before it can open a conversation. What
+  keeps the seats read-only is not this sandbox but acpx's own
+  `--non-interactive-permissions deny`; dropping it removes a second layer, not the only
+  one.
+- **Yours**, because a workflow `agent()` cannot wait this long by any means. A
+  foreground Bash call is capped at ten minutes, a foreground sleep is refused, and
+  Monitor schedules a callback into a turn that has already ended. A subagent asked to
+  wait returns in under a minute, and the harness then reaps the runner it backgrounded,
+  killing every seat mid-review. The whole panel comes back empty and looks clean.
+
+**6. Work out which seats actually reported, then report.**
+
+```bash
+for s in <seat1> <seat2> ...; do
+  e=$(cat "<WORK_DIR>/$s-exit.txt" 2>/dev/null || echo -1)
+  b=$(wc -c < "<WORK_DIR>/$s-output.md" 2>/dev/null || echo 0)
+  [ "$e" = "0" ] && [ "$b" -gt 0 ] && echo "RAN $s" || echo "FAILED $s (exit $e, $b bytes)"
+done
+```
+
+A seat with no exit file never ran at all — `run-parallel-acpx.sh` skips a seat your
+config has no entry for, and says nothing about it. Feed the split back in:
+
+```
+Workflow({
+  scriptPath: "<HOME>/.claude/debate-workflows/review-panel.js",
   args: {
-    reviewId:   "<REVIEW_ID>",
-    workDir:    "<WORK_DIR>",
-    repoRoot:   "<REPO_ROOT>",
-    scriptDir:  "<SCRIPT_DIR>",
-    configPath: "<HOME>/.claude/debate-acpx.json"
+    stage: "report",
+    workDir: "<WORK_DIR>",
+    repoRoot: "<REPO_ROOT>",
+    seats: ["<the RAN ones>"],
+    seatsFailed: ["<the FAILED ones>"],
+    diff: <the diff object from step 4>,
+    seatsSkipped: <the seatsSkipped array from step 4>
   }
 })
 ```
 
-Use the absolute `SCRIPT_DIR` that `debate-setup.sh` printed, and an absolute
-`configPath`. The workflow builds a shell command out of these and quotes each one, so
-a `~` would arrive at the shell inside double quotes where it is never expanded. The
-workflow rewrites a leading `~/` to `$HOME/` to cover the tilde form, but passing the
-resolved path is the version that cannot go wrong.
+If nothing ran, stop and say so. Do not report a panel that produced no reviews as a
+review that found nothing.
 
-It runs in the background and notifies you when it finishes. Do not poll it.
-
-**5. Report what it returns.**
+**7. Report what it returns.**
 
 The workflow returns the seats it ran, the seats it asked for that produced no review,
 the seats it skipped with the reason the diff did not earn each one, the raw and
@@ -99,6 +155,14 @@ than after. A seat that did not run contributes no findings, which is indistingu
 from a seat that reviewed the diff and approved it — the count of seats that actually
 reported is what tells the user how much the review is worth.
 
+**`seatsNotTranscribed` is worse and must be reported the same way.** Those seats did
+review the diff, and their reviews are sitting in the work dir, but the transcription
+step could not read them back — so their findings are missing from the counts and from
+the ranked list. A report carrying a non-empty `seatsNotTranscribed` is incomplete by an
+unknown amount. Say which seats, and point at `<WORK_DIR>/<seat>-output.md` so the
+reviews can be read directly. Never present such a run as a review that came back
+clean.
+
 Show the surviving findings in full. Then say plainly how many were duplicates and how
 many were refuted, because those two numbers are what tell the user whether the panel
 size was right. A run where nothing was deduplicated and nothing was refuted was
@@ -112,7 +176,7 @@ nobody can tell it ever existed; reported as a line, a reader who knows the code
 see the kill was wrong. Filtering false positives is only worth doing where the false
 negatives stay visible.
 
-**6. Clean up.**
+**8. Clean up.**
 
 ```bash
 bash ~/.claude/debate-scripts/safe-cleanup.sh "<WORK_DIR>"

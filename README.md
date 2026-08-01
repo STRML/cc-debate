@@ -472,13 +472,15 @@ The value of multiple reviewers is getting genuinely different lenses. Some idea
 
 `/debate:run` runs the panel you picked. `/debate:panel` runs the panel the diff picked, and does the merging in code rather than in your context.
 
-The reviewers are the same acpx and `codex-exec` seats. Nothing in the panel is Claude; the workflow only measures the diff, calls `run-parallel-acpx.sh`, turns each review into structured findings, and filters them.
+The reviewers are the same acpx and `codex-exec` seats. Nothing in the panel is Claude; the workflow only measures the diff, turns each review into structured findings, and filters them.
+
+The workflow runs in two stages with the seats in between: stage one measures the diff and picks them, `/debate:panel` then runs `run-parallel-acpx.sh` itself, and stage two reads back what the seats wrote. The runner sits outside the workflow because it blocks for as long as its slowest seat is allowed to take — half an hour — and nothing inside a workflow can wait that long.
 
 What it adds over `/debate:run`:
 
 **Seats follow the change.** A docs-only diff gets one seat. A wide, security-touching diff gets the whole table. The rule is a readable table in `workflows/review-panel.js` — a seat is earned by a condition, not by a name you typed.
 
-**Findings are merged on `file:line` in JS.** Measured on one run of twelve seats over a 13-line diff: six distinct findings, and five seats had independently reported the same one. Collapsing that by hand is the step that scales worst about a large panel.
+**Findings are merged in JS, on `file:line:claim`.** Measured on one run of twelve seats over a 13-line diff: six distinct findings, and five seats had independently reported the same one. Collapsing that by hand is the step that scales worst about a large panel. The claim is part of the key because two seats can report genuinely different defects on one line, and a merge that keeps only the harsher of them deletes a real finding — two seats wording one finding identically still collapse into a single entry.
 
 **Findings are refuted before you see them.** Each survivor gets an agent that tries to disprove it against the code. In that same run, two of twelve seats produced findings that were wrong and cost a read each to disprove.
 

@@ -50,8 +50,10 @@ fi
 publish_exit() {
   local code="$1"
   [ -n "$WORK_DIR" ] && [ -n "$REVIEWER" ] || return 0
-  printf '%s\n' "$code" > "$WORK_DIR/${REVIEWER}-exit.txt.tmp" &&
-    mv -f "$WORK_DIR/${REVIEWER}-exit.txt.tmp" "$WORK_DIR/${REVIEWER}-exit.txt"
+  # $$ in the temp name: two invocations sharing a work dir would otherwise write the
+  # same temporary file, and one could publish the other's exit code.
+  printf '%s\n' "$code" > "$WORK_DIR/${REVIEWER}-exit.txt.tmp.$$" &&
+    mv -f "$WORK_DIR/${REVIEWER}-exit.txt.tmp.$$" "$WORK_DIR/${REVIEWER}-exit.txt"
 }
 
 # --- Resolve acpx binary (support npx fallback) ---
