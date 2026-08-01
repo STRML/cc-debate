@@ -65,8 +65,8 @@ else
   echo "invoke-acpx: acpx not found. Install: npm install -g acpx@latest" >&2
   # Write a meaningful exit file if we can
   if [ -n "$WORK_DIR" ] && [ -n "$REVIEWER" ] && [ -d "$WORK_DIR" ]; then
-    publish_exit 1
     echo "acpx not installed. Run: npm install -g acpx@latest" > "$WORK_DIR/${REVIEWER}-output.md"
+    publish_exit 1
   fi
   exit 1
 fi
@@ -77,10 +77,14 @@ fi
 create_exit_file() {
   local code="${1:-1}"
   if [ -n "$WORK_DIR" ] && [ -n "$REVIEWER" ]; then
-    publish_exit "$code"
+    # Output first, exit file last. The exit file is the parent's signal that this seat
+    # is finished, and it reads the output immediately after seeing it — so publishing
+    # the code before the fallback text exists reopens the same race one line further
+    # down: the parent finds a finished seat with no review.
     if [ ! -f "$WORK_DIR/${REVIEWER}-output.md" ]; then
       echo "invoke-acpx: process terminated unexpectedly (exit $code)" > "$WORK_DIR/${REVIEWER}-output.md"
     fi
+    publish_exit "$code"
   fi
 }
 
@@ -187,8 +191,8 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
       echo "[$REVIEWER] Failed to ensure acpx session for '$AGENT'." >&2
       echo "  Check that the agent CLI is installed and authenticated." >&2
       echo "  Run /debate:acpx-setup to diagnose." >&2
-      publish_exit 4
       echo "Failed to ensure acpx session for '$AGENT'. Run /debate:acpx-setup to diagnose." > "$WORK_DIR/${REVIEWER}-output.md"
+      publish_exit 4
       trap - EXIT
       exit 4
     fi

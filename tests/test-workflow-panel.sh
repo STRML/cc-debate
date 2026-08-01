@@ -124,18 +124,23 @@ test_docs_only_diff_picks_one_seat() {
 # the panel dies before a seat runs. Catching this by eye failed once already: the
 # comment above shellArg claimed every path was quoted while two were not.
 test_interpolated_paths_are_escaped() {
-  local line
-  # Any line that runs a command and mentions a path variable must use shellArg for it.
+  local line var
+  # Check each variable against its own wrapper, not the line as a whole. A line
+  # carrying two paths where only one is escaped would pass a presence check while
+  # containing exactly the bug this is here to catch.
   while IFS= read -r line; do
-    case "$line" in
-      *'${WORK_DIR}'*|*'${REPO}'*|*'${SCRIPTS}'*|*'${CONFIG}'*)
-        case "$line" in
-          *'shellArg('*) ;;
-          *) echo -n "(unescaped path: ${line#"${line%%[![:space:]]*}"}) "; return 1 ;;
-        esac
-        ;;
-    esac
-  done < <(grep -nE "^\s+(cd |bash |awk |sh )" "$WF")
+    for var in WORK_DIR REPO SCRIPTS CONFIG; do
+      case "$line" in
+        *"\${$var}"*)
+          case "$line" in
+            # shellArg(VAR) or shellArg(`${VAR}/...`)
+            *"shellArg($var"*|*"shellArg(\`\${$var}"*) ;;
+            *) echo -n "(unescaped \$$var) "; return 1 ;;
+          esac
+          ;;
+      esac
+    done
+  done < <(grep -nE "^\s+(cd |bash |awk |sh |grep )" "$WF")
   # And the runner command specifically must escape all four of its arguments.
   local cmd
   cmd=$(grep 'run-parallel-acpx.sh' "$WF" | grep 'bash ')
