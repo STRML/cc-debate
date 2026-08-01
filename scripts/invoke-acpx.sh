@@ -695,6 +695,33 @@ attempt_acpx() {
   "${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
   EXIT_CODE=$?
   set -e
+
+  # acpx exit 5 is PERMISSION_DENIED, and on this panel it is not a failed review.
+  #
+  # acpx stamps it after the turn has already finished — applyPermissionExitCode runs
+  # on the result of runOnce — and only when the seat got nothing it asked for:
+  # requested > 0, approved == 0, and at least one denied or cancelled. Reviewers here
+  # run under `--non-interactive-permissions deny`, which is the hard read-only
+  # guarantee the `untrusted` preset rests on, so a seat that reaches for a command it
+  # cannot have trips this on the turns where it happens to ask and misses it on the
+  # turns where it does not. Same seat, same diff, different exit code.
+  #
+  # Treating that as a failure cost us twice. A seat that was refused once and still
+  # wrote a full review had it thrown away, because run-parallel records the non-zero
+  # exit and synthesis skips the seat. And a seat that came back empty was never
+  # retried, because run_with_blank_retry breaks on any non-zero exit — which is why
+  # `retries: 2` on cartographer-or never fired.
+  #
+  # Normalising to 0 lets the blank check make the call instead, which is the question
+  # that actually matters: a review that arrived is kept, an empty turn is retried.
+  if [ "$EXIT_CODE" -eq 5 ]; then
+    if output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
+      echo "[$REVIEWER] $AGENT was denied every permission it asked for and produced nothing." >&2
+    else
+      echo "[$REVIEWER] $AGENT was denied a permission but still delivered a review; keeping it." >&2
+    fi
+    EXIT_CODE=0
+  fi
 }
 run_with_blank_retry attempt_acpx "$AGENT"
 

@@ -1363,6 +1363,71 @@ test_plan_wins_over_changeset() {
   rm -rf "$work_dir"
 }
 
+# --- permission-denied (acpx exit 5) ---
+
+# acpx stamps exit 5 after the turn ends, when the seat got none of the permissions
+# it asked for. A review that arrived is still a review, so it must survive.
+test_denied_permission_keeps_the_review() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_EXIT=5 \
+  MOCK_ACPX_RESPONSE="Denied a command but reviewed anyway. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
+  grep -q "VERDICT: APPROVED" "$work_dir/test-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+# Exit 5 with nothing to show is a blank turn, and blank turns are retried. Before
+# this, run_with_blank_retry broke on the non-zero exit and the seat was lost.
+test_denied_permission_blank_is_retried() {
+  local work_dir config log_file counter
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+  counter="$work_dir/attempts.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_COUNTER_FILE="$counter" \
+  MOCK_ACPX_BLANK_ATTEMPTS=1 \
+  MOCK_ACPX_EXIT=5 \
+  MOCK_ACPX_RESPONSE="Second time lucky. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "retry-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/retry-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
+  grep -q "VERDICT: APPROVED" "$work_dir/retry-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
+  [ "$(grep -c -- "--file" "$log_file")" = "2" ] || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+# Denied and blank all the way down still ends as a reported failure, not a silent
+# success. Normalising exit 5 must not paper over a seat that never delivered.
+test_denied_permission_blank_forever_still_fails() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_EXIT=5 \
+  MOCK_ACPX_RESPONSE="" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "1" ] || { rm -rf "$work_dir"; return 1; }
+  grep -q "Empty response" "$work_dir/test-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
 # --- Run ---
 
 echo ""
@@ -1437,6 +1502,9 @@ run_test "antigravity uses direct CLI" test_antigravity_uses_direct_cli
 run_test "antigravity skips session ensure" test_antigravity_skips_session_ensure
 run_test "opus uses direct CLI" test_opus_uses_direct_cli
 run_test "opus skips session ensure" test_opus_skips_session_ensure
+run_test "denied permission keeps the review" test_denied_permission_keeps_the_review
+run_test "denied permission blank is retried" test_denied_permission_blank_is_retried
+run_test "denied and blank forever still fails" test_denied_permission_blank_forever_still_fails
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="
