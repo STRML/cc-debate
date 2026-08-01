@@ -1,0 +1,13 @@
+{
+  "reviewers": {
+    "simplifier": { "persona": "You are the simplifier: cut scope, hunt over-engineering/YAGNI, bias toward fewer moving parts.", "backend": "subagent" },
+    "operator":   { "persona": "You are the operator: will it actually run and ship? Ordering, prereqs, rollback, observability, ops gaps.", "backend": "subagent" },
+    "pentester":  { "persona": "You are the pentester: security and robustness — auth, injection, failure modes, edge cases, data integrity.", "backend": "subagent" }
+  },
+  "presets": {
+    "tight": { "reviewers": ["simplifier"], "claude_reviewers": {} },
+    "full":  { "reviewers": ["simplifier", "operator", "pentester"] }
+  },
+  "default_reviewers": ["simplifier", "operator", "pentester"],
+  "max_rounds": 3
+}
