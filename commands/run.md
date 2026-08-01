@@ -360,19 +360,32 @@ longer grep transcripts to reconstruct a lost review. Guard every wait on Claude
 with this check:
 
 Note the wall-clock dispatch time when you spawn a round. A teammate is **delivered** the
-moment `<WORK_DIR>/claude-<persona>-r<N>-output.md` exists and is non-empty (`[ -s … ]`) —
-regardless of whether its liveness ping surfaced. If **~10 minutes** pass and one or more
-spawned teammates still have no such file, do **not** keep waiting and do **not** re-ping
-(a re-ping lands in the same dead mailbox). Those teammates are wedged: **respawn fresh**
-`claude-<persona>-r<N>` Agent teammates (the same §2b spawn block + footer, plan inlined,
-`[OUTPUT_PATH]` pointed at the same file) and wait on the new spawns. A respawn simply
-overwrites the missing file when it delivers.
+moment any of its attempt files — `<WORK_DIR>/claude-<persona>-r<N>-output.md` or
+`<WORK_DIR>/claude-<persona>-r<N>-b-output.md` — exists and is non-empty (`[ -s … ]`),
+regardless of whether its liveness ping surfaced. If **~10 minutes** pass and a spawned
+teammate has no such file, do **not** keep waiting and do **not** re-ping (a re-ping lands
+in the same dead mailbox). Treat it as wedged: **respawn fresh**, named
+`claude-<persona>-r<N>b`, with the same §2b spawn block + footer and the plan inlined.
+
+**The respawn MUST get its own `[OUTPUT_PATH]`** — the `-b-` variant — never the original's
+path. The 10-minute threshold detects "has not delivered yet", which is not the same as
+"is dead": a merely slow teammate returns later and writes wherever it was told to. Point
+both attempts at one path and whichever finishes last silently destroys the other's review,
+with no error and no way to notice. Observed 2026-07-31: a skeptic exceeded the threshold,
+its respawn delivered a full review, then the original returned ~15 minutes later and
+overwrote it.
+
+If both attempts land, that is a bonus rather than a problem. They are two independent
+reviews of the same target, which is the same union effect two differently-prompted seats
+give you. Read both and merge them; do not discard either.
 
 ```bash
-# Which spawned teammates have NOT delivered yet (missing or empty output file).
-# List the files you expect this round, one per spawned persona.
-for f in <WORK_DIR>/claude-<persona-a>-r<N>-output.md <WORK_DIR>/claude-<persona-b>-r<N>-output.md; do
-  [ -s "$f" ] || echo "UNDELIVERED: $f"
+# Which spawned teammates have NOT delivered yet, counting either attempt file.
+# List one line per spawned persona.
+for p in <persona-a> <persona-b>; do
+  a="<WORK_DIR>/claude-$p-r<N>-output.md"
+  b="<WORK_DIR>/claude-$p-r<N>-b-output.md"
+  [ -s "$a" ] || [ -s "$b" ] || echo "UNDELIVERED: $p"
 done
 ```
 
@@ -403,14 +416,17 @@ Exit code meanings:
 
 For each **Claude teammate** you spawned this round, read its output file:
 - `<WORK_DIR>/claude-<persona>-r<N>-output.md` — review text (no exit file; a Claude
-  teammate has "delivered" iff this file exists and is non-empty).
+  teammate has "delivered" iff this file, **or** its `-b-` respawn variant, exists and is
+  non-empty). Where a persona respawned and both attempts landed, read both files — they
+  are two independent reviews, not a duplicate.
 
-**Reconciliation gate (before you synthesize or record the round).** Assert that the
-number of non-empty Claude output files equals the number of Claude teammates you
-spawned this round. A missing/empty file is a teammate whose review dropped — do **not**
-proceed with a silently-shrunk panel and do **not** record the round. Instead run the
-§2c-wedge respawn for exactly the undelivered personas, wait on the respawn, then re-check.
-Only once every spawned teammate has a non-empty output file do you continue.
+**Reconciliation gate (before you synthesize or record the round).** Assert that every
+persona you spawned this round has at least one non-empty output file, counting either
+attempt. A persona with none is a review that dropped — do **not** proceed with a
+silently-shrunk panel and do **not** record the round. Instead run the §2c-wedge respawn
+for exactly the undelivered personas, wait on the respawn, then re-check. Count personas,
+not files: a respawned persona can legitimately produce two files, so comparing a raw file
+count against the spawn count will over-report and hide a different persona's miss.
 
 **If all reviewers failed:**
 ```text
@@ -809,7 +825,7 @@ abort Cleanup path above):
 - **Read fully, never grep-skim.** You MUST read each reviewer's complete output with the Read tool. Never use `grep -A`, `grep -iE`, or keyword extraction to summarize reviews — this reliably misses 50%+ of findings. If you catch yourself reaching for grep on reviewer output, stop and use Read instead.
 - **Don't substitute self-analysis for review.** If you Edit/Write `plan.md` after the last reviewer round, you MUST run Step 6.5 (verification pass) before claiming APPROVED. Phrases like "I applied the fix and it resolves the concern" are the exact failure mode the SHA self-check exists to prevent. Verification passes are unbounded — they don't burn revision-budget rounds. Use them.
 - **SHA-gated cleanup.** Step 9 uses `safe-cleanup.sh`, not `rm -rf`. It refuses to delete the work dir unless (a) the review target still matches the last APPROVED state and (b) in plan mode, `--saved` points to a durable, byte-identical copy of the plan. A refusal is your signal to verify or to save the plan — not to add `--force`. The work dir is the only copy of the final plan until Step 8 persists it.
-- **Re-invoke teammates by respawning, never by SendMessage.** An idle background teammate is never re-scheduled to read its inbox, so a SendMessage to it returns success but never wakes it (the production wedge). Rounds 2+ and the Step 6.5 verification pass therefore spawn **fresh** `claude-<persona>-r<N>` / `claude-<persona>-verify` Agent teammates with the revised plan inlined — same footer + file-write delivery as Round 1 (`[OUTPUT_PATH]` pointed at this round's `-r<N>-`/`-verify-output.md`). Guard every teammate wait with the Step 2c-wedge detector: no non-empty output file within ~10 min = dead → respawn, don't wait or re-ping. **Reconcile before recording a round:** every spawned teammate must have a non-empty output file, or the panel silently shrank — respawn the missing ones first.
+- **Re-invoke teammates by respawning, never by SendMessage.** An idle background teammate is never re-scheduled to read its inbox, so a SendMessage to it returns success but never wakes it (the production wedge). Rounds 2+ and the Step 6.5 verification pass therefore spawn **fresh** `claude-<persona>-r<N>` / `claude-<persona>-verify` Agent teammates with the revised plan inlined — same footer + file-write delivery as Round 1 (`[OUTPUT_PATH]` pointed at this round's `-r<N>-`/`-verify-output.md`). Guard every teammate wait with the Step 2c-wedge detector: no non-empty output file within ~10 min = treat as dead → respawn, don't wait or re-ping. **A respawn always writes to its own `-b-output.md`, never the original's path** — the threshold detects "hasn't delivered", not "is dead", and a slow teammate that returns later will overwrite the respawn's review if both point at one file. **Reconcile before recording a round:** every spawned persona must have at least one non-empty output file across its attempts, or the panel silently shrank — respawn the missing ones first.
 - **Close every teammate you open (best-effort).** Named skeptic/persona teammates — Round-1 base names plus every `-r<N>` respawn and `-verify` teammate — persist after they return and pile up across runs. Step 10 sends a shutdown request (SendMessage `shutdown_request`, not `TaskStop`) to each on success AND on abort, but does **not** block completion on `shutdown_response`: an idle teammate may never read the request, and unacknowledged shutdowns are fine (teammates are reaped at session end). Never leave a review's teammates running that you can reach.
 - **The Claude side is config-driven.** `claude_reviewers` maps each persona key — `skeptic`, `simplifier`, `operator`, `pentester`, or a custom persona file path — to a model spec (`false` | `"opus"` | `"sonnet"` | `"fable"` | `"auto"`, or an array). Full resolution rules and the pentester-never-sonnet guard are in Step 2b (the authority); bodies live in `reviewer-prompts.md`.
 - **Revision discipline:** Make real improvements, not cosmetic changes.
