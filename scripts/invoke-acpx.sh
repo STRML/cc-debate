@@ -395,11 +395,12 @@ handle_invocation_result() {
        && grep -q "VERDICT:" "$WORK_DIR/${REVIEWER}-output.md"; then
     # Only claim a review arrived once we know one did. The blank case is reported by
     # the guard below, and announcing both reads as a contradiction in the runner log.
-    # The VERDICT line is the prompt's contract (reviews end with "VERDICT: APPROVED"
-    # or "VERDICT: REVISE") and it is what separates a real review from an error dump
-    # the agent wrote to stdout and exited 0 on (observed: agy printed its permission
-    # error as the "review"). Without the marker, keep quiet and let the orchestrator
-    # judge the bytes rather than being sent looking for a review that is not there.
+    # The VERDICT line is a diagnostic hint that separates a real review from an error
+    # dump the agent wrote to stdout and exited 0 on (observed: agy printed its
+    # permission error as the "review"). It is NOT a delivery gate — delivery is decided
+    # by exit code + non-empty output below, because a review needs no ASCII at all and
+    # a non-Latin review may carry no English VERDICT marker. This line is purely for
+    # the operator; a seat that delivers without the marker simply stays quiet here.
     echo "[$REVIEWER] Review received." >&2
   fi
 

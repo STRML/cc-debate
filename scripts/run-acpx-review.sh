@@ -36,7 +36,11 @@ SANDBOX_ARGS=()
 
 RUNNER=("bash" "$SCRIPT_DIR/run-parallel-acpx.sh" "$CONFIG" "$REVIEW_ID" "$SEATS")
 if [ "$SANDBOX" = "1" ]; then
-  exec python3 "$SCRIPT_DIR/sandbox.py" "${SANDBOX_ARGS[@]}" -- "${RUNNER[@]}"
+  # Bare --sandbox leaves SANDBOX_ARGS empty; expanding an empty array under `set -u`
+  # is an "unbound variable" error on bash 3.2 (stock macOS), so the sandboxed dispatch
+  # dies before reaching sandbox.py. The + guard (same idiom as invoke-acpx.sh's
+  # TIMEOUT_PREFIX) expands to nothing when there are no flags.
+  exec python3 "$SCRIPT_DIR/sandbox.py" ${SANDBOX_ARGS[@]+"${SANDBOX_ARGS[@]}"} -- "${RUNNER[@]}"
 else
   exec "${RUNNER[@]}"
 fi

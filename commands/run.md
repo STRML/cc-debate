@@ -409,11 +409,14 @@ For each configured **acpx** reviewer, read:
 - `<WORK_DIR>/<name>-output.md` — review text
 
 Exit code meanings:
-- `0` — success **only when `<name>-output.md` is non-empty and contains a `VERDICT:`
-  line**. An exit file of `0` with an empty, missing, or VERDICT-less `-output.md` is a
-  killed, mute, or error-dumping seat — read it as FAILED `<name>`, never as a success.
-  A killed seat can leave `exit.txt=0` behind on teardown (its EXIT trap now rewrites
-  that to a non-zero failure, but judge by the output, not by the code).
+- `0` — success when `<name>-output.md` is non-empty. An exit file of `0` with an empty
+  or missing `-output.md` is a killed or mute seat — read it as FAILED `<name>`, never
+  as a success. (A killed seat can leave `exit.txt=0` behind on teardown; its EXIT trap
+  now rewrites that to a non-zero failure, but judge by the output, not by the code.)
+  A non-empty output is not automatically a review: an agent that exits 0 after printing
+  an error dump has not delivered — read the output (Step 3) and treat an error-shaped,
+  VERDICT-less dump as FAILED. And a review needs no ASCII: a non-Latin review may
+  legitimately carry no `VERDICT:` marker and still be a delivered review.
 - `4` — session creation failed (agent not installed or not authenticated)
 - `124` — timed out
 - Other — error (check `<name>-stderr.log` and `<name>-invoke.log` for details)
@@ -425,7 +428,9 @@ For each **Claude teammate** you spawned this round, read its output file:
   are two independent reviews, not a duplicate.
 
 **Reconciliation gate (before you synthesize or record the round).** An acpx reviewer
-has delivered only when its `-output.md` is non-empty — an exit code alone never counts.
+has delivered only when its `-output.md` is non-empty — the exit code alone never counts,
+and neither does an error dump the agent wrote to stdout and exited 0 on (judge by
+reading; a non-Latin review may carry no `VERDICT:` marker and still be a valid review).
 Treat the acpx reviewers exactly like the personas: every reviewer you spawned this round
 must have a non-empty `-output.md`, counting either attempt. A reviewer with none is a
 review that dropped — do **not** proceed with a silently-shrunk panel and do **not**

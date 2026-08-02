@@ -154,6 +154,12 @@ for s in <the HAVE seats>; do
 done
 ```
 
+Non-empty is the test, not the whole story: an exit file of 0 with non-empty output can
+still be an error dump the agent printed to stdout and exited 0 on. You are reading every
+`-output.md` in full below anyway — a seat whose output is an error dump rather than a
+review did not deliver, whatever its exit file says. (And the reverse: a review needs no
+ASCII, so a non-Latin review may carry no `VERDICT:` marker and still be a valid review.)
+
 Every seat here was configured, so a missing exit file now means it really did die.
 Read `<WORK_DIR>/panel-state.json` back for `diff` and `seatsSkipped`, and feed the split
 in with them:

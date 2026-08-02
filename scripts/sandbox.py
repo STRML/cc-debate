@@ -23,6 +23,11 @@ On every backend the host filesystem stays readable (bwrap --ro-bind / /, Seatbe
 (allow default), docker ro-mounts) — the same residual risk the old codex-exec
 README section documented. An absolute path read still works; a write outside
 temp/<cwd>/.tmp and a HOME that resolves somewhere useful do not.
+
+Session-mode seats don't work in here: auth_env() routes acpx/codex at their real
+~/.acpx and ~/.codex, which every backend keeps read-only, so `acpx <agent> sessions
+ensure` (session persistence) is denied and the seat fails with exit 4. Sandboxed
+seats must be one-shot (`"mode": "exec"`), which skips session persistence entirely.
 """
 import argparse, os, shutil, sys, platform, tempfile
 
@@ -47,7 +52,22 @@ def _bwrap_supports(feature):
         return False  # can't tell; be conservative and drop non-essential flags
 
 def scratch_dir(cwd):
-    """The runner's writable scratch: <cwd>/.tmp (created)."""
+    """The runner's writable scratch: <git-top>/.tmp (or <cwd>/.tmp outside a repo).
+
+    run-parallel-acpx.sh resolves its WORK_DIR from `git rev-parse --show-toplevel`,
+    deliberately independent of the invocation directory. The sandbox's writable scope
+    must track the same root, or a review launched from a repo subdirectory writes its
+    outputs (and the seats' exit files) outside the grant and fails before a single
+    seat starts — the runner's `mkdir -p "$WORK_DIR"` is denied.
+    """
+    try:
+        import subprocess
+        top = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=5)
+        if top.returncode == 0:
+            cwd = top.stdout.strip()
+    except Exception:
+        pass
     d = os.path.realpath(os.path.join(cwd, ".tmp"))
     try:
         os.makedirs(d, exist_ok=True)
@@ -158,9 +178,14 @@ def docker_cmd(repo, repo_sandbox, no_net, bind_pwd, image):
     """
     cwd = os.path.realpath(bind_pwd)
     scratch = scratch_dir(bind_pwd)
-    vol = ["--volume", "%s:%s" % (cwd, cwd)]
-    if scratch != cwd and not scratch.startswith(cwd + os.sep):
-        vol += ["--volume", "%s:%s" % (scratch, scratch)]
+    # The working directory (the repo, when invoked from it) mounts READ-ONLY: a seat
+    # must not edit the repo it reviews. The scratch mounts rw and, being inside cwd,
+    # shadows the ro parent for that one path — so review outputs still land. cwd used
+    # to mount rw, which on this fallback backend let a seat modify the repo the sandbox
+    # exists to keep read-only (bwrap ro-binds / and Seatbelt denies file-writes; docker
+    # was the one backend that did not enforce the isolation).
+    vol = ["--volume", "%s:%s:ro" % (cwd, cwd)]
+    vol += ["--volume", "%s:%s" % (scratch, scratch)]
     if repo_sandbox and repo:
         r = os.path.realpath(repo)
         if r != cwd:

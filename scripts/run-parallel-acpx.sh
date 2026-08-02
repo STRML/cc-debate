@@ -174,7 +174,11 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
     WARM_ACPX=()
   fi
   if [ ${#WARM_ACPX[@]} -gt 0 ]; then
-    declare -A WARMED=()
+    # A plain string, not `declare -A`: associative arrays need bash 4+ and stock macOS
+    # ships 3.2, where `declare -A` is a fatal error under set -e that killed the whole
+    # runner. Agent names are sanitized to [a-zA-Z0-9_-] above, so space-delimiting is
+    # unambiguous.
+    WARMED=""
     for NAME in "${REVIEWERS[@]}"; do
       [[ "$NAME" =~ ^[a-zA-Z0-9_-]+$ ]] || continue
       AGENT=$(jq -r --arg name "$NAME" '.reviewers[$name].agent // empty' "$CONFIG_FILE")
@@ -185,8 +189,8 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
       # need the session at all.
       MODE=$(jq -r --arg name "$NAME" '.reviewers[$name].mode // empty' "$CONFIG_FILE")
       [ "$MODE" = "exec" ] && continue
-      [ -n "${WARMED[$AGENT]:-}" ] && continue   # one ensure per distinct agent
-      WARMED[$AGENT]=1
+      [[ "$WARMED" == *" $AGENT "* ]] && continue   # one ensure per distinct agent
+      WARMED="$WARMED $AGENT "
       echo "[debate] Warming acpx session for '$AGENT'..." >&2
       "${WARM_ACPX[@]}" "$AGENT" sessions ensure >/dev/null 2>&1 \
         || echo "[debate] Warm-up for '$AGENT' failed (agent may be unconfigured)." >&2

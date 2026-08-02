@@ -46,6 +46,15 @@ def best_effort_metrics(payload):
     endpoint here when one exists."""
     return {}
 
+def write_registry(path, reg):
+    """Atomic replace. Write to a temp then rename, so an interrupted refresh never
+    truncates the user's curated registry in place."""
+    tmp = "%s.tmp" % path
+    with open(tmp, "w") as f:
+        json.dump(reg, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+
 def merge(registry, updates):
     out = dict(registry)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -74,13 +83,20 @@ def main():
 
     reg = json.load(open(a.registry))
     # TTL guard: a very fresh manual registry is not worth a network round-trip.
+    # Parse each as_of defensively — a single hand-edited or odd value used to abort
+    # the whole refresh with a traceback instead of being ignored.
     if all(m.get("as_of") for m in reg.values()):
-        oldest = min(time.time() - time.mktime(time.strptime(m["as_of"], "%Y-%m-%dT%H:%M:%SZ"))
-                     for m in reg.values() if m.get("as_of"))
-        if oldest < a.ttl_hours * 3600:
-            print(f"cache fresh ({int(oldest//3600)}h old); skipping refresh (--ttl-hours {a.ttl_hours})")
-            out = a.out or a.registry
-            json.dump(reg, open(out, "w"), indent=2); open(out, "a").write("\n")
+        ages = []
+        for m in reg.values():
+            if not m.get("as_of"):
+                continue
+            try:
+                ages.append(time.time() - time.mktime(time.strptime(m["as_of"], "%Y-%m-%dT%H:%M:%SZ")))
+            except (ValueError, TypeError, OverflowError):
+                continue   # malformed as_of — ignore this entry, don't crash
+        if ages and min(ages) < a.ttl_hours * 3600:
+            print(f"cache fresh ({int(min(ages)//3600)}h old); skipping refresh (--ttl-hours {a.ttl_hours})")
+            write_registry(a.out or a.registry, reg)
             sys.exit(0)
 
     if not PARSERS_READY:
@@ -88,8 +104,7 @@ def main():
         # be discarded. Report that and leave the registry byte-identical instead of
         # burning network + rate-limit budget on a no-op.
         print("no datasource parser wired yet; skipping fetch (registry unchanged)")
-        out = a.out or a.registry
-        json.dump(reg, open(out, "w"), indent=2); open(out, "a").write("\n")
+        write_registry(a.out or a.registry, reg)
         sys.exit(0)
 
     updates = {}
@@ -117,7 +132,7 @@ def main():
 
     out = merge(reg, updates)
     dst = a.out or a.registry
-    json.dump(out, open(dst, "w"), indent=2); open(dst, "a").write("\n")
+    write_registry(dst, out)
     if updates:
         print(f"registry refreshed ({len(out)} entries) -> {dst}")
     else:
