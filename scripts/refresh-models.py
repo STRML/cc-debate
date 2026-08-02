@@ -90,7 +90,7 @@ def main():
                 updates = {**updates, **u}
                 print(f"{src}: merged {len(u)} model updates")
             else:
-                print(f"{src}: no parseable metrics (schema unstable) — keeping registry data")
+                print(f"{src}: datasource schema not wired yet (best_effort_metrics stub) — registry unchanged")
         except Exception as e:
             failures.append(f"{src}: {e}")
 
@@ -103,7 +103,10 @@ def main():
     out = merge(reg, updates)
     dst = a.out or a.registry
     json.dump(out, open(dst, "w"), indent=2); open(dst, "a").write("\n")
-    print(f"registry refreshed ({len(out)} entries) -> {dst}")
+    if updates:
+        print(f"registry refreshed ({len(out)} entries) -> {dst}")
+    else:
+        print(f"registry unchanged ({len(out)} entries) -> {dst} (no datasource merged yet)")
 
 if __name__ == "__main__":
     main()

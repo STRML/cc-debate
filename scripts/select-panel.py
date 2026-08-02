@@ -24,9 +24,15 @@ def load(data):
         out.append({**m, "key": key})
     return out
 
-def pick(registry, seats, deepest, installed, min_effort):
+def pick(registry, seats, deepest, installed, min_effort, max_cost=None):
     pool = [m for m in load(registry)
             if not installed or m["harness"] in installed]
+    if max_cost is not None:
+        within = [m for m in pool if m["price"].get("cost_per_task", 0) <= max_cost]
+        if not within:
+            sys.stderr.write("⚠️ --max-cost %.2f excludes every available model; ignoring budget\n" % max_cost)
+        else:
+            pool = within
     if not pool:
         return None, "no available models for installed harnesses", 0
 
@@ -53,6 +59,8 @@ def pick(registry, seats, deepest, installed, min_effort):
     warned = False
     # deepest seat first: strongest reasoning, at least min_effort
     first = [m for m in by_strength if RANK.get(m["effort"],0) >= RANK.get(min_effort,0)]
+    if not first:
+        sys.stderr.write("⚠️ no available model reaches effort %s — falling back to strongest available\n" % min_effort)
     m, w = take(first or by_strength)
     if m is None:
         return None, "registry empty after filtering", 0
@@ -86,12 +94,13 @@ def main():
     ap.add_argument("--deepest", default=None)           # default = last seat
     ap.add_argument("--installed-harnesses", default="") # comma list
     ap.add_argument("--min-effort", default="xhigh")
+    ap.add_argument("--max-cost", type=float, default=None)
     a = ap.parse_args()
     seats = [s.strip() for s in a.seats.split(",") if s.strip()]
     deepest = a.deepest or seats[-1] if seats else "pentester"
     installed = [s.strip() for s in a.installed_harnesses.split(",") if s.strip()]
     reg = json.load(open(a.registry))
-    assignment, err, nlabs = pick(reg, seats, deepest, installed, a.min_effort)
+    assignment, err, nlabs = pick(reg, seats, deepest, installed, a.min_effort, a.max_cost)
     if assignment is None:
         print(json.dumps({"error": err})); sys.exit(1)
     print(json.dumps({
