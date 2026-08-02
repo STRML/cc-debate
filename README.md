@@ -237,6 +237,50 @@ Then add to `~/.claude/debate-acpx.json`:
 | GPT-4.1 | `openai/gpt-4.1` | Broad coverage |
 | Gemini 2.5 Pro | `google/gemini-2.5-pro` | Strong if you don't have the Antigravity CLI |
 
+### A provider opencode already knows (DeepSeek, and most others)
+
+If the provider is in the [models.dev](https://models.dev) catalogue, opencode can reach it
+directly and there is no proxy to run. DeepSeek is the worked example:
+
+```bash
+bash ~/.claude/debate-scripts/create-opencode-agent.sh deepseek deepseek/deepseek-reasoner
+```
+
+```
+acpx → opencode (ACP mode) → api.deepseek.com
+```
+
+Then put the key in `~/.claude/debate-keys.json`, mode `600` — one file for every
+provider:
+
+```json
+{
+  "deepseek": "sk-...",
+  "openrouter": "sk-or-..."
+}
+```
+
+`$DEEPSEEK_API_KEY` works too and takes precedence, but the file does not depend on the
+variable surviving into whatever shell the runner is spawned from. The wrapper reads one
+or the other at review time; the key is never written into the wrapper, and it reaches
+opencode through the environment rather than through a command line, so it does not show
+up in another account's view of the process table.
+
+Keys live here rather than in `debate-acpx.json` on purpose. That file has a sample twin
+in this repo and is safe to paste into a bug report — which stops being true the moment
+it holds credentials. The older per-provider files (`debate-openrouter.json`,
+`debate-<provider>.json`) are still read as a fallback, so nothing breaks if you have not
+moved yet.
+
+A seat with no key **fails with that reason** rather than returning a blank review. This
+matters more than it sounds: opencode ends a keyless turn with no message and exit 0,
+which the runner would otherwise record as a reviewer that had nothing to say.
+
+The script takes `<name> <provider/model> [env_var] [context] [output]`, so the same call
+adds any other catalogued provider. Use the LiteLLM route below instead when the provider
+is *not* catalogued — a local model, an unlisted endpoint, or anything needing rewriting
+on the way out.
+
 ### Any model via LiteLLM (using opencode)
 
 For local models (Ollama, LM Studio), self-hosted endpoints, or any provider that [LiteLLM](https://github.com/BerriAI/litellm) supports, you can route through a LiteLLM proxy using opencode as the bridge:

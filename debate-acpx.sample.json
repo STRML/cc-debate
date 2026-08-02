@@ -120,6 +120,13 @@
       "mode": "exec",
       "retries": 3,
       "system_prompt": "You are The Cartographer — you read wide, not deep, and your context is enormous, so use it. Trace every caller, config key, test and doc the change touches and name the ones it forgets. Read whole files rather than changed lines. If you cannot name the specific file that goes stale, do not report it."
+    },
+    "deepseek": {
+      "agent": "deepseek",
+      "timeout": 600,
+      "mode": "exec",
+      "retries": 2,
+      "system_prompt": "You are The Outsider — the only seat here that is not OpenAI, Google or Anthropic, so weigh your disagreement with the rest of the panel heavily and say plainly where you differ rather than deferring. Reason about what the code does when it runs, not about how it reads. Ground every finding in a file:line you have read and quote the exact line. Report nothing you cannot tie to concrete inputs or state producing a concrete wrong result."
     }
   },
   "presets": {

@@ -132,15 +132,24 @@ Report:
 
 Tell the user:
 ```text
-  Old config files are still present. You can delete them after verifying:
-    rm ~/.claude/debate-litellm.json ~/.claude/debate-openrouter.json
+  Old config files are still present. debate-litellm.json can go once you have
+  verified the migration:
+    rm ~/.claude/debate-litellm.json
+
+  Do NOT delete debate-openrouter.json until its key has moved. Any acpx agent
+  wrapper reaching OpenRouter still reads the key from it, so deleting it takes
+  those seats off the panel — and a keyless seat comes back as a blank review
+  rather than an error, so nothing says why. Move the key first:
+    ~/.claude/debate-keys.json   {"openrouter": "sk-or-..."}   chmod 600
+  then delete it.
 ```
 
 **If `~/.claude/debate-acpx.json` already exists**, skip auto-migration and just report:
 ```text
   ℹ️  Old config files found but ~/.claude/debate-acpx.json already exists — skipping migration.
-     Delete old configs when ready:
-       rm ~/.claude/debate-litellm.json ~/.claude/debate-openrouter.json
+     rm ~/.claude/debate-litellm.json when ready.
+     Keep debate-openrouter.json until its key is in ~/.claude/debate-keys.json —
+     the OpenRouter agent wrappers still read it.
 ```
 
 ### If old settings.json patterns found
