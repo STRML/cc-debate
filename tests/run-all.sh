@@ -34,6 +34,7 @@ run_suite "cleanup + record-round" "$SCRIPT_DIR/test-cleanup-and-record.sh" || S
 run_suite "reference integrity" "$SCRIPT_DIR/test-references.sh" || SUITE_FAIL=$((SUITE_FAIL + 1))
 run_suite "symlink health" "$SCRIPT_DIR/test-symlink-health.sh" || SUITE_FAIL=$((SUITE_FAIL + 1))
 run_suite "workflow panel" "$SCRIPT_DIR/test-workflow-panel.sh" || SUITE_FAIL=$((SUITE_FAIL + 1))
+run_suite "debate v3 (registry/selector/sandbox/e2e)" "$SCRIPT_DIR/test-e2e.sh" || SUITE_FAIL=$((SUITE_FAIL + 1))
 
 echo ""
 echo "==============================="
