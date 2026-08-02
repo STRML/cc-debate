@@ -171,28 +171,12 @@ test_sample_config_is_coherent() {
     return 1
   fi
 
-  # The `untrusted` preset is the one the README points at for a diff you did not
-  # write, so every seat in it must be prompt-only. A repo-aware agent here would
-  # make the documented safe path the unsafe one — which is exactly what happened
-  # when the docs recommended `quick`, a preset that contains a codex-exec seat.
-  if jq -e '.presets.untrusted' "$f" > /dev/null 2>&1; then
-    bad=$(jq -r '
-      .reviewers as $r
-      | .presets.untrusted.reviewers[]
-      | select($r[.].agent == "codex-exec")
-    ' "$f")
-    if [ -n "$bad" ]; then
-      echo "  untrusted preset contains a repo-aware seat: $bad"
-      return 1
-    fi
-  fi
-
   # Reviewers sharing one acpx agent must be one-shot, or they collide in a
-  # single session and one of them returns blank. codex-exec and antigravity
-  # are direct-CLI agents and never get an acpx session, so they are exempt.
+  # single session and one of them returns blank. antigravity and opus are
+  # direct-CLI agents and never get an acpx session, so they are exempt.
   bad=$(jq -r '
     [.reviewers | to_entries[]
-     | select(.value.agent as $a | ["codex-exec","antigravity","opus"] | index($a) | not)]
+     | select(.value.agent as $a | ["antigravity","opus"] | index($a) | not)]
     | group_by(.value.agent)[]
     | select(length > 1)
     | select(any(.[]; .value.mode != "exec"))
@@ -208,39 +192,14 @@ test_sample_config_is_coherent() {
   # comes back empty, and the check quietly passes forever. Hence the `|| return 1`
   # on every one of these — a broken lint must fail, not abstain.
 
-  # effort is forwarded to codex unvalidated (invoke-acpx.sh), so a typo does not
-  # fail the config. It comes back as a 400 from the API mid-review and the seat is
-  # simply gone. Catch it here, where catching it is free.
+  # effort was read only by the codex-exec branch, which is gone (#35). No agent
+  # reads it now, so any `effort` in a reviewer config is a silent no-op that reads
+  # like configuration — worse than leaving it out.
   bad=$(jq -r '.reviewers | to_entries[]
     | select(.value.effort != null)
-    | .value.effort as $e
-    | select(["none","minimal","low","medium","high","xhigh","max"] | index($e) | not)
-    | .key' "$f") || { echo "  effort lint failed to run"; return 1; }
+    | .key' "$f") || { echo "  effort-unused lint failed to run"; return 1; }
   if [ -n "$bad" ]; then
-    echo "  invalid effort value: $bad"
-    return 1
-  fi
-
-  # Only the codex-exec branch reads effort. Setting it anywhere else is a silent
-  # no-op that reads like configuration, which is worse than leaving it out.
-  bad=$(jq -r '.reviewers | to_entries[]
-    | select(.value.effort != null and .value.agent != "codex-exec")
-    | .key' "$f") || { echo "  effort-placement lint failed to run"; return 1; }
-  if [ -n "$bad" ]; then
-    echo "  effort set on a seat that ignores it: $bad"
-    return 1
-  fi
-
-  # The _comment states the luna floor. State it here too, or it drifts back the
-  # way it drifted the first time.
-  bad=$(jq -r '.reviewers | to_entries[]
-    | select(.value.agent == "codex-exec")
-    | select((.value.model // "") | test("luna"))
-    | (.value.effort // "") as $e
-    | select(["xhigh","max"] | index($e) | not)
-    | .key' "$f") || { echo "  luna-floor lint failed to run"; return 1; }
-  if [ -n "$bad" ]; then
-    echo "  luna seat below xhigh: $bad"
+    echo "  effort is unused since codex-exec removal (#35): $bad"
     return 1
   fi
 
@@ -260,20 +219,6 @@ test_sample_config_is_coherent() {
     return 1
   fi
 
-  # Measured: a luna xhigh seat spent 271s reviewing a single-file, 13-line diff.
-  # That is near the floor cost of the seat, not a typical one. Any repo-aware seat at
-  # this effort needs a budget it can finish in, whatever model it runs, and 900 costs
-  # nothing because auditor and pentester already fix MAX_WAIT at 900*(1+1)+60.
-  bad=$(jq -r '.reviewers | to_entries[]
-    | select(.value.agent == "codex-exec")
-    | (.value.effort // "") as $e
-    | select(["xhigh","max"] | index($e))
-    | select((.value.timeout // 120) < 900)
-    | .key' "$f") || { echo "  timeout-floor lint failed to run"; return 1; }
-  if [ -n "$bad" ]; then
-    echo "  xhigh seat with a timeout under 900: $bad"
-    return 1
-  fi
 }
 
 test_new_scripts_executable() {
