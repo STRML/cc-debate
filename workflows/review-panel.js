@@ -15,8 +15,8 @@ export const meta = {
 
 // The panel exists because its reviewers are NOT Claude. agent() here spawns Claude
 // subagents, so none of them is a seat: they measure the diff, they turn markdown into
-// JSON, and they argue with findings. Every actual review comes from an acpx or
-// codex-exec seat that `/debate:panel` runs between this workflow's two stages. Ten
+// JSON, and they argue with findings. Every actual review comes from an acpx
+// seat that `/debate:panel` runs between this workflow's two stages. Ten
 // agent() calls would be ten correlated reviewers, which is the failure
 // debate-acpx.sample.json warns about in as many words.
 //

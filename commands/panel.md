@@ -20,7 +20,7 @@ debate rounds, which this does not do.
    change gets the full table. The rule is in `workflows/review-panel.js` as plain
    code, so you can read it and argue with it.
 3. Runs those seats through `run-parallel-acpx.sh`, exactly as `/debate:run` does. The
-   reviewers are still acpx and codex-exec seats. Nothing in the panel is Claude. This
+   reviewers are still acpx seats. Nothing in the panel is Claude. This
    step runs from here rather than inside the workflow, because it takes up to half an
    hour and nothing inside a workflow can wait that long.
 4. Turns each review into structured findings, then groups them by `file:line`. On one

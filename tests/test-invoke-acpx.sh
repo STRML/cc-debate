@@ -44,13 +44,6 @@ setup_config() {
       "timeout": 60,
       "system_prompt": "You are The Skeptic."
     },
-    "codex-exec-reviewer": {
-      "agent": "codex-exec",
-      "timeout": 60,
-      "model": "gpt-5.6-sol",
-      "effort": "high",
-      "system_prompt": "You are The Auditor."
-    },
     "oneshot-reviewer": {
       "agent": "kimi-k3",
       "timeout": 60,
@@ -575,221 +568,6 @@ test_opus_skips_session_ensure() {
   rm -rf "$work_dir"
 }
 
-# --- codex exec (repo-aware seat) ---
-
-test_codex_exec_happy_path() {
-  local work_dir config
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_CODEX_RESPONSE="Reads fine. VERDICT: APPROVED" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
-
-  grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" || return 1
-  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || return 1
-
-  rm -rf "$work_dir"
-}
-
-# The real binary blocks forever on an open stdin. The mock reproduces that, so
-# this test fails if anyone drops the `</dev/null` from the invocation.
-#
-# stdin is held genuinely open by a long `sleep` upstream in a pipe — inheriting
-# an already-closed stdin from the harness would make the mock return anyway and
-# the test would pass without proving anything.
-#
-# The deadline is hand-rolled rather than `timeout`: macOS runners ship no GNU
-# coreutils, so bare `timeout` is not found there and the command under test
-# never runs at all. (invoke-acpx.sh itself probes for timeout/gtimeout; this
-# test must not assume more than the script does.)
-test_codex_exec_closes_stdin() {
-  local work_dir config pid waited
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-
-  # A fifo opened read-write never reports EOF, so stdin stays genuinely open
-  # without a second process whose lifetime would confuse the deadline.
-  local fifo="$work_dir/open-stdin.fifo"
-  mkfifo "$fifo"
-  exec 9<>"$fifo"
-
-  (
-    SKIP_SESSION_CHECK=1 \
-    PATH="$SCRIPT_DIR:$PATH" \
-    MOCK_CODEX_HANG_ON_STDIN=1 \
-    MOCK_CODEX_RESPONSE="Survived. VERDICT: APPROVED" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" <&9
-  ) >/dev/null 2>&1 &
-  pid=$!
-
-  waited=0
-  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 25 ]; do
-    sleep 1
-    waited=$((waited + 1))
-  done
-
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -9 "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-    exec 9>&-
-    rm -rf "$work_dir"
-    return 1
-  fi
-  wait "$pid" 2>/dev/null || true
-  exec 9>&-
-
-  grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
-
-  rm -rf "$work_dir"
-}
-
-test_codex_exec_is_read_only_and_uses_output_flag() {
-  local work_dir config log_file
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-  log_file="$work_dir/codex-log.txt"
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_CODEX_LOG="$log_file" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
-
-  grep -q -- "-s read-only" "$log_file" || return 1
-  grep -q -- "-o $work_dir/codex-exec-reviewer-output.md" "$log_file" || return 1
-  grep -q -- "-m gpt-5.6-sol" "$log_file" || return 1
-  grep -q -- "model_reasoning_effort=high" "$log_file" || return 1
-
-  rm -rf "$work_dir"
-}
-
-# codex echoes every command it runs; that transcript must not reach the
-# synthesizer, only the final message.
-test_codex_exec_transcript_kept_out_of_output() {
-  local work_dir config
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_CODEX_RESPONSE="Clean. VERDICT: APPROVED" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
-
-  grep -q "mock codex transcript" "$work_dir/codex-exec-reviewer-transcript.log" || return 1
-  grep -q "mock codex transcript" "$work_dir/codex-exec-reviewer-output.md" && return 1
-
-  rm -rf "$work_dir"
-}
-
-test_codex_exec_empty_output_is_a_failure() {
-  local work_dir config
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_CODEX_RESPONSE="" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null || true
-
-  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "1" ] || return 1
-
-  rm -rf "$work_dir"
-}
-
-# codex-exec never gets an acpx session, so the session check must not run for
-# it. Deliberately does NOT set SKIP_SESSION_CHECK — every other codex test does,
-# which is exactly what hid this: acpx would be asked to ensure a session for a
-# "codex-exec" agent it does not have, fail, and exit 4 before the branch ran.
-test_codex_exec_skips_session_check() {
-  local work_dir config log_file
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-  log_file="$work_dir/acpx-log.txt"
-
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_ACPX_LOG="$log_file" \
-  MOCK_CODEX_RESPONSE="Ran. VERDICT: APPROVED" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
-
-  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || return 1
-  # acpx must never have been called at all for this reviewer.
-  [ -f "$log_file" ] && return 1
-
-  rm -rf "$work_dir"
-}
-
-# codex can exit 0 without writing a final message. A leftover file from an
-# earlier round would then be read as this round's review.
-test_codex_exec_clears_stale_output() {
-  local work_dir config
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-
-  echo "STALE review from round 1. VERDICT: APPROVED" > "$work_dir/codex-exec-reviewer-output.md"
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_CODEX_RESPONSE="" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null || true
-
-  grep -q "STALE" "$work_dir/codex-exec-reviewer-output.md" && return 1
-  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "1" ] || return 1
-
-  rm -rf "$work_dir"
-}
-
-# The prompt must travel on stdin, not in argv. In changeset mode it carries a
-# whole diff, and a large one exceeds ARG_MAX (1 MiB on macOS) with E2BIG.
-test_codex_exec_prompt_travels_on_stdin() {
-  local work_dir config log_file prompt_out
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-  log_file="$work_dir/codex-log.txt"
-  prompt_out="$work_dir/seen-prompt.txt"
-
-  echo "PLAN_CONTENT_MARKER" > "$work_dir/plan.md"
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_CODEX_LOG="$log_file" \
-  MOCK_CODEX_PROMPT_OUT="$prompt_out" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
-
-  # argv ends with the stdin marker, and carries no prompt text.
-  grep -q -- "codex exec .* -$" "$log_file" || return 1
-  grep -q "PLAN_CONTENT_MARKER" "$log_file" && return 1
-  # ...and the prompt actually arrived on stdin.
-  grep -q "PLAN_CONTENT_MARKER" "$prompt_out" || return 1
-
-  rm -rf "$work_dir"
-}
-
-# Regression for E2BIG: a prompt past ARG_MAX must still get through.
-test_codex_exec_handles_oversized_prompt() {
-  local work_dir config prompt_out limit
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-  prompt_out="$work_dir/seen-prompt.txt"
-
-  limit=$(getconf ARG_MAX 2>/dev/null || echo 262144)
-  # Comfortably past the limit; as an argv entry this would be E2BIG.
-  awk -v n=$(( limit / 40 + 5000 )) 'BEGIN{for(i=0;i<n;i++) print "+ const padding_line_token = 1234567890;"}' \
-    > "$work_dir/plan.md"
-  echo "TAIL_MARKER_AFTER_BULK" >> "$work_dir/plan.md"
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_CODEX_PROMPT_OUT="$prompt_out" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
-
-  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || return 1
-  [ "$(wc -c < "$prompt_out")" -gt "$limit" ] || return 1
-  grep -q "TAIL_MARKER_AFTER_BULK" "$prompt_out" || return 1
-
-  rm -rf "$work_dir"
-}
-
 # An agent that ends its turn with no final message still gets a trailing newline
 # from acpx, so the output file is 1 byte and `[ -s ]` calls it non-empty. Before
 # this was caught, the round logged "Review received", wrote exit 0, and handed the
@@ -1000,30 +778,6 @@ test_punctuation_only_response_is_empty() {
     bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
 
   [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
-
-  rm -rf "$work_dir"
-}
-
-# codex-exec is a direct-CLI transport and used to bypass the retry loop entirely,
-# so a blank Codex turn cost the seat despite `retries` being configured.
-test_codex_exec_retries_a_blank_turn() {
-  local work_dir config log_file counter
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-  log_file="$work_dir/codex-log.txt"
-  counter="$work_dir/attempts.txt"
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_CODEX_LOG="$log_file" \
-  MOCK_CODEX_COUNTER_FILE="$counter" \
-  MOCK_CODEX_BLANK_ATTEMPTS=1 \
-  MOCK_CODEX_RESPONSE="Second time. VERDICT: APPROVED" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
-
-  [ "$(cat "$work_dir/codex-exec-reviewer-exit.txt")" = "0" ] || return 1
-  grep -q "VERDICT: APPROVED" "$work_dir/codex-exec-reviewer-output.md" || return 1
-  [ "$(grep -c "codex exec" "$log_file")" = "2" ] || return 1
 
   rm -rf "$work_dir"
 }
@@ -1270,58 +1024,6 @@ test_unknown_mode_warns_and_uses_session() {
   rm -rf "$work_dir"
 }
 
-# --- repo-aware seat containment ---
-#
-# The repo-aware reviewer reads files, and its prompt carries a changeset that may
-# not be yours. `codex exec -s read-only` blocks writes, not reads outside the repo:
-# a canary in $HOME came back verbatim under it, and sandbox_permissions=[] did not
-# change that. Neither of the two mitigations below is a sandbox, and the residual
-# risk (absolute paths) stays open — but both are cheap and both are load-bearing,
-# so a regression in either should fail here rather than in someone's credentials.
-
-test_codex_exec_runs_with_redirected_home() {
-  local work_dir config env_out
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-  env_out="$work_dir/seen-env.txt"
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_CODEX_ENV_OUT="$env_out" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
-
-  # HOME must point inside the work dir, not at the real one.
-  grep -q "^HOME=${work_dir}/" "$env_out" || return 1
-  # ...and codex must still find its own config, or auth breaks.
-  grep -q "^CODEX_HOME=." "$env_out" || return 1
-
-  rm -rf "$work_dir"
-}
-
-test_codex_exec_scrubs_secret_env_vars() {
-  local work_dir config env_out
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-  env_out="$work_dir/seen-env.txt"
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_CODEX_ENV_OUT="$env_out" \
-  DEBATE_TEST_API_KEY="should-not-survive" \
-  DEBATE_TEST_BENIGN="should-survive" \
-  OPENAI_API_KEY="sk-should-not-survive" \
-    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
-
-  grep -q "^SECRET_PRESENT=$" "$env_out" || { echo "  secret-shaped var reached codex"; return 1; }
-  # The provider key specifically: an earlier version exempted OPENAI_* ahead of the
-  # secret patterns, so the most valuable secret on the box was the one kept.
-  grep -q "^PROVIDER_KEY_PRESENT=$" "$env_out" || { echo "  OPENAI_API_KEY reached codex"; return 1; }
-  # The scrub must be targeted, not a blanket wipe — codex needs a working env.
-  grep -q "^BENIGN_PRESENT=yes$" "$env_out" || { echo "  benign var was wrongly stripped"; return 1; }
-
-  rm -rf "$work_dir"
-}
-
 # --- changeset fallback ---
 
 test_changeset_reviewed_when_no_plan() {
@@ -1445,15 +1147,6 @@ ln -sf "$MOCK_CODEX" "$SCRIPT_DIR/codex"
 chmod +x "$SCRIPT_DIR/codex"
 trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/agy" "$SCRIPT_DIR/claude" "$SCRIPT_DIR/codex"' EXIT
 
-run_test "codex exec happy path" test_codex_exec_happy_path
-run_test "codex exec closes stdin" test_codex_exec_closes_stdin
-run_test "codex exec read-only + output flags" test_codex_exec_is_read_only_and_uses_output_flag
-run_test "codex exec transcript kept out of output" test_codex_exec_transcript_kept_out_of_output
-run_test "codex exec empty output is a failure" test_codex_exec_empty_output_is_a_failure
-run_test "codex exec skips the acpx session check" test_codex_exec_skips_session_check
-run_test "codex exec clears stale output" test_codex_exec_clears_stale_output
-run_test "codex exec prompt travels on stdin" test_codex_exec_prompt_travels_on_stdin
-run_test "codex exec handles an oversized prompt" test_codex_exec_handles_oversized_prompt
 run_test "blank output does not log Review received" test_blank_output_does_not_log_review_received
 run_test "blank output is retried then succeeds" test_blank_output_is_retried_then_succeeds
 run_test "retries are bounded" test_retries_are_bounded
@@ -1468,7 +1161,6 @@ run_test "review containing a URL still passes" test_review_containing_a_url_sti
 run_test "colon-form SGR counts as empty" test_colon_sgr_only_response_is_empty
 run_test "non-Latin review is not empty" test_non_latin_review_is_not_empty
 run_test "punctuation-only response counts as empty" test_punctuation_only_response_is_empty
-run_test "codex exec retries a blank turn" test_codex_exec_retries_a_blank_turn
 run_test "whitespace-only response counts as empty" test_whitespace_only_response_is_empty
 run_test "newline-only response counts as empty" test_newline_only_response_is_empty
 run_test "short real response still passes" test_short_real_response_still_passes
@@ -1477,8 +1169,6 @@ run_test "exec mode skips session ensure" test_exec_mode_skips_session_ensure
 run_test "exec mode repeatable across runs" test_exec_mode_repeatable_across_runs
 run_test "session mode is the default" test_session_mode_is_the_default
 run_test "unknown mode warns and uses session" test_unknown_mode_warns_and_uses_session
-run_test "codex exec runs with redirected HOME" test_codex_exec_runs_with_redirected_home
-run_test "codex exec scrubs secret env vars" test_codex_exec_scrubs_secret_env_vars
 run_test "changeset reviewed when no plan" test_changeset_reviewed_when_no_plan
 run_test "plan wins over changeset" test_plan_wins_over_changeset
 run_test "happy path" test_happy_path

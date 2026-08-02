@@ -142,7 +142,7 @@ Reviewers:
 
 ### 1d. Verify sessions
 
-`invoke-acpx.sh` ensures an acpx session before a review run — no manual session creation is needed. Two kinds of reviewer skip this: direct-CLI agents (`antigravity`, `opus`, `codex-exec`), which never use an acpx session, and any reviewer set to `mode: "exec"`, which sends one-shots. If a reviewer fails with exit code 4 (session creation failed), it means the agent CLI is not installed or not authenticated. In that case, suggest running `/debate:acpx-setup` to diagnose.
+`invoke-acpx.sh` ensures an acpx session before a review run — no manual session creation is needed. Two kinds of reviewer skip this: direct-CLI agents (`antigravity`, `opus`), which never use an acpx session, and any reviewer set to `mode: "exec"`, which sends one-shots. If a reviewer fails with exit code 4 (session creation failed), it means the agent CLI is not installed or not authenticated. In that case, suggest running `/debate:acpx-setup` to diagnose.
 
 ### 1e. Capture the review target
 
