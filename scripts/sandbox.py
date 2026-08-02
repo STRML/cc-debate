@@ -52,8 +52,30 @@ def scratch_dir(cwd):
     try:
         os.makedirs(d, exist_ok=True)
     except OSError:
-        pass  # bwrap --tmpfs will hide whatever is there anyway
+        pass
     return d
+
+def auth_env(home_tmp):
+    """Keep the agents' credentials reachable from an isolated HOME.
+
+    acpx reads ~/.acpx and codex reads ~/.codex, both resolved from $HOME. Redirect
+    HOME without saying where those went and every seat fails to authenticate — the
+    isolation works and the reviews do not. Both tools honour an explicit *_HOME, so
+    point them at the real directories; the host stays readable on every backend
+    anyway (see 'Honest scope' above), so this grants no read that was not already
+    there. Only set them when the real directory exists, so an unconfigured host does
+    not get a variable pointing at nothing.
+    """
+    env = []
+    real_home = os.path.expanduser("~")
+    for var, sub in (("ACPX_HOME", ".acpx"), ("CODEX_HOME", ".codex")):
+        if os.environ.get(var):
+            env.append("%s=%s" % (var, os.environ[var]))
+        else:
+            p = os.path.join(real_home, sub)
+            if os.path.isdir(p):
+                env.append("%s=%s" % (var, p))
+    return env
 
 def resolved_tmp():
     """macOS /tmp -> /private/tmp, and Seatbelt matches resolved paths."""
@@ -67,12 +89,21 @@ def bwrap_cmd(repo, repo_sandbox, no_net, bind_pwd):
     cmd += ["--unshare-pid", "--new-session"]
     if no_net:
         cmd += ["--unshare-net"]
-    # Host ro, HOME + /tmp fresh tmpfs, runner scratch tmpfs at <cwd>/.tmp.
+    # Host ro, HOME + /tmp fresh tmpfs.
     cmd += ["--ro-bind", "/", "/", "--tmpfs", "/tmp", "--setenv", "TMPDIR", "/tmp"]
     cmd += ["--tmpfs", home_tmp, "--setenv", "HOME", home_tmp]
     if repo_sandbox and repo:
         cmd += ["--ro-bind", os.path.realpath(repo), os.path.realpath(repo)]
-    cmd += ["--tmpfs", scratch_dir(bind_pwd)]
+    # The runner's scratch is BOUND, not a tmpfs. Every reviewer output, transcript and
+    # exit file is written here, and a tmpfs discards the lot when the sandbox exits —
+    # the seats would run, cost money, and leave the synthesis stage an empty directory
+    # to read. The ro-bind of / above is what makes this line necessary: it must come
+    # after, so the writable bind wins for this one path.
+    scratch = scratch_dir(bind_pwd)
+    cmd += ["--bind", scratch, scratch]
+    for kv in auth_env(home_tmp):
+        k, _, v = kv.partition("=")
+        cmd += ["--setenv", k, v]
     return cmd
 
 def seatbelt_cmd(repo, repo_sandbox, no_net, bind_pwd):
@@ -83,8 +114,13 @@ def seatbelt_cmd(repo, repo_sandbox, no_net, bind_pwd):
     home_tmp = os.path.join(tmp, "debate-home-%s" % os.getpid())
     os.makedirs(home_tmp, exist_ok=True)
 
+    # Writes go to this run's own HOME and the runner's scratch — not to the whole
+    # temp directory. When TMPDIR is unset, gettempdir() resolves to /private/tmp,
+    # which is shared and 1777, so granting it wholesale let a sandboxed seat modify
+    # files belonging to other processes on the host. bwrap gives /tmp a fresh tmpfs;
+    # this is the Seatbelt equivalent of that scope.
     rules = ["(deny file-write*)",
-             '(allow file-write* (subpath "%s"))' % tmp,
+             '(allow file-write* (subpath "%s"))' % home_tmp,
              '(allow file-write* (subpath "%s"))' % scratch]
     if no_net:
         rules.append("(deny network*)")
@@ -99,13 +135,42 @@ def seatbelt_cmd(repo, repo_sandbox, no_net, bind_pwd):
     os.chmod(prof_path, 0o600)
 
     # HOME redirection must happen inside the sandbox: prefix env before the cmd.
+    # TMPDIR points at this run's own HOME, which is the only temp path still
+    # writable now that the profile no longer grants the whole shared tmp.
     return ["sandbox-exec", "-f", prof_path, "env",
-            "HOME=%s" % home_tmp, "TMPDIR=%s" % tmp]
+            "HOME=%s" % home_tmp, "TMPDIR=%s" % home_tmp, *auth_env(home_tmp)]
 
 def docker_cmd(repo, repo_sandbox, no_net, bind_pwd, image):
-    vol = ["--volume", "%s:%s:ro" % (os.path.realpath(repo), os.path.realpath(repo))] if repo_sandbox and repo else []
+    """Last-resort backend. Mounts what the wrapped command actually needs.
+
+    The command handed to us is a host path — the runner script — writing to a host
+    scratch directory. Mounting only the repo left every one of those unreachable, so
+    the container died on `No such file or directory` before any seat started. Bind
+    the working directory and the scratch, set the workdir to match, and carry the
+    agents' config in read-only so authentication still resolves.
+
+    Note the image still has to contain the toolchain (acpx, node, python). A bare
+    debian:bookworm-slim satisfies none of that, so this backend only works with an
+    image built for it — which is why it sits behind bwrap and Seatbelt rather than
+    being reached on a normal host.
+    """
+    cwd = os.path.realpath(bind_pwd)
+    scratch = scratch_dir(bind_pwd)
+    vol = ["--volume", "%s:%s" % (cwd, cwd)]
+    if scratch != cwd and not scratch.startswith(cwd + os.sep):
+        vol += ["--volume", "%s:%s" % (scratch, scratch)]
+    if repo_sandbox and repo:
+        r = os.path.realpath(repo)
+        if r != cwd:
+            vol += ["--volume", "%s:%s:ro" % (r, r)]
+    env = []
+    for kv in auth_env(None):
+        _, _, path = kv.partition("=")
+        if os.path.isdir(path):
+            vol += ["--volume", "%s:%s:ro" % (path, path)]
+        env += ["--env", kv]
     net = ["--network", "none"] if no_net else []
-    return ["docker", "run", "--rm", *net, *vol, image]
+    return ["docker", "run", "--rm", *net, *vol, *env, "--workdir", cwd, image]
 
 def main():
     ap = argparse.ArgumentParser(add_help=False)

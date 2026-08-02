@@ -27,6 +27,10 @@ def load(data):
 def pick(registry, seats, deepest, installed, min_effort, max_cost=None):
     pool = [m for m in load(registry)
             if not installed or m["harness"] in installed]
+    # --max-cost is a budget for the PANEL, not a ceiling per model. Filtering the pool
+    # by per-model cost let three $0.90 seats satisfy a $1.00 budget — the flag read as
+    # enforced and bounded nothing. The pool filter stays (a single model dearer than
+    # the whole budget can never fit), and the running total below does the enforcing.
     if max_cost is not None:
         within = [m for m in pool if m["price"].get("cost_per_task", 0) <= max_cost]
         if not within:
@@ -68,18 +72,35 @@ def pick(registry, seats, deepest, installed, min_effort, max_cost=None):
     assignment[deepest] = m
     assigned_keys = {m["key"]}
 
-    # remaining seats: cheapest cost_per_task, unused lab, never the same model twice
+    def cost(x):
+        return x["price"].get("cost_per_task", 0)
+
+    spent = cost(assignment[deepest])
+
+    # remaining seats: cheapest cost_per_task, unused lab, never the same model twice,
+    # and never past the panel budget. The deepest seat is charged before this loop
+    # starts, so the budget is measured against the whole panel rather than each seat.
     for seat in seats:
         if seat == deepest:
             continue
         cands = [x for x in by_strength if x["key"] not in assigned_keys]
-        cands.sort(key=lambda x: (used_labs[x["lab"]] != 0, x["price"].get("cost_per_task", 0)))
+        if max_cost is not None:
+            affordable = [x for x in cands if spent + cost(x) <= max_cost]
+            if not affordable:
+                sys.stderr.write(
+                    "⚠️ --max-cost %.2f reached at %.2f — seat '%s' left unfilled\n"
+                    % (max_cost, spent, seat))
+                warned = True
+                continue
+            cands = affordable
+        cands.sort(key=lambda x: (used_labs[x["lab"]] != 0, cost(x)))
         m, w = take(cands)
         if m is None:
             continue
         warned = warned or w
         assignment[seat] = m
         assigned_keys.add(m["key"])
+        spent += cost(m)
 
     n_labs = len(set(x["lab"] for x in assignment.values()))
     if n_labs < len(seats):

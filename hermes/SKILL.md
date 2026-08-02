@@ -35,9 +35,13 @@ Instead of a fixed seat list, the panel is chosen per run from
 model + price (cost_per_task + $/M) + strengths + effort (+effort_range) + harness +
 repo_aware + family/lab + available.
 
-1. **(Optional) Refresh** metrics from Artificial Analysis (primary) + LMArena (complement):
+1. **(Optional) Refresh** the registry:
    `python3 scripts/refresh-models.py --registry $HERMES_HOME/debate-models.json --ttl-hours 168`.
    Merges strengths/effort/price; never touches harness/available/repo_aware; offline-safe.
+   **It changes nothing today.** The Artificial Analysis and LMArena extractors are not
+   written — `best_effort_metrics()` returns `{}` — so the run fetches, trusts none of
+   it, prints "datasource schema not wired yet", and leaves the registry alone. Keep the
+   registry by hand and treat this step as a no-op until an extractor exists.
 2. **Route the panel**: `python3 scripts/select-panel.py --registry $HERMES_HOME/debate-models.json
    --seats simplifier,operator,pentester --deepest pentester --installed-harnesses acpx,subagent`
    -> seat -> {model, harness, provider, model_id, effort, cost_per_task, repo_aware}.

@@ -122,6 +122,18 @@ if [ -z "$AGENT" ]; then
   exit 1
 fi
 
+# `codex-exec` was a direct-CLI agent removed in #35. Nothing migrates an existing
+# config, so an install that upgrades keeps the old value and every codex seat would
+# otherwise die inside acpx as "Failed to spawn agent command: codex-exec" — an error
+# about a missing binary, for what is really a stale config key. Name the fix instead.
+if [ "$AGENT" = "codex-exec" ]; then
+  echo "invoke-acpx: reviewer '$REVIEWER' uses agent 'codex-exec', which was removed." >&2
+  echo "  Migrate $CONFIG_FILE: set \"agent\": \"codex\" and \"mode\": \"exec\" on every" >&2
+  echo "  codex-exec reviewer, and drop \"effort\" (acpx does not take it)." >&2
+  echo "  See 'Migrating off codex-exec' in commands/setup.md." >&2
+  exit 1
+fi
+
 CONFIG_TIMEOUT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].timeout // empty' "$CONFIG_FILE")
 CONFIG_SYSTEM_PROMPT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].system_prompt // empty' "$CONFIG_FILE")
 CONFIG_MODEL=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].model // empty' "$CONFIG_FILE")

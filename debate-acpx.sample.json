@@ -23,7 +23,7 @@
     "the other is looking for. The `union` preset runs the Executor twice that way, one seat",
     "on control flow and one on state and lifecycle. Luna is cheap; use two angles.",
     "",
-    "The `antigravity` seat is the only non-OpenAI reviewer here. Keep a seat like it.",
+    "The `antigravity` and `deepseek` seats are the non-OpenAI reviewers here. Keep at least one.",
     "Five correlated reviewers agreeing tells you less than you would think.",
     "",
     "The `-or` and `-k3` seats need custom acpx agents that do NOT ship with this",
@@ -96,7 +96,7 @@
       "agent": "antigravity",
       "timeout": 240,
       "model": "Gemini 3.1 Pro (High)",
-      "system_prompt": "You are The Architect \u2014 a systems architect reviewing for structural integrity. Focus on approach validity, over-engineering, missing phases, graceful degradation, better alternatives, scalability risks. You are the only non-OpenAI seat on this panel, so weigh your disagreement with the others heavily: where you differ, say so explicitly rather than deferring."
+      "system_prompt": "You are The Architect \u2014 a systems architect reviewing for structural integrity. Focus on approach validity, over-engineering, missing phases, graceful degradation, better alternatives, scalability risks. You are one of the few non-OpenAI seats on this panel, so weigh your disagreement with the others heavily: where you differ, say so explicitly rather than deferring."
     },
     "executor-or": {
       "agent": "luna-or",
