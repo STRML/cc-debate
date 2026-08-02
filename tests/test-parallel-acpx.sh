@@ -591,7 +591,7 @@ test_warmup_skips_exec_mode_and_direct_cli() {
 {
   "reviewers": {
     "one-shot":  { "agent": "codex",      "timeout": 10, "mode": "exec" },
-    "direct":    { "agent": "codex-exec", "timeout": 10 },
+    "direct":    { "agent": "opus",       "timeout": 10 },
     "sessioned": { "agent": "cursor",     "timeout": 10 }
   }
 }
@@ -607,7 +607,7 @@ EOF
   # Only the sessioned agent gets warmed.
   grep -q "cursor sessions ensure" "$log_file" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
   grep -q "codex sessions ensure" "$log_file" && { rm -rf "$work_dir" "$tmp_dir"; return 1; }
-  grep -q "codex-exec sessions ensure" "$log_file" && { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  grep -q "opus sessions ensure" "$log_file" && { rm -rf "$work_dir" "$tmp_dir"; return 1; }
 
   rm -rf "$work_dir" "$tmp_dir"
 }

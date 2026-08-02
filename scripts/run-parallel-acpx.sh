@@ -160,7 +160,7 @@ fi
 # agent's session sequentially first (ensure is idempotent — it reuses an existing
 # session) makes the subsequent parallel submits all find their session.
 # Skipped when SKIP_SESSION_CHECK is set (tests / mock acpx), for agents that bypass
-# acpx sessions entirely (antigravity, opus and codex-exec are invoked as direct CLIs
+# acpx sessions entirely (antigravity and opus are invoked as direct CLIs
 # — keep this list in step with IS_DIRECT_CLI in invoke-acpx.sh), and for reviewers
 # running one-shot (`mode: "exec"`), which never open a session to warm.
 if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
@@ -177,7 +177,7 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
       [[ "$NAME" =~ ^[a-zA-Z0-9_-]+$ ]] || continue
       AGENT=$(jq -r --arg name "$NAME" '.reviewers[$name].agent // empty' "$CONFIG_FILE")
       [ -z "$AGENT" ] && continue
-      case "$AGENT" in antigravity|opus|codex-exec) continue ;; esac
+      case "$AGENT" in antigravity|opus) continue ;; esac
       # A one-shot reviewer never touches a session, so warming one for it is
       # wasted work — and a hang or failure here would delay a run that does not
       # need the session at all.
