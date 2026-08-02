@@ -37,11 +37,12 @@ repo_aware + family/lab + available.
 
 1. **(Optional) Refresh** the registry:
    `python3 scripts/refresh-models.py --registry $HERMES_HOME/debate-models.json --ttl-hours 168`.
-   Merges strengths/effort/price; never touches harness/available/repo_aware; offline-safe.
-   **It changes nothing today.** The Artificial Analysis and LMArena extractors are not
-   written — `best_effort_metrics()` returns `{}` — so the run fetches, trusts none of
-   it, prints "datasource schema not wired yet", and leaves the registry alone. Keep the
-   registry by hand and treat this step as a no-op until an extractor exists.
+   Pulls the Artificial Analysis Intelligence Index and ADDS capability tags to
+   `strengths` (reasoning/code/cost/speed), updates `price.in`/`price.out`, and
+   re-derives the `cost` bucket. It never touches harness/available/repo_aware/effort/
+   cost_per_task (effort is a run-config knob; the source has no per-task cost). The
+   LMArena extractor is not written yet, so it contributes nothing. Offline-safe: if
+   every source fails, the last good copy is kept.
 2. **Route the panel**: `python3 scripts/select-panel.py --registry $HERMES_HOME/debate-models.json
    --seats simplifier,operator,pentester --deepest pentester --installed-harnesses acpx,subagent`
    -> seat -> {model, harness, provider, model_id, effort, cost_per_task, repo_aware}.

@@ -10,13 +10,11 @@
   strengths + effort + harness + repo_aware + family/lab + available).
 - `../scripts/select-panel.py` — pick the model mix for the seats (diversity/completeness/
   effort/budget/harness).
-- `../scripts/refresh-models.py` — the refresh path for registry metrics. The merge,
-  TTL guard and offline fallback are wired; the Artificial Analysis and LMArena
-  extractors are **not** — `best_effort_metrics()` returns `{}` because neither
-  endpoint has a schema stable enough to parse blind, so today the script fetches,
-  finds nothing it trusts, says so, and leaves the registry as written. Offline-safe,
-  and it preserves user fields. The registry is maintained by hand until an extractor
-  lands.
+- `../scripts/refresh-models.py` — the refresh path for registry metrics. It pulls the
+  Artificial Analysis Intelligence Index (via a mirror of artificialanalysis.ai), ADDS
+  capability tags to `strengths`, updates `price.in`/`price.out`, and re-derives the
+  `cost` bucket. It preserves user fields (harness/repo_aware/available/effort/
+  cost_per_task). The LMArena extractor is not written yet. Offline-safe; TTL-guarded.
 - `../scripts/sandbox.py` — platform-adaptive sandbox (bwrap / sandbox-exec / docker) for
   repo-aware or untrusted seats.
 - `../scripts/run-acpx-review.sh` — acpx dispatch wrapper (fan-out/timeout/retry in

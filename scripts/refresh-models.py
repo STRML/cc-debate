@@ -2,33 +2,32 @@
 """Refresh the debate model registry metrics from benchmark aggregators (#31).
 
 Sources (best-effort; offline safe):
-  - Artificial Analysis (primary): Intelligence Index -> strengths/effort, prices.
+  - Artificial Analysis (primary): Intelligence Index -> strengths tags, prices.
   - LMArena / Chatbot Arena (complement): human-preference Elo — extractor not written yet.
 
 It does NOT overwrite the fields the user owns: harness, provider, repo_aware,
-available. It updates strengths/effort/effort_range/price.in/price.out (cost_per_task is
-left to the hand-set per-review estimate — the AA source exposes whole-index cost, not a
-per-task cost) and records a `source` + `as_of` so a stale cache is visible. If every
-source fails the last good copy is kept untouched and we exit 1 (offline fallback).
+available, effort, effort_range and cost_per_task. effort/effort_range are run-config
+knobs (deriving effort from the index broke the schema gate and the selector's effort
+floor), and the AA source exposes whole-index cost, not a per-task cost — so
+cost_per_task stays the hand-set per-review estimate. It ADDS capability tags to
+strengths (reasoning/code/cost/speed), updates price.in/price.out, re-derives the cost
+bucket, and records a `source` + `as_of` so a stale cache is visible. If every source
+fails the last good copy is kept untouched and we exit 1 (offline fallback).
 
 Usage:
   refresh-models.py --registry <debate-models.json> [--out <path>] [--update-source AA|LMArena|all] [--ttl-hours N]
 """
-import argparse, calendar, json, os, sys, time, urllib.request
+import argparse, calendar, copy, json, os, sys, time, urllib.request
 
 # AA's own leaderboard JSON endpoint is not stable enough to pin, so the AA fetcher
 # points at a free mirror that serves the Artificial Analysis Intelligence Index with
 # attribution (https://automationscookbook.com/api/llm-leaderboard, meta.source
 # artificialanalysis.ai). Swap this URL for AA's own endpoint when one is confirmed;
-# the parser keys on the shape below, not the URL.
+# the parser keys on the shape below, not the URL. LMArena's endpoint is not wired yet.
 FETCHERS = {
-    "AA": ("https://automationscookbook.com/api/llm-leaderboard", "json"),
-    "LMArena": ("https://huggingface.co/api/spaces/lmarena-ai/arena-leaderboard", "huggingface"),
+    "AA": "https://automationscookbook.com/api/llm-leaderboard",
+    "LMArena": "https://huggingface.co/api/spaces/lmarena-ai/arena-leaderboard",
 }
-
-# The AA parser is wired (best_effort_metrics below maps real payloads); LMArena still
-# returns nothing and contributes no updates until its extractor lands.
-PARSERS_READY = True
 
 def fetch(url, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": "cc-debate-refresh/1.0"})
@@ -46,16 +45,34 @@ def _norm(s):
     """Lowercase + drop non-alphanumerics, so `gpt-5.6-luna` == `gpt-5-6-luna`."""
     return "".join(ch for ch in (s or "").lower() if ch.isalnum())
 
-def _effort_from_index(idx):
-    if idx is None:
+def _num(x):
+    """Coerce to float, or None. AA numeric fields can arrive as strings."""
+    try:
+        return float(x)
+    except (TypeError, ValueError):
         return None
-    if idx >= 58: return "max"
-    if idx >= 52: return "xhigh"
-    if idx >= 45: return "high"
-    if idx >= 38: return "medium"
-    return "low"
 
-def _strengths_from(index, price_in):
+# AA lists one row per effort level / variant, suffixed to the base slug
+# (gpt-5-6-luna-xhigh, gemini-3-1-pro-preview, glm-5-2-non-reasoning). Matching strips a
+# known variant suffix and exact-matches the base against the registry — never an
+# arbitrary prefix, which let unrelated slugs land on short/sentinel model_ids like
+# "opus" and "(inherits)".
+VARIANT_SUFFIXES = ("preview", "nonreasoning", "reasoning", "thinking",
+                    "xhigh", "high", "medium", "low", "max")
+
+def _match_key(norm, reg_norm):
+    if norm in reg_norm:
+        return reg_norm[norm]
+    for suf in VARIANT_SUFFIXES:
+        if norm.endswith(suf):
+            base = norm[:-len(suf)]
+            if base in reg_norm:
+                return reg_norm[base]
+    return None
+
+def _strengths_from(index, price_in, latency):
+    """Capability tags from the AA row. Never fabricates a fallback tag — an empty
+    result means 'no tags', so merge's union leaves the curated strengths alone."""
     s = []
     if index is not None and index >= 45:
         s.append("reasoning")
@@ -63,22 +80,28 @@ def _strengths_from(index, price_in):
         s.append("code")
     if price_in is not None and price_in < 2:
         s.append("cost")
-    if not s:
-        s.append("general")
-    return s
+    if latency is not None and latency < 5:
+        s.append("speed")
+    return s or None
+
+def _cost_bucket(price_in):
+    if price_in is None:
+        return None
+    if price_in < 1: return "cheap"
+    if price_in < 5: return "mid"
+    return "premium"
 
 def best_effort_metrics(payload, registry):
-    """Map the Artificial Analysis payload into {registry_key: {strengths, effort, price}}.
+    """Map the Artificial Analysis payload into {registry_key: {strengths, price, cost}}.
 
     Matches AA models to registry entries by normalized `model_id`/`name` (dot/dash and
-    case insensitive), falling back to a prefix match for entries like `gemini-3.1-pro`
-    -> AA's `gemini-3-1-pro-preview`. AA lists one entry per effort level
-    (`gpt-5-6-luna`, `-xhigh`, `-high`…); the base (max-effort) entry wins, and it sorts
-    first because the payload is ordered by Intelligence Index.
+    case insensitive), stripping known variant suffixes so `gemini-3-1-pro-preview` maps
+    to the `gemini-3.1-pro` entry. Rows are sorted by Intelligence Index descending so
+    the base (max-effort) row wins regardless of the source's own ordering.
 
-    `cost_per_task` is deliberately left alone: the source exposes the whole-index cost
-    (`intelligenceIndexCostTotal`), not a per-task cost, and the registry's value is a
-    hand-set per-review estimate in a different unit.
+    `effort`/`effort_range` and `cost_per_task` are deliberately NOT set: effort is a
+    run-config knob, and the source exposes whole-index cost, not a per-task cost. merge
+    unions strengths so curated tags (tricky/math/speed/general) survive.
 
     Returns {} when nothing matched (including LMArena's metadata payload, which has no
     `models` array).
@@ -91,35 +114,35 @@ def best_effort_metrics(payload, registry):
     for key, m in registry.items():
         for candidate in (m.get("model_id"), m.get("name"), key):
             if candidate:
-                reg_norm.setdefault(_norm(candidate), key)
-    prefixes = sorted(reg_norm, key=len, reverse=True)   # longest first
+                n = _norm(candidate)
+                if n in reg_norm and reg_norm[n] != key:
+                    print("refresh: %s and %s both normalize to '%s'; the second won't match"
+                          % (reg_norm[n], key, n), file=sys.stderr)
+                reg_norm.setdefault(n, key)
+    models = sorted(models, key=lambda m: _num(m.get("intelligenceIndex")) or 0, reverse=True)
     updates = {}
     for m in models:
         norm = _norm(m.get("slug")) or _norm(m.get("name"))
         if not norm:
             continue
-        key = reg_norm.get(norm)
-        if not key:
-            for p in prefixes:               # gemini-3.1-pro -> gemini-3-1-pro-preview
-                if norm.startswith(p):
-                    key = reg_norm[p]
-                    break
+        key = _match_key(norm, reg_norm)
         if not key or key in updates:
-            continue                          # first (max-effort) variant wins
+            continue                          # base (max-effort) row wins
         updates[key] = _aa_to_update(m)
     return updates
 
 def _aa_to_update(m):
     u = {"source": "AA"}
-    idx = m.get("intelligenceIndex")
-    price_in = m.get("priceInputPer1m")
-    price_out = m.get("priceOutputPer1m")
-    eff = _effort_from_index(idx)
-    if eff:
-        u["effort"] = eff
-    strengths = _strengths_from(idx, price_in)
+    idx = _num(m.get("intelligenceIndex"))
+    price_in = _num(m.get("priceInputPer1m"))
+    price_out = _num(m.get("priceOutputPer1m"))
+    latency = _num(m.get("latencySeconds"))
+    strengths = _strengths_from(idx, price_in, latency)
     if strengths:
         u["strengths"] = strengths
+    bucket = _cost_bucket(price_in)
+    if bucket:
+        u["cost"] = bucket
     price = {}
     if price_in is not None:
         price["in"] = price_in
@@ -139,15 +162,22 @@ def write_registry(path, reg):
     os.replace(tmp, path)
 
 def merge(registry, updates):
-    out = dict(registry)
+    out = copy.deepcopy(registry)   # never mutate the caller's nested dicts (F9)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     for key, m in out.items():
         u = updates.get(key)
         if not u:
             continue
-        if u.get("strengths"): m["strengths"] = u["strengths"]
-        if u.get("effort"): m["effort"] = u["effort"]
-        if u.get("effort_range"): m["effort_range"] = u["effort_range"]
+        if u.get("strengths"):
+            # Union, not replace: curated tags (tricky/math/speed/general) survive the
+            # refresh and the AA-derived ones are added.
+            m["strengths"] = sorted(set((m.get("strengths") or []) + u["strengths"]))
+        if u.get("effort"):
+            m["effort"] = u["effort"]
+        if u.get("effort_range"):
+            m["effort_range"] = u["effort_range"]
+        if u.get("cost"):
+            m["cost"] = u["cost"]
         m.setdefault("price", {})
         for f in ("in", "out", "cost_per_task"):
             if u.get("price", {}).get(f) is not None:
@@ -185,23 +215,17 @@ def main():
             write_registry(a.out or a.registry, reg)
             sys.exit(0)
 
-    if not PARSERS_READY:
-        # No parser is wired (best_effort_metrics returns {}), so a fetch could only
-        # be discarded. Report that and leave the registry byte-identical instead of
-        # burning network + rate-limit budget on a no-op.
-        print("no datasource parser wired yet; skipping fetch (registry unchanged)")
-        write_registry(a.out or a.registry, reg)
-        sys.exit(0)
-
     updates = {}
     failures = []
     sources = ["AA", "LMArena"] if a.update_source == "all" else [a.update_source]
     for src in sources:
         try:
-            url, kind = FETCHERS[src]
+            url = FETCHERS[src]
             text = fetch(url)
             payload = parse_payload(text)
-            u = best_effort_metrics(payload, reg)
+            # The parser is AA-specific (reads slug/intelligenceIndex/price…); don't
+            # run it on the LMArena payload, which would mis-stamp it and override AA.
+            u = best_effort_metrics(payload, reg) if src == "AA" else {}
             if u:
                 updates = {**updates, **u}
                 print(f"{src}: merged {len(u)} model updates")
@@ -209,6 +233,7 @@ def main():
                 print(f"{src}: no matching models parsed — registry unchanged")
         except Exception as e:
             failures.append(f"{src}: {e}")
+            print(f"{src}: {e}", file=sys.stderr)   # surface even if another source worked
 
     if not updates and failures:
         # all sources failed -> keep last good copy untouched (offline fallback)

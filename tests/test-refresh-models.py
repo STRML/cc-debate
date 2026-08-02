@@ -22,9 +22,10 @@ def check(n,c,d=""):
     if c: print("  ok:",n)
     else: fails+=1; print("  FAIL:",n,d)
 
-# 1. merge: updates metrics + source/as_of, preserves user-owned fields
+# 1. merge: updates metrics + source/as_of, preserves user-owned fields.
+# strengths is a UNION: curated tags survive, the update's are added.
 o = rm.merge(clone(REG), clone(UPD))["luna"]
-check("strengths updated", o["strengths"]==["reasoning","code"], o["strengths"])
+check("strengths unioned (curated + update)", o["strengths"]==["code","cost","reasoning","speed"], o["strengths"])
 check("effort updated to max", o["effort"]=="max")
 check("effort_range updated", o["effort_range"]==["medium","max"])
 check("price.out updated via merge", o["price"]["out"]==8)
@@ -71,21 +72,35 @@ REG_AA = {
 UPD = rm.best_effort_metrics(AA_PAYLOAD, REG_AA)
 check("AA: gpt56_luna matched", "gpt56_luna" in UPD, UPD.keys())
 check("AA: strengths derived (reasoning/code/cost)", UPD.get("gpt56_luna", {}).get("strengths")==["reasoning","code","cost"], UPD.get("gpt56_luna"))
-check("AA: effort from index (51.2 -> high)", UPD.get("gpt56_luna", {}).get("effort")=="high", UPD.get("gpt56_luna"))
+check("AA: effort NOT derived (run-config knob preserved)", "effort" not in UPD.get("gpt56_luna", {}), UPD.get("gpt56_luna"))
+check("AA: cost bucket derived from price", UPD.get("gpt56_luna", {}).get("cost")=="mid", UPD.get("gpt56_luna"))
 check("AA: price mapped from per-M", UPD.get("gpt56_luna", {}).get("price")=={"in":1.0,"out":6.0}, UPD.get("gpt56_luna"))
-check("AA: base (max) variant wins over -xhigh", UPD.get("gpt56_luna", {}).get("effort")=="high")
-check("AA: gemini matches via prefix (preview suffix)", "gemini_31_pro" in UPD, UPD.keys())
+check("AA: base (max) row wins over -xhigh", UPD.get("gpt56_luna", {}).get("strengths")==["reasoning","code","cost"])
+check("AA: gemini matches via variant suffix (preview)", "gemini_31_pro" in UPD, UPD.keys())
 check("AA: unknown model ignored", "kimi_k3" not in UPD)
 check("AA: cost_per_task untouched (no per-task source)", "cost_per_task" not in UPD.get("gpt56_luna", {}).get("price", {}))
 check("AA: empty payload -> {}", rm.best_effort_metrics({}, REG_AA)=={})
 check("AA: None payload -> {}", rm.best_effort_metrics(None, REG_AA)=={})
 
-# merge the AA update into the registry: user-owned fields survive
+# string-typed numeric fields must not crash the whole source or leak into the registry
+AA_STR = {"ok": True, "models": [
+  {"slug": "gpt-5-6-luna", "intelligenceIndex": "51.2", "priceInputPer1m": "1.0", "priceOutputPer1m": "6.0"}]}
+UPD_STR = rm.best_effort_metrics(AA_STR, REG_AA)
+check("AA: string numerics coerced", UPD_STR.get("gpt56_luna", {}).get("price")=={"in":1.0,"out":6.0}, UPD_STR.get("gpt56_luna"))
+
+# unrelated slug must not hijack a registry entry (was: model_id 'opus' matched opus-4-6)
+UPD_NO = rm.best_effort_metrics({"ok": True, "models": [{"slug": "opus-4-6", "intelligenceIndex": 55.0,
+  "priceInputPer1m": 3.0, "priceOutputPer1m": 15.0}]}, REG_AA)
+check("AA: unrelated slug not hijacked (opus-4-6)", UPD_NO=={}, UPD_NO)
+
+# merge the AA update into the registry: user-owned fields survive, strengths union
 o3 = rm.merge(clone(REG_AA), clone(UPD))["gpt56_luna"]
 check("AA merge: harness preserved", o3["harness"]=="acpx")
 check("AA merge: available preserved", o3["available"] is True)
 check("AA merge: price.in updated", o3["price"]["in"]==1.0)
 check("AA merge: cost_per_task preserved", o3["price"]["cost_per_task"]==0.07)
+check("AA merge: effort preserved (not derived)", o3["effort"]=="high")
+check("AA merge: strengths unioned", o3["strengths"]==["code","cost","reasoning","speed"], o3["strengths"])
 check("AA merge: source recorded", o3.get("source")=="AA")
 check("AA merge: as_of recorded", bool(o3.get("as_of")))
 
