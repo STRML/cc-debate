@@ -546,6 +546,38 @@ EOF
   rm -rf "$work_dir" "$tmp_dir"
 }
 
+# A timeout that is not a positive integer used to fall out of the budget entirely,
+# because the guard had no else. The seat still ran, at the 120s invoke-acpx.sh
+# substitutes, so the wait budget and the seat disagreed and neither said so where
+# the operator would see it.
+test_invalid_timeout_still_counts_toward_budget() {
+  local tmp_dir review_id work_dir out
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-badtimeout"
+  work_dir=".tmp/ai-review-${review_id}"
+
+  cat > "$tmp_dir/config.json" << 'EOF'
+{
+  "reviewers": {
+    "alpha": { "agent": "codex", "timeout": "600s", "retries": 1 }
+  }
+}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  # Falls back to 120, so 120 x (1+1) + 60 = 300. Before, the seat contributed
+  # nothing and MAX_REVIEWER_BUDGET stayed 0, dropping the runner to its 450s floor.
+  out=$(PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>&1)
+
+  echo "$out" | grep -q "max wait: 300s" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  echo "$out" | grep -q "invalid timeout '600s'" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
 # Warm-up exists to avoid a races on the shared session index. A one-shot reviewer
 # has no session, and a direct-CLI agent has no acpx session at all.
 test_warmup_skips_exec_mode_and_direct_cli() {
@@ -671,6 +703,7 @@ run_test "default_reviewers limits the default set" test_default_reviewers_limit
 run_test "empty default_reviewers runs none" test_empty_default_reviewers_runs_none
 run_test "missing default_reviewers runs all" test_missing_default_reviewers_runs_all
 run_test "wait budget accounts for retries" test_wait_budget_accounts_for_retries
+run_test "invalid timeout still counts toward budget" test_invalid_timeout_still_counts_toward_budget
 run_test "warm-up skips exec mode and direct CLI" test_warmup_skips_exec_mode_and_direct_cli
 run_test "invoke logs created" test_invoke_logs_created
 run_test "one failure doesnt block others" test_one_failure_doesnt_block_others

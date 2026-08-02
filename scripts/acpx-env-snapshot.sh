@@ -43,6 +43,18 @@ else
   echo "debate-scripts: not found"
 fi
 
+# The workflows link is a second, separate link, and /debate:panel is the only thing
+# that needs it. Reporting only the scripts link calls the install healthy while the
+# panel cannot start.
+WORKFLOW_LINK="$HOME/.claude/debate-workflows"
+if [ -e "$WORKFLOW_LINK" ] && [ ! -L "$WORKFLOW_LINK" ]; then
+  echo "debate-workflows: not a symlink (real path at $WORKFLOW_LINK)"
+elif [ -e "$WORKFLOW_LINK/review-panel.js" ]; then
+  echo "debate-workflows: symlinked -> $(cd "$WORKFLOW_LINK" && pwd -P)"
+else
+  echo "debate-workflows: not found (/debate:panel will not run)"
+fi
+
 echo "---"
 echo "debate-acpx.json:"
 cat ~/.claude/debate-acpx.json 2>/dev/null || echo "not found"
