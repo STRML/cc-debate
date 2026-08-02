@@ -22,6 +22,12 @@ FETCHERS = {
     "LMArena": ("https://huggingface.co/api/spaces/lmarena-ai/arena-leaderboard", "huggingface"),
 }
 
+# Parser gate. FETCHERS point at live endpoints, but best_effort_metrics() below is a
+# stub that returns {} — nothing is parsed yet — so an unconditional fetch would be a
+# network round-trip that changes nothing, on every TTL expiry, forever. Wire a real
+# parser and flip this to True; the fetch + merge machinery below is what it plugs into.
+PARSERS_READY = False
+
 def fetch(url, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": "cc-debate-refresh/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -76,6 +82,15 @@ def main():
             out = a.out or a.registry
             json.dump(reg, open(out, "w"), indent=2); open(out, "a").write("\n")
             sys.exit(0)
+
+    if not PARSERS_READY:
+        # No parser is wired (best_effort_metrics returns {}), so a fetch could only
+        # be discarded. Report that and leave the registry byte-identical instead of
+        # burning network + rate-limit budget on a no-op.
+        print("no datasource parser wired yet; skipping fetch (registry unchanged)")
+        out = a.out or a.registry
+        json.dump(reg, open(out, "w"), indent=2); open(out, "a").write("\n")
+        sys.exit(0)
 
     updates = {}
     failures = []

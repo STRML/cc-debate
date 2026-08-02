@@ -126,10 +126,12 @@ def seatbelt_cmd(repo, repo_sandbox, no_net, bind_pwd):
         rules.append("(deny network*)")
     profile = "(version 1)\n(allow default)\n" + "\n".join(rules) + "\n"
 
-    # 0600 + random name in the user tmpdir: predictable /tmp/se-<pid>.sb with
-    # default perms was both a leak and a collision. It is left behind (the
-    # exec'd process can't clean it up) but is unreadable by other accounts.
-    fd, prof_path = tempfile.mkstemp(prefix="se-", suffix=".sb", dir=tmp)
+    # 0600 + random name in the runner's scratch, not the system temp. A predictable
+    # /tmp/se-<pid>.sb with default perms was both a leak and a collision, and the
+    # exec'd process can't clean up after itself, so a file in /private/tmp would
+    # linger in the shared OS temp until reboot. The scratch is the review's own
+    # gitignored dir, so the profile stays out of the host's temp.
+    fd, prof_path = tempfile.mkstemp(prefix="se-", suffix=".sb", dir=scratch)
     os.write(fd, profile.encode())
     os.close(fd)
     os.chmod(prof_path, 0o600)
