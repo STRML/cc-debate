@@ -218,28 +218,41 @@ test_distinct_claims_never_collapse() {
   node -e '
     const fs = require("fs");
     const src = fs.readFileSync(process.argv[1], "utf8");
-    const body = src.slice(src.indexOf("function claimId(f)"), src.indexOf("const merged = new Map()"));
-    const key = new Function(body + "; return key;")();
+    // The merge loop itself, lifted with its two inputs injected.
+    const body = src.slice(src.indexOf("function claimId(f)"), src.indexOf("const unique = "));
+    const group = new Function("bySeat", "RANK", body + "; return [...merged.values()];");
+    const RANK = { critical: 0, major: 1, minor: 2, nit: 3 };
 
-    // Two distinct defects on one line must survive as two records.
-    const minor = { file: "src/a.js", line: 42, severity: "minor", claim: "missing error handling" };
-    const major = { file: "src/a.js", line: 42, severity: "major", claim: "the argument is not sanitized" };
-    if (key(minor) === key(major)) { console.error("two distinct same-line claims collided"); process.exit(1); }
+    // Two distinct defects on one line: one location, both claims kept.
+    let out = group([
+      { seat: "a", findings: [{ file: "src/a.js", line: 42, severity: "minor", claim: "missing error handling", failure: "x" }] },
+      { seat: "b", findings: [{ file: "src/a.js", line: 42, severity: "major", claim: "the argument is not sanitized", failure: "y" }] },
+    ], RANK);
+    if (out.length !== 1) { console.error("same line split into " + out.length + " locations"); process.exit(1); }
+    if (out[0].claims.length !== 2) { console.error("two distinct same-line claims collided"); process.exit(1); }
 
     // Unanchored findings in one file likewise.
-    const a = { file: "README.md", line: 0, claim: "the install step is wrong" };
-    const b = { file: "README.md", line: 0, claim: "the licence is missing" };
-    if (key(a) === key(b)) { console.error("two distinct file-level findings collided"); process.exit(1); }
+    out = group([
+      { seat: "a", findings: [{ file: "README.md", line: 0, severity: "minor", claim: "the install step is wrong", failure: "x" }] },
+      { seat: "b", findings: [{ file: "README.md", line: 0, severity: "minor", claim: "the licence is missing", failure: "y" }] },
+    ], RANK);
+    if (out[0].claims.length !== 2) { console.error("two distinct file-level findings collided"); process.exit(1); }
 
-    // Two seats wording one finding identically still merge.
-    const s1 = { file: "src/a.js", line: 42, claim: "off by one" };
-    const s2 = { file: "src/a.js", line: 42, claim: "  Off By One  " };
-    if (key(s1) !== key(s2)) { console.error("identical claims stopped deduping"); process.exit(1); }
+    // Two seats wording one finding identically merge, and both get the credit.
+    out = group([
+      { seat: "a", findings: [{ file: "src/a.js", line: 42, severity: "minor", claim: "off by one", failure: "x" }] },
+      { seat: "b", findings: [{ file: "src/a.js", line: 42, severity: "critical", claim: "  Off By One  ", failure: "y" }] },
+    ], RANK);
+    if (out[0].claims.length !== 1) { console.error("identical claims stopped deduping"); process.exit(1); }
+    if (out[0].claims[0].seats.length !== 2) { console.error("second seat lost its credit"); process.exit(1); }
+    if (out[0].claims[0].severity !== "critical") { console.error("harsher severity not kept"); process.exit(1); }
 
     // Case-sensitive checkouts: these are different files, not one.
-    const upper = { file: "src/Foo.js", line: 7, claim: "x" };
-    const lower = { file: "src/foo.js", line: 7, claim: "x" };
-    if (key(upper) === key(lower)) { console.error("case-distinct paths merged"); process.exit(1); }
+    out = group([
+      { seat: "a", findings: [{ file: "src/Foo.js", line: 7, severity: "minor", claim: "x", failure: "f" }] },
+      { seat: "b", findings: [{ file: "src/foo.js", line: 7, severity: "minor", claim: "x", failure: "f" }] },
+    ], RANK);
+    if (out.length !== 2) { console.error("case-distinct paths merged"); process.exit(1); }
   ' "$WF" 2>&1
 }
 
@@ -348,6 +361,60 @@ test_failed_extraction_is_not_zero_findings() {
   return 0
 }
 
+# One verifier now judges every claim on a line at once. That is the whole point of
+# grouping, and it is also the risk: a refuted claim must not take its neighbours with
+# it, a restatement must fold without losing its seat, and a verdict that never arrived
+# must not read as approval. Someone hiding a real defect beside an obvious decoy on one
+# line is the case being defended against.
+test_one_refuted_claim_does_not_sink_the_line() {
+  if ! have_node; then
+    echo -n "(no node, skipped) "
+    return 0
+  fi
+  node -e '
+    const fs = require("fs");
+    const src = fs.readFileSync(process.argv[1], "utf8");
+    const body = src.slice(src.indexOf("const survived = []"), src.indexOf("log(`${survived.length}"));
+    const assemble = new Function("unique", "judged", body + "; return { survived, killed, unverified };");
+
+    const loc = (claims) => ({ file: "a.js", line: 42, claims });
+    const c = (claim, seat) => ({ severity: "major", claim, failure: "f", fix: "", seats: [seat] });
+
+    // Decoy refuted, real finding beside it survives.
+    let out = assemble(
+      [loc([c("obvious wrong thing", "x"), c("subtle real thing", "y")])],
+      [{ verdicts: [{ index: 0, refuted: true, reason: "no" }, { index: 1, refuted: false, reason: "holds" }] }],
+    );
+    if (out.survived.length !== 1 || out.survived[0].claim !== "subtle real thing") {
+      console.error("a refuted claim took its neighbour down with it"); process.exit(1);
+    }
+    if (out.killed.length !== 1) { console.error("refuted claim not reported"); process.exit(1); }
+
+    // A genuine restatement folds into the earlier claim and both seats get credit.
+    out = assemble(
+      [loc([c("off by one", "x"), c("the index is one too high", "y")])],
+      [{ verdicts: [{ index: 0, refuted: false, reason: "holds" }, { index: 1, refuted: false, reason: "holds", sameAs: 0 }] }],
+    );
+    if (out.survived.length !== 1) { console.error("restatement did not fold"); process.exit(1); }
+    if (out.survived[0].foundBy.length !== 2) { console.error("folded claim lost its seat"); process.exit(1); }
+
+    // A claim the verifier said nothing about is unverified, not approved.
+    out = assemble(
+      [loc([c("judged", "x"), c("ignored", "y")])],
+      [{ verdicts: [{ index: 0, refuted: false, reason: "holds" }] }],
+    );
+    if (out.unverified.length !== 1 || out.unverified[0].claim !== "ignored") {
+      console.error("a claim with no verdict was not reported as unverified"); process.exit(1);
+    }
+
+    // A dead verifier leaves every claim at that location unverified, none approved.
+    out = assemble([loc([c("one", "x"), c("two", "y")])], [null]);
+    if (out.unverified.length !== 2 || out.survived.length !== 0) {
+      console.error("a dead verifier did not leave its claims unverified"); process.exit(1);
+    }
+  ' "$WF" 2>&1
+}
+
 # --- Run ---
 
 echo ""
@@ -370,6 +437,7 @@ run_test "meta is a pure literal" test_meta_is_a_pure_literal
 run_test "security grep forces the pentester" test_security_grep_forces_the_pentester
 run_test "docs-only does not outrank the security floor" test_docs_only_does_not_outrank_the_security_floor
 run_test "failed extraction is not zero findings" test_failed_extraction_is_not_zero_findings
+run_test "one refuted claim does not sink the line" test_one_refuted_claim_does_not_sink_the_line
 
 echo ""
 echo "  $PASS passed, $FAIL failed"

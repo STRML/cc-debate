@@ -480,7 +480,7 @@ What it adds over `/debate:run`:
 
 **Seats follow the change.** A docs-only diff gets one seat. A wide, security-touching diff gets the whole table. The rule is a readable table in `workflows/review-panel.js` — a seat is earned by a condition, not by a name you typed.
 
-**Findings are merged in JS, on `file:line:claim`.** Measured on one run of twelve seats over a 13-line diff: six distinct findings, and five seats had independently reported the same one. Collapsing that by hand is the step that scales worst about a large panel. The claim is part of the key because two seats can report genuinely different defects on one line, and a merge that keeps only the harsher of them deletes a real finding — two seats wording one finding identically still collapse into a single entry.
+**Findings are grouped by `file:line` in JS, then collapsed by the verifier.** Measured on one run of twelve seats over a 13-line diff: six distinct findings, and five seats had independently reported the same one. Collapsing that by hand is the step that scales worst about a large panel. Identical wording merges in code; everything else at that line goes to a single verifier, which judges each claim on its own and says which ones restate which. Two defects that merely share a line stay two — a refuted claim never takes its neighbour with it — and five seats describing one bug five ways cost one verifier call, not five.
 
 **Findings are refuted before you see them.** Each survivor gets an agent that tries to disprove it against the code. In that same run, two of twelve seats produced findings that were wrong and cost a read each to disprove.
 

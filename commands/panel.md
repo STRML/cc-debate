@@ -23,13 +23,14 @@ debate rounds, which this does not do.
    reviewers are still acpx and codex-exec seats. Nothing in the panel is Claude. This
    step runs from here rather than inside the workflow, because it takes up to half an
    hour and nothing inside a workflow can wait that long.
-4. Turns each review into structured findings, then merges them on `file:line:claim`. On
-   one measured run, five of twelve seats reported the same finding; this collapses that
-   without anyone reading twelve files. The claim is in the key because two seats can
-   report genuinely different defects on one line, and a merge keyed on location alone
-   deletes one of them.
-5. Tries to refute each surviving finding against the actual code, and drops the ones
-   that do not hold.
+4. Turns each review into structured findings, then groups them by `file:line`. On one
+   measured run, five of twelve seats reported the same finding; this collapses that
+   without anyone reading twelve files. Identical wording merges in code; the rest is
+   left for the verifier, which sees every claim on a line at once.
+5. Sends every claim at a location to one verifier, which tries to refute each against
+   the actual code and folds genuine restatements together. Claims that do not hold are
+   dropped, and a claim the verifier never ruled on is reported as unverified rather
+   than assumed good.
 6. Returns one ranked list.
 
 ## Steps

@@ -156,13 +156,32 @@ const FINDINGS = {
 // Lower sorts first, and lower wins when two seats disagree about the same finding.
 const RANK = { critical: 0, major: 1, minor: 2, nit: 3 }
 
-const VERDICT = {
+// One verdict per claim at a location, judged together but decided separately. Judging
+// them together is what lets a reader collapse restatements; deciding them separately is
+// what stops one refuted claim taking its neighbours with it.
+const LOCATION_VERDICT = {
   type: 'object',
-  required: ['refuted', 'reason'],
+  required: ['claims'],
   properties: {
-    refuted: { type: 'boolean', description: 'true if the finding does not hold' },
-    reason: { type: 'string' },
-    severityAfter: { type: 'string', enum: ['critical', 'major', 'minor', 'nit'] },
+    claims: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['index', 'refuted', 'reason'],
+        properties: {
+          index: { type: 'integer', description: 'the claim number given in the prompt' },
+          refuted: { type: 'boolean', description: 'true if this claim does not hold' },
+          reason: { type: 'string' },
+          severityAfter: { type: 'string', enum: ['critical', 'major', 'minor', 'nit'] },
+          sameAs: {
+            type: 'integer',
+            description:
+              'index of an earlier claim this one restates, strictly lower than index; ' +
+              'omit or use -1 when it is a distinct defect that merely shares the line',
+          },
+        },
+      },
+    },
   },
 }
 
@@ -306,19 +325,19 @@ if (extractFailed.length === ran.length) {
 // Plain code, deliberately. On #22 five seats independently found one README drift,
 // and the orchestrator deduped by reading twelve files. Same key, same finding.
 
-// The claim is part of the key, at every line number. An earlier version keyed on
-// file:line alone and kept the alternates in a side list, promoting the harshest to the
-// headline — and lost a finding in both arrival orders, because promotion overwrote the
-// headline without preserving it and the cleanup pass then removed the promoted claim
-// from the alternates. Six of seven seats found that independently. Verification is the
-// other half of the argument: it only ever sees the headline, so an alternate riding
-// along on a refuted headline dies unexamined, which is a place to hide a real defect
-// behind an obvious decoy on the same line.
+// Two earlier versions of this got it wrong in opposite directions, and the shape here
+// is what is left after both.
 //
-// So: one record per distinct claim, each verified on its own. Two seats that word a
-// finding the same way still merge and stack up in foundBy. Two seats that word it
-// differently now produce two records, which over-reports rather than deletes — the
-// right direction to err, and the verify step reads both.
+// Keying on file:line alone and keeping the alternates in a side list lost a finding in
+// both arrival orders. Keying on file:line:claim never loses one, but it only matches
+// text: five seats describing one bug five ways become five records and five verifier
+// calls, which puts the fan-out this workflow exists to remove back one step downstream.
+//
+// So group by location and let the verifier do the semantic part. Every distinct claim
+// at a line survives grouping — identical wording still merges and stacks up in seats —
+// and all of them go to a single verifier for that line, which judges each on its own
+// and says which ones restate which. One call per location, no claim unexamined, and
+// the collapsing is done by something that can read rather than by string equality.
 //
 // The path keeps its case. Lowercasing it merged src/Foo.js with src/foo.js on any
 // case-sensitive checkout, and the survivor kept the other one's path.
@@ -327,31 +346,44 @@ function claimId(f) {
 }
 
 function key(f) {
-  return `${(f.file || '').trim()}:${f.line || 0}:${claimId(f)}`
+  return `${(f.file || '').trim()}:${f.line || 0}`
 }
 
 const merged = new Map()
 for (const { seat, findings } of bySeat) {
   for (const f of findings) {
     const k = key(f)
-    const prev = merged.get(k)
-    if (prev) {
-      prev.seats.push(seat)
-      // Same claim, harsher severity: a seat that saw it as critical saw something the
-      // others did not. Nothing is lost here — the claim text is identical by key.
-      if (RANK[f.severity] < RANK[prev.severity]) {
-        prev.severity = f.severity
-        prev.failure = f.failure
+    let loc = merged.get(k)
+    if (!loc) {
+      loc = { file: (f.file || '').trim(), line: f.line || 0, claims: [] }
+      merged.set(k, loc)
+    }
+    const id = claimId(f)
+    const same = loc.claims.find((c) => claimId(c) === id)
+    if (same) {
+      same.seats.push(seat)
+      // Identical wording, harsher severity: a seat that saw it as critical saw
+      // something the others did not. Nothing is lost — the claim text matches.
+      if (RANK[f.severity] < RANK[same.severity]) {
+        same.severity = f.severity
+        same.failure = f.failure
       }
     } else {
-      merged.set(k, { ...f, seats: [seat] })
+      loc.claims.push({
+        severity: f.severity,
+        claim: f.claim,
+        failure: f.failure,
+        fix: f.fix,
+        seats: [seat],
+      })
     }
   }
 }
 
 const unique = [...merged.values()]
-const dupes = bySeat.reduce((n, s) => n + s.findings.length, 0) - unique.length
-log(`${unique.length} distinct finding(s), ${dupes} duplicate(s) collapsed`)
+const claimCount = unique.reduce((n, l) => n + l.claims.length, 0)
+const dupes = bySeat.reduce((n, s) => n + s.findings.length, 0) - claimCount
+log(`${unique.length} location(s), ${claimCount} distinct claim(s), ${dupes} duplicate(s) collapsed`)
 
 // --- 5. verify ---------------------------------------------------------------
 //
@@ -363,50 +395,93 @@ log(`${unique.length} distinct finding(s), ${dupes} duplicate(s) collapsed`)
 phase('Verify')
 
 const judged = await parallel(
-  unique.map((f) => () =>
+  unique.map((loc) => () =>
     agent(
-      `A reviewer claims:
+      `${loc.claims.length === 1 ? 'A reviewer claims' : `${loc.claims.length} reviewers claim`} the following about ${loc.file}:${loc.line}:
 
-  ${f.file}:${f.line} [${f.severity}] ${f.claim}
-  It fails like this: ${f.failure}
+${loc.claims.map((c, i) => `  [${i}] (${c.severity}) ${c.claim}\n      It fails like this: ${c.failure}`).join('\n\n')}
 
-Try to refute it. Open the file at ${REPO} and read the actual code, plus whatever
-callers or tests bear on it. Refute it if the code does not say what the claim says,
-if the failure cannot happen for a reason the reviewer missed, if it is already handled
+Try to refute each one. Open the file at ${REPO} and read the actual code, plus whatever
+callers or tests bear on it. Refute a claim if the code does not say what it says, if the
+failure cannot happen for a reason the reviewer missed, if it is already handled
 elsewhere, or if it describes intended behaviour.
 
-Do not refute it merely because it is small, or stylistic, or you would not have raised
-it. Severity is not your call; truth is. If it holds, say so and leave the severity
-alone unless the code shows the reviewer misjudged the impact.`,
-      { label: `verify:${f.file}:${f.line}`, phase: 'Verify', schema: VERDICT },
-    ).then((v) => ({ ...f, verdict: v })),
+Judge every claim separately and return one entry per index above. A claim standing or
+falling says nothing about its neighbours: they are on the same line, which is not a
+reason to treat them as the same defect, and an obvious wrong claim sitting beside a
+subtle right one is exactly the case this must not collapse.
+
+Where two of them genuinely are the same defect in different words, say so by setting
+sameAs on the later one to the index of the earlier — a lower index only, never a
+higher one, and never itself. Only for a real restatement, not for two defects that
+merely share a line.
+
+Do not refute a claim merely because it is small, or stylistic, or you would not have
+raised it. Severity is not your call; truth is. If it holds, say so and leave the
+severity alone unless the code shows the reviewer misjudged the impact.`,
+      { label: `verify:${loc.file}:${loc.line}`, phase: 'Verify', schema: LOCATION_VERDICT },
+    ).then((v) => ({ loc, verdicts: (v && v.claims) || null })),
   ),
 )
 
-// filter(Boolean) drops nothing here: the .then above wraps every finding in a fresh
-// object, so a verifier that timed out or came back malformed yields {..., verdict:
-// null} — truthy, but in neither survived nor killed. Left implicit, an unrefuted
-// finding disappears from the report with nothing said. Nobody argued it away, so it
-// is reported separately rather than dropped.
-const checked = judged.filter(Boolean)
-const unverified = checked.filter((f) => !f.verdict)
-const survived = checked.filter((f) => f.verdict && !f.verdict.refuted)
-const killed = checked.filter((f) => f.verdict && f.verdict.refuted)
+// A verifier that died returns null, and parallel() yields null for a thunk that threw.
+// Either way the claims at that location are unjudged — which is not the same as clean,
+// so they are reported as unverified rather than dropped or assumed to hold.
+const survived = []
+const killed = []
+const unverified = []
+
+for (let i = 0; i < unique.length; i++) {
+  const loc = unique[i]
+  const result = judged[i]
+  const byIndex = new Map(((result && result.verdicts) || []).map((v) => [v.index, v]))
+  const kept = new Map()
+
+  loc.claims.forEach((c, idx) => {
+    const base = {
+      file: loc.file,
+      line: loc.line,
+      severity: c.severity,
+      claim: c.claim,
+      failure: c.failure,
+      fix: c.fix,
+      foundBy: c.seats,
+    }
+    const v = byIndex.get(idx)
+    if (!v) {
+      unverified.push(base)
+      return
+    }
+    if (v.refuted) {
+      killed.push({ ...base, why: v.reason })
+      return
+    }
+    if (v.severityAfter) base.severity = v.severityAfter
+    // sameAs points backwards only, so the target is already decided when we get here.
+    // If it survived, this claim folds into it and both seats get the credit; if it did
+    // not, this one stands on its own rather than vanishing with it.
+    const target = typeof v.sameAs === 'number' && v.sameAs >= 0 && v.sameAs < idx ? kept.get(v.sameAs) : null
+    if (target) {
+      target.foundBy = [...new Set([...target.foundBy, ...base.foundBy])]
+      return
+    }
+    kept.set(idx, base)
+    survived.push(base)
+  })
+}
+
 log(`${survived.length} finding(s) survived, ${killed.length} refuted, ${unverified.length} unverified`)
 
 // --- 6. rank -----------------------------------------------------------------
 
 phase('Rank')
 
-for (const f of survived) {
-  if (f.verdict.severityAfter) f.severity = f.verdict.severityAfter
-}
-
+// severityAfter was already applied when the verdicts were read, so this only orders.
 survived.sort((a, b) => {
   const s = RANK[a.severity] - RANK[b.severity]
   // A finding two seats reached independently outranks one that a single seat did,
   // at the same severity. Agreement is weak evidence, but it is evidence.
-  return s !== 0 ? s : b.seats.length - a.seats.length
+  return s !== 0 ? s : b.foundBy.length - a.foundBy.length
 })
 
 return {
@@ -424,35 +499,15 @@ return {
   seatsSkipped,
   counts: {
     raw: bySeat.reduce((n, s) => n + s.findings.length, 0),
-    distinct: unique.length,
+    locations: unique.length,
+    distinct: claimCount,
     survived: survived.length,
     refuted: killed.length,
     unverified: unverified.length,
   },
-  findings: survived.map((f) => ({
-    file: f.file,
-    line: f.line,
-    severity: f.severity,
-    claim: f.claim,
-    failure: f.failure,
-    fix: f.fix,
-    foundBy: f.seats,
-  })),
-  refuted: killed.map((f) => ({
-    file: f.file,
-    line: f.line,
-    claim: f.claim,
-    why: f.verdict.reason,
-    foundBy: f.seats,
-  })),
+  findings: survived,
+  refuted: killed,
   // Nobody refuted these; the verifier just never came back. They are the reviewers'
   // claims as filed, unfiltered, and they are reported as exactly that.
-  unverified: unverified.map((f) => ({
-    file: f.file,
-    line: f.line,
-    severity: f.severity,
-    claim: f.claim,
-    failure: f.failure,
-    foundBy: f.seats,
-  })),
+  unverified,
 }
