@@ -4,76 +4,205 @@
     "harness": "acpx",
     "provider": "openai",
     "model_id": "gpt-5.6-luna",
-    "family": "oai", "lab": "openai",
-    "strengths": ["speed", "cost", "code", "general"],
-    "effort": "high", "effort_range": ["low", "medium", "high", "xhigh", "max"],
-    "price": { "in": 1.0, "out": 6.0, "cost_per_task": 0.07 },
-    "cost": "cheap", "repo_aware": false, "available": true
+    "family": "oai",
+    "lab": "openai",
+    "strengths": [
+      "reasoning",
+      "code",
+      "cost"
+    ],
+    "effort": "high",
+    "effort_range": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "price": {
+      "in": 0.2,
+      "out": 1.2,
+      "cost_per_task": 0.07
+    },
+    "cost": "cheap",
+    "repo_aware": false,
+    "available": true,
+    "source": "AA",
+    "as_of": "2026-08-02T17:24:27Z"
   },
   "gpt56_terra": {
     "name": "GPT-5.6 Terra",
     "harness": "acpx",
     "provider": "openai",
     "model_id": "gpt-5.6-terra",
-    "family": "oai", "lab": "openai",
-    "strengths": ["reasoning", "code", "general"],
-    "effort": "high", "effort_range": ["low", "medium", "high", "xhigh", "max"],
-    "price": { "in": 2.5, "out": 15.0, "cost_per_task": 0.43 },
-    "cost": "mid", "repo_aware": false, "available": false
+    "family": "oai",
+    "lab": "openai",
+    "strengths": [
+      "reasoning",
+      "code"
+    ],
+    "effort": "xhigh",
+    "effort_range": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "price": {
+      "in": 2,
+      "out": 12,
+      "cost_per_task": 0.43
+    },
+    "cost": "mid",
+    "repo_aware": false,
+    "available": false,
+    "source": "AA",
+    "as_of": "2026-08-02T17:24:27Z"
   },
   "gpt56_sol": {
     "name": "GPT-5.6 Sol",
     "harness": "acpx",
     "provider": "openai",
     "model_id": "gpt-5.6-sol",
-    "family": "oai", "lab": "openai",
-    "strengths": ["reasoning", "code", "tricky", "math"],
-    "effort": "xhigh", "effort_range": ["low", "medium", "high", "xhigh", "max"],
-    "price": { "in": 5.0, "out": 30.0, "cost_per_task": 1.86 },
-    "cost": "premium", "repo_aware": false, "available": false
+    "family": "oai",
+    "lab": "openai",
+    "strengths": [
+      "reasoning",
+      "code"
+    ],
+    "effort": "max",
+    "effort_range": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "price": {
+      "in": 5,
+      "out": 30,
+      "cost_per_task": 1.86
+    },
+    "cost": "premium",
+    "repo_aware": false,
+    "available": false,
+    "source": "AA",
+    "as_of": "2026-08-02T17:24:27Z"
   },
   "glm52": {
     "name": "GLM-5.2",
     "harness": "acpx",
     "provider": "zai",
     "model_id": "glm-5.2",
-    "family": "glm", "lab": "zai",
-    "strengths": ["reasoning", "code", "math", "cost"],
-    "effort": "max", "effort_range": ["medium", "high", "max"],
-    "price": { "in": 0.95, "out": 3.0, "cost_per_task": 0.69 },
-    "cost": "cheap", "repo_aware": true, "available": true
+    "family": "glm",
+    "lab": "zai",
+    "strengths": [
+      "reasoning",
+      "code",
+      "cost"
+    ],
+    "effort": "high",
+    "effort_range": [
+      "medium",
+      "high",
+      "max"
+    ],
+    "price": {
+      "in": 1.4,
+      "out": 4.4,
+      "cost_per_task": 0.69
+    },
+    "cost": "cheap",
+    "repo_aware": true,
+    "available": true,
+    "source": "AA",
+    "as_of": "2026-08-02T17:24:27Z"
   },
   "claude_opus5": {
     "name": "Claude Opus 5",
     "harness": "acpx",
     "provider": "anthropic",
     "model_id": "opus",
-    "family": "claude", "lab": "anthropic",
-    "strengths": ["reasoning", "code", "tricky"],
-    "effort": "xhigh", "effort_range": ["low", "medium", "high", "xhigh", "max"],
-    "price": { "in": 5.0, "out": 25.0, "cost_per_task": 2.34 },
-    "cost": "premium", "repo_aware": false, "available": false
+    "family": "claude",
+    "lab": "anthropic",
+    "strengths": [
+      "reasoning",
+      "code"
+    ],
+    "effort": "max",
+    "effort_range": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "price": {
+      "in": 5,
+      "out": 25,
+      "cost_per_task": 2.34
+    },
+    "cost": "premium",
+    "repo_aware": false,
+    "available": false,
+    "source": "AA",
+    "as_of": "2026-08-02T17:24:27Z"
   },
   "gemini_pro": {
     "name": "Gemini 3.1 Pro",
     "harness": "acpx",
     "provider": "google",
     "model_id": "gemini-3.1-pro",
-    "family": "gemini", "lab": "google",
-    "strengths": ["reasoning", "code", "math", "tricky"],
-    "effort": "high", "effort_range": ["low", "medium", "high"],
-    "price": { "in": 2.0, "out": 12.0, "cost_per_task": 0.34 },
-    "cost": "mid", "repo_aware": true, "available": false
+    "family": "gemini",
+    "lab": "google",
+    "strengths": [
+      "reasoning",
+      "code"
+    ],
+    "effort": "high",
+    "effort_range": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "price": {
+      "in": 2,
+      "out": 12,
+      "cost_per_task": 0.34
+    },
+    "cost": "mid",
+    "repo_aware": true,
+    "available": false,
+    "source": "AA",
+    "as_of": "2026-08-02T17:24:27Z"
   },
   "deepseek_v4pro": {
     "name": "DeepSeek V4 Pro",
     "harness": "subagent",
     "provider": "deepseek",
     "model_id": "(inherits)",
-    "family": "deepseek", "lab": "deepseek",
-    "strengths": ["reasoning", "code", "cost", "general"],
-    "effort": "high", "effort_range": ["low", "high", "max"],
-    "price": { "in": 0.435, "out": 0.87, "cost_per_task": 0.05 },
-    "cost": "cheap", "repo_aware": true, "available": true
+    "family": "deepseek",
+    "lab": "deepseek",
+    "strengths": [
+      "code",
+      "cost"
+    ],
+    "effort": "medium",
+    "effort_range": [
+      "low",
+      "high",
+      "max"
+    ],
+    "price": {
+      "in": 0.43,
+      "out": 0.87,
+      "cost_per_task": 0.05
+    },
+    "cost": "cheap",
+    "repo_aware": true,
+    "available": true,
+    "source": "AA",
+    "as_of": "2026-08-02T17:24:27Z"
   }
 }

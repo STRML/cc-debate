@@ -44,6 +44,51 @@ check("parse empty -> None", rm.parse_payload("") is None)
 o2 = rm.merge(clone(REG), {})["luna"]
 check("no-update merge leaves data intact", o2["strengths"]==["speed","cost"] and o2["effort"]=="high")
 
+# --- best_effort_metrics: Artificial Analysis payload -> registry-keyed updates ---
+# Shape mirrors the live source (automationscookbook mirror of artificialanalysis.ai):
+# one entry per effort level, base (max) first, sorted by Intelligence Index desc.
+AA_PAYLOAD = {"ok": True, "meta": {"source": "artificialanalysis.ai"}, "models": [
+  {"slug": "gpt-5-6-luna", "name": "GPT-5.6 Luna (max)", "intelligenceIndex": 51.2,
+   "intelligenceIndexCostTotal": 190.87, "priceInputPer1m": 1.0, "priceOutputPer1m": 6.0},
+  {"slug": "gpt-5-6-luna-xhigh", "name": "GPT-5.6 Luna (xhigh)", "intelligenceIndex": 49.1,
+   "intelligenceIndexCostTotal": 106.08, "priceInputPer1m": 1.0, "priceOutputPer1m": 6.0},
+  {"slug": "gemini-3-1-pro-preview", "name": "Gemini 3.1 Pro Preview", "intelligenceIndex": 46.5,
+   "intelligenceIndexCostTotal": 815.11, "priceInputPer1m": 1.25, "priceOutputPer1m": 10.0},
+  {"slug": "kimi-k3", "name": "Kimi K3", "intelligenceIndex": 57.1,
+   "intelligenceIndexCostTotal": 500.0, "priceInputPer1m": 2.0, "priceOutputPer1m": 10.0},
+]}
+REG_AA = {
+  "gpt56_luna": {"name":"GPT-5.6 Luna","harness":"acpx","provider":"openai","model_id":"gpt-5.6-luna",
+                 "family":"oai","lab":"openai","strengths":["speed","cost"],"effort":"high",
+                 "effort_range":["low","high"],"price":{"in":1.0,"out":6.0,"cost_per_task":0.07},
+                 "cost":"cheap","repo_aware":False,"available":True},
+  "gemini_31_pro": {"name":"Gemini 3.1 Pro","harness":"acpx","provider":"google","model_id":"gemini-3.1-pro",
+                    "family":"google","lab":"google","strengths":["reasoning"],"effort":"high",
+                    "effort_range":["low","high"],"price":{"in":1.25,"out":10.0,"cost_per_task":0.5},
+                    "cost":"mid","repo_aware":False,"available":True},
+}
+
+UPD = rm.best_effort_metrics(AA_PAYLOAD, REG_AA)
+check("AA: gpt56_luna matched", "gpt56_luna" in UPD, UPD.keys())
+check("AA: strengths derived (reasoning/code/cost)", UPD.get("gpt56_luna", {}).get("strengths")==["reasoning","code","cost"], UPD.get("gpt56_luna"))
+check("AA: effort from index (51.2 -> high)", UPD.get("gpt56_luna", {}).get("effort")=="high", UPD.get("gpt56_luna"))
+check("AA: price mapped from per-M", UPD.get("gpt56_luna", {}).get("price")=={"in":1.0,"out":6.0}, UPD.get("gpt56_luna"))
+check("AA: base (max) variant wins over -xhigh", UPD.get("gpt56_luna", {}).get("effort")=="high")
+check("AA: gemini matches via prefix (preview suffix)", "gemini_31_pro" in UPD, UPD.keys())
+check("AA: unknown model ignored", "kimi_k3" not in UPD)
+check("AA: cost_per_task untouched (no per-task source)", "cost_per_task" not in UPD.get("gpt56_luna", {}).get("price", {}))
+check("AA: empty payload -> {}", rm.best_effort_metrics({}, REG_AA)=={})
+check("AA: None payload -> {}", rm.best_effort_metrics(None, REG_AA)=={})
+
+# merge the AA update into the registry: user-owned fields survive
+o3 = rm.merge(clone(REG_AA), clone(UPD))["gpt56_luna"]
+check("AA merge: harness preserved", o3["harness"]=="acpx")
+check("AA merge: available preserved", o3["available"] is True)
+check("AA merge: price.in updated", o3["price"]["in"]==1.0)
+check("AA merge: cost_per_task preserved", o3["price"]["cost_per_task"]==0.07)
+check("AA merge: source recorded", o3.get("source")=="AA")
+check("AA merge: as_of recorded", bool(o3.get("as_of")))
+
 print()
 print("PASS" if fails==0 else f"FAIL ({fails})")
 sys.exit(0 if fails==0 else 1)
