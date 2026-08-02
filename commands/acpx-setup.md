@@ -281,8 +281,8 @@ For system prompts, suggest unique review personas for each reviewer. Examples:
 
 For each configured reviewer:
 
-- **Session-mode acpx agents** (anything that is not `antigravity`, `opus` or
-  `codex-exec`, and whose reviewer does not set `mode: "exec"`): ensure a session
+- **Session-mode acpx agents** (anything that is not `antigravity` or `opus`, and
+  whose reviewer does not set `mode: "exec"`): ensure a session
   exists and run a quick test via acpx:
   ```bash
   $ACPX_CMD <agent> sessions ensure 2>&1
