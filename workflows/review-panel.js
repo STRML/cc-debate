@@ -84,7 +84,8 @@ const LENSES = [
   // concluded from reading.
   { seat: 'pentester', why: 'attacker', when: (d) => d.securitySensitive || d.securityGrep },
   { seat: 'simplifier', why: 'argues for less code', when: (d) => d.linesAdded >= 150 || d.addsAbstraction },
-  { seat: 'antigravity', why: 'the only non-OpenAI seat', when: (d) => !d.docsOnly },
+  { seat: 'antigravity', why: 'a non-OpenAI model', when: (d) => !d.docsOnly },
+  { seat: 'deepseek', why: 'a fourth vendor, told to argue', when: (d) => !d.docsOnly },
 ]
 
 // A docs-only change earns nothing but the floor, and the floor is one seat — unless
@@ -260,10 +261,15 @@ return {
 
 const ran = A.seats || []
 const failed = A.seatsFailed || []
+// Seats the lens table asked for that this install does not own. Distinct from failed:
+// nothing went wrong, they were never there to run. Collapsing the two made every panel
+// on a machine without the optional seats report failures it had not had.
+const notConfigured = A.seatsNotConfigured || []
 const shape = A.diff || null
 const seatsSkipped = A.seatsSkipped || []
 
 for (const s of failed) log(`  ${s}: no review — not counted as run`)
+for (const s of notConfigured) log(`  ${s}: not configured on this machine — never started`)
 
 if (!ran.length) {
   throw new Error(
@@ -491,6 +497,7 @@ return {
   // credit a seat that never ran with having found nothing.
   seatsRun: ran,
   seatsFailed: failed,
+  seatsNotConfigured: notConfigured,
   // Seats that reviewed but whose review could not be read back. Their findings are
   // absent from everything below, so the report is incomplete by exactly this much.
   seatsNotTranscribed: extractFailed,
