@@ -64,10 +64,17 @@ if [ -z "$BASE" ] && [ "$HAS_HEAD" -eq 1 ]; then
   fi
 fi
 
-: > "$OUT"
+# Build in a temporary file and rename at the end. Truncating the destination and
+# appending to it leaves a readable, plausible, incomplete diff behind if any step here
+# fails — and every git call below swallows its own errors, so nothing downstream can
+# tell a short diff from a complete one. The rename is atomic within the directory, so a
+# reader sees the previous file or the finished one.
+TMP="$OUT.tmp.$$"
+trap 'rm -f "$TMP"' EXIT
+: > "$TMP"
 
 if [ -n "$BASE" ]; then
-  git -C "$REPO" --no-pager diff "$BASE" >> "$OUT" 2>/dev/null || true
+  git -C "$REPO" --no-pager diff "$BASE" >> "$TMP" 2>/dev/null || true
 fi
 
 # `git diff` only covers tracked paths. A new file is exactly the kind of thing
@@ -92,7 +99,10 @@ while IFS= read -r untracked; do
     esac
   fi
   git -C "$REPO" --no-pager diff --no-index -- /dev/null "$untracked" 2>/dev/null \
-    >> "$OUT" || true
+    >> "$TMP" || true
 done < <(git -C "$REPO" ls-files --others --exclude-standard 2>/dev/null || true)
+
+mv -f "$TMP" "$OUT"
+trap - EXIT
 
 printf '%s\n' "$BASE"

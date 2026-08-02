@@ -41,6 +41,21 @@ if [ -z "$CONFIG_FILE" ] || [ -z "$WORK_DIR" ] || [ -z "$REVIEWER" ]; then
   exit 1
 fi
 
+# --- Exit-file publication ---
+# run-parallel-acpx.sh polls for this file's existence and then reads it, so the file
+# must never exist while empty. A plain `echo N > file` creates it first and writes a
+# moment later; a scheduler pause in that gap hands the parent an empty read, which it
+# scores as a failed seat. Write to a temporary name and rename, which is atomic within
+# a directory: the parent sees no file at all, or the finished one.
+publish_exit() {
+  local code="$1"
+  [ -n "$WORK_DIR" ] && [ -n "$REVIEWER" ] || return 0
+  # $$ in the temp name: two invocations sharing a work dir would otherwise write the
+  # same temporary file, and one could publish the other's exit code.
+  printf '%s\n' "$code" > "$WORK_DIR/${REVIEWER}-exit.txt.tmp.$$" &&
+    mv -f "$WORK_DIR/${REVIEWER}-exit.txt.tmp.$$" "$WORK_DIR/${REVIEWER}-exit.txt"
+}
+
 # --- Resolve acpx binary (support npx fallback) ---
 
 ACPX_BIN=()
@@ -52,8 +67,8 @@ else
   echo "invoke-acpx: acpx not found. Install: npm install -g acpx@latest" >&2
   # Write a meaningful exit file if we can
   if [ -n "$WORK_DIR" ] && [ -n "$REVIEWER" ] && [ -d "$WORK_DIR" ]; then
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
     echo "acpx not installed. Run: npm install -g acpx@latest" > "$WORK_DIR/${REVIEWER}-output.md"
+    publish_exit 1
   fi
   exit 1
 fi
@@ -64,10 +79,14 @@ fi
 create_exit_file() {
   local code="${1:-1}"
   if [ -n "$WORK_DIR" ] && [ -n "$REVIEWER" ]; then
-    echo "$code" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    # Output first, exit file last. The exit file is the parent's signal that this seat
+    # is finished, and it reads the output immediately after seeing it — so publishing
+    # the code before the fallback text exists reopens the same race one line further
+    # down: the parent finds a finished seat with no review.
     if [ ! -f "$WORK_DIR/${REVIEWER}-output.md" ]; then
       echo "invoke-acpx: process terminated unexpectedly (exit $code)" > "$WORK_DIR/${REVIEWER}-output.md"
     fi
+    publish_exit "$code"
   fi
 }
 
@@ -174,8 +193,8 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
       echo "[$REVIEWER] Failed to ensure acpx session for '$AGENT'." >&2
       echo "  Check that the agent CLI is installed and authenticated." >&2
       echo "  Run /debate:acpx-setup to diagnose." >&2
-      echo "4" > "$WORK_DIR/${REVIEWER}-exit.txt"
       echo "Failed to ensure acpx session for '$AGENT'. Run /debate:acpx-setup to diagnose." > "$WORK_DIR/${REVIEWER}-output.md"
+      publish_exit 4
       trap - EXIT
       exit 4
     fi
@@ -350,8 +369,11 @@ handle_invocation_result() {
     echo "[$REVIEWER] Review received." >&2
   fi
 
-  echo "$EXIT_CODE" > "$WORK_DIR/${REVIEWER}-exit.txt"
-
+  # A final blank turn is a failure, whatever the process exited with. Decide that
+  # before publishing anything: run-parallel-acpx.sh polls for the exit file's
+  # existence, not its contents, so writing the pre-correction code and overwriting it
+  # a moment later leaves a window where the parent reads 0 for a seat that is about
+  # to be recorded as failed. Publish the code once, after it is final.
   if [ "$EXIT_CODE" -eq 0 ] && output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
     echo "[$REVIEWER] Empty response from $label." >&2
     {
@@ -359,10 +381,10 @@ handle_invocation_result() {
       echo ""
       cat "$WORK_DIR/${REVIEWER}-stderr.log" 2>/dev/null || echo "(no stderr)"
     } > "$WORK_DIR/${REVIEWER}-output.md"
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
-    trap - EXIT
-    exit 1
+    EXIT_CODE=1
   fi
+
+  publish_exit "$EXIT_CODE"
 
   trap - EXIT
   exit "$EXIT_CODE"
@@ -388,7 +410,7 @@ if [ "$AGENT" = "antigravity" ]; then
   if ! command -v agy > /dev/null 2>&1; then
     echo "[$REVIEWER] agy CLI not found. Install the Antigravity CLI and run 'agy' once to sign in." >&2
     echo "agy CLI not installed. Install the Antigravity CLI (https://antigravity.google) and run 'agy' to sign in." > "$WORK_DIR/${REVIEWER}-output.md"
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    publish_exit 1
     trap - EXIT
     exit 1
   fi
@@ -409,7 +431,7 @@ if [ "$AGENT" = "antigravity" ]; then
   else
     echo "[$REVIEWER] python3 not found — required to run agy under a PTY." >&2
     echo "python3 not installed. Install Python 3 to use the antigravity reviewer." > "$WORK_DIR/${REVIEWER}-output.md"
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    publish_exit 1
     trap - EXIT
     exit 1
   fi
@@ -506,7 +528,7 @@ if [ "$AGENT" = "opus" ]; then
   if ! command -v claude > /dev/null 2>&1; then
     echo "[$REVIEWER] claude CLI not found — is Claude Code installed?" >&2
     echo "claude CLI not installed. Ensure Claude Code is on PATH." > "$WORK_DIR/${REVIEWER}-output.md"
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    publish_exit 1
     trap - EXIT
     exit 1
   fi
@@ -560,7 +582,7 @@ if [ "$AGENT" = "codex-exec" ]; then
   if ! command -v codex > /dev/null 2>&1; then
     echo "[$REVIEWER] codex CLI not found." >&2
     echo "codex CLI not installed. Install the Codex CLI and run 'codex' once to sign in." > "$WORK_DIR/${REVIEWER}-output.md"
-    echo "1" > "$WORK_DIR/${REVIEWER}-exit.txt"
+    publish_exit 1
     trap - EXIT
     exit 1
   fi
@@ -695,6 +717,33 @@ attempt_acpx() {
   "${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
   EXIT_CODE=$?
   set -e
+
+  # acpx exit 5 is PERMISSION_DENIED, and on this panel it is not a failed review.
+  #
+  # acpx stamps it after the turn has already finished — applyPermissionExitCode runs
+  # on the result of runOnce — and only when the seat got nothing it asked for:
+  # requested > 0, approved == 0, and at least one denied or cancelled. Reviewers here
+  # run under `--non-interactive-permissions deny`, which is the hard read-only
+  # guarantee the `untrusted` preset rests on, so a seat that reaches for a command it
+  # cannot have trips this on the turns where it happens to ask and misses it on the
+  # turns where it does not. Same seat, same diff, different exit code.
+  #
+  # Treating that as a failure cost us twice. A seat that was refused once and still
+  # wrote a full review had it thrown away, because run-parallel records the non-zero
+  # exit and synthesis skips the seat. And a seat that came back empty was never
+  # retried, because run_with_blank_retry breaks on any non-zero exit — which is why
+  # `retries: 2` on cartographer-or never fired.
+  #
+  # Normalising to 0 lets the blank check make the call instead, which is the question
+  # that actually matters: a review that arrived is kept, an empty turn is retried.
+  if [ "$EXIT_CODE" -eq 5 ]; then
+    if output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
+      echo "[$REVIEWER] $AGENT was denied every permission it asked for and produced nothing." >&2
+    else
+      echo "[$REVIEWER] $AGENT was denied a permission but still delivered a review; keeping it." >&2
+    fi
+    EXIT_CODE=0
+  fi
 }
 run_with_blank_retry attempt_acpx "$AGENT"
 

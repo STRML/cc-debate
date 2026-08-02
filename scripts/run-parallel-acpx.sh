@@ -50,10 +50,27 @@ chmod 700 "$WORK_DIR" 2>/dev/null || true
 # without preparing a plan, and it needs no extra syntax. DEBATE_DIFF_BASE
 # overrides the comparison point (default: the merge base with the default
 # branch, falling back to HEAD so uncommitted work still reviews).
+#
+# DEBATE_FREEZE_DIFF=1 keeps an existing changeset.diff exactly as the caller wrote it.
+# /debate:panel needs that: it measures the diff, picks the seats from what it measured,
+# and only then starts this script. Regenerating here would let an edit landing in
+# between hand the seats a different changeset from the one the panel was sized for, and
+# the report would describe the old shape while the reviews described the new code.
 REVIEW_TARGET="$WORK_DIR/plan.md"
 if [ ! -s "$WORK_DIR/plan.md" ]; then
   DIFF_BASE=""
-  if git rev-parse --git-dir >/dev/null 2>&1; then
+  if [ "${DEBATE_FREEZE_DIFF:-}" = "1" ] && [ -s "$WORK_DIR/changeset.diff" ]; then
+    DIFF_BASE=$(cat "$WORK_DIR/changeset-base.txt" 2>/dev/null || echo "")
+    echo "[debate] Frozen changeset: reviewing $WORK_DIR/changeset.diff as written." >&2
+    # changeset-diff.sh prints the base and writes it nowhere, so a caller that froze the
+    # diff without capturing that output leaves nothing to read here. Say so: the empty
+    # value gets persisted below and safe-cleanup.sh regenerates against it later, which
+    # silently compares the working tree to nothing at all.
+    if [ -z "$DIFF_BASE" ]; then
+      echo "[debate] WARNING: frozen diff has no recorded base ($WORK_DIR/changeset-base.txt is missing or empty)." >&2
+      echo "  hint: redirect changeset-diff.sh stdout into that file when you write the diff." >&2
+    fi
+  elif git rev-parse --git-dir >/dev/null 2>&1; then
     DIFF_BASE=$(bash "$SCRIPT_DIR/changeset-diff.sh" "$WORK_DIR" "$WORK_DIR/changeset.diff") \
       || DIFF_BASE=""
   fi
@@ -199,11 +216,19 @@ for NAME in "${REVIEWERS[@]}"; do
   # mid-retry and turns a recoverable blank turn into a lost seat on the panel.
   RETRIES=$(jq -r --arg name "$NAME" '.reviewers[$name].retries // 1' "$CONFIG_FILE")
   [[ "$RETRIES" =~ ^[0-9]+$ ]] || RETRIES=1
-  if [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
-    WORST=$(( TIMEOUT * (RETRIES + 1) ))
-    if [ "$WORST" -gt "$MAX_REVIEWER_BUDGET" ]; then
-      MAX_REVIEWER_BUDGET="$WORST"
-    fi
+  # Same fallback RETRIES gets on the line above, and for the same reason. A value
+  # like "600s" or 900.5 used to skip the budget entirely, because the guard below
+  # had no else — so the seat contributed nothing to MAX_WAIT while invoke-acpx.sh
+  # separately rewrote it to 120 and said so only in that seat's own log. The two
+  # layers disagreed and both were quiet about it. Warn once, here, where the
+  # operator is already reading, and hand the child the value we actually used.
+  if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || [ "$TIMEOUT" -le 0 ]; then
+    echo "[debate] $NAME: invalid timeout '$TIMEOUT', using 120s" >&2
+    TIMEOUT=120
+  fi
+  WORST=$(( TIMEOUT * (RETRIES + 1) ))
+  if [ "$WORST" -gt "$MAX_REVIEWER_BUDGET" ]; then
+    MAX_REVIEWER_BUDGET="$WORST"
   fi
 
   echo "[debate] Spawning $NAME ($AGENT, timeout: ${TIMEOUT}s)..." >&2

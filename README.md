@@ -464,8 +464,31 @@ The value of multiple reviewers is getting genuinely different lenses. Some idea
 | `/debate:claude-custom-review` | Interactive picker — choose personalities and model. |
 | `/debate:fable` | Single Fable Skeptic — deep behavioral reasoning (hang paths, consumer-side gaps). Alias: `/debate:mythos`. |
 | `/debate:opus` | Single Opus Skeptic — precision checks (arithmetic, boundaries, consistency sweeps, test coverage). |
+| `/debate:panel` | Panel sized by the diff, findings merged and refuted in code. See [Panel review](#panel-review-workflow-driven). |
 
 **The skeptic pair.** Fable 5 and Opus 4.8 fail differently: in panel comparisons, Fable's unique confirmed findings were behavioral (blocking/hang paths, consumer-side parser gaps) and it self-corrects by verifying library behavior; Opus wins on exact worst-case arithmetic, boundary nits, and labeling consistency, but its emergent-behavior claims get refuted more often. The two skeptic prompts are tuned to those strengths, and convergent findings between them are the strongest signal. Fable costs roughly **2x Opus**, so the pair is opt-in: set `"skeptic": ["fable","opus"]` in `claude_reviewers` for both, or `"skeptic": "opus"` for a solo Opus Skeptic. `/debate:fable` and `/debate:mythos` ignore config — invoking them by name is explicit consent to fable's cost.
+
+### Panel review (workflow-driven)
+
+`/debate:run` runs the panel you picked. `/debate:panel` runs the panel the diff picked, and does the merging in code rather than in your context.
+
+The reviewers are the same acpx and `codex-exec` seats. Nothing in the panel is Claude; the workflow only measures the diff, turns each review into structured findings, and filters them.
+
+The workflow runs in two stages with the seats in between: stage one measures the diff and picks them, `/debate:panel` then runs `run-parallel-acpx.sh` itself, and stage two reads back what the seats wrote. The runner sits outside the workflow because it blocks for as long as its slowest seat is allowed to take — half an hour — and nothing inside a workflow can wait that long.
+
+What it adds over `/debate:run`:
+
+**Seats follow the change.** A docs-only diff gets one seat. A wide, security-touching diff gets the whole table. The rule is a readable table in `workflows/review-panel.js` — a seat is earned by a condition, not by a name you typed.
+
+**Findings are grouped by `file:line` in JS, then collapsed by the verifier.** Measured on one run of twelve seats over a 13-line diff: six distinct findings, and five seats had independently reported the same one. Collapsing that by hand is the step that scales worst about a large panel. Identical wording merges in code; everything else at that line goes to a single verifier, which judges each claim on its own and says which ones restate which. Two defects that merely share a line stay two — a refuted claim never takes its neighbour with it — and five seats describing one bug five ways cost one verifier call, not five.
+
+**Findings are refuted before you see them.** Each survivor gets an agent that tries to disprove it against the code. In that same run, two of twelve seats produced findings that were wrong and cost a read each to disprove.
+
+It needs the `Workflow` built-in, so it is not as portable as `/debate:run`, which needs only bash. It also skips the debate rounds: it produces a reviewed list, not a negotiated verdict.
+
+```bash
+ls ~/.claude/debate-workflows/review-panel.js   # created by /debate:setup
+```
 
 ### `/debate:run` options
 
