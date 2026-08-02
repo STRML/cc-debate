@@ -13,7 +13,7 @@ is kept untouched and we exit 1 with a message (offline fallback).
 Usage:
   refresh-models.py --registry <debate-models.json> [--out <path>] [--update-source AA|LMArena|all] [--ttl-hours N]
 """
-import argparse, json, os, sys, time, urllib.request
+import argparse, calendar, json, os, sys, time, urllib.request
 
 # Source: the elastic/plain JSON endpoints are unstable; keep them as pluggable fetchers
 # so a path change is a one-line edit, not a re-read of the whole script.
@@ -85,13 +85,16 @@ def main():
     # TTL guard: a very fresh manual registry is not worth a network round-trip.
     # Parse each as_of defensively — a single hand-edited or odd value used to abort
     # the whole refresh with a traceback instead of being ignored.
+    # calendar.timegm, not time.mktime: as_of is a UTC "Z" timestamp written by merge(),
+    # and mktime would interpret the naive struct as LOCAL time, skewing the cache age
+    # by the host's timezone offset (wrong refresh cadence on non-UTC hosts).
     if all(m.get("as_of") for m in reg.values()):
         ages = []
         for m in reg.values():
             if not m.get("as_of"):
                 continue
             try:
-                ages.append(time.time() - time.mktime(time.strptime(m["as_of"], "%Y-%m-%dT%H:%M:%SZ")))
+                ages.append(time.time() - calendar.timegm(time.strptime(m["as_of"], "%Y-%m-%dT%H:%M:%SZ")))
             except (ValueError, TypeError, OverflowError):
                 continue   # malformed as_of — ignore this entry, don't crash
         if ages and min(ages) < a.ttl_hours * 3600:

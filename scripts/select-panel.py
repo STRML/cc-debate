@@ -35,6 +35,11 @@ def pick(registry, seats, deepest, installed, min_effort, max_cost=None):
         within = [m for m in pool if m["price"].get("cost_per_task", 0) <= max_cost]
         if not within:
             sys.stderr.write("⚠️ --max-cost %.2f excludes every available model; ignoring budget\n" % max_cost)
+            # Unset the budget, not just the pool filter: with every model dearer than
+            # the cap, the deepest seat is charged past max_cost, and if the cap stayed
+            # set every remaining seat would fail `spent + cost(x) <= max_cost` and the
+            # panel would silently collapse to a single reviewer despite the warning.
+            max_cost = None
         else:
             pool = within
     if not pool:

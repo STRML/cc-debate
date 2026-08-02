@@ -84,8 +84,8 @@ def run_main(backend, extra_args, cmd):
     sys.argv = ["sandbox.py"] + extra_args + ["--"] + cmd
     try:
         sb.main()
-    except SystemExit:
-        pass
+    except SystemExit as e:
+        captured["exit"] = e.code
     sb.os.execvp, sb.detect_sandbox, sys.argv = old_exec, old_detect, old_argv
     return captured
 
@@ -104,8 +104,9 @@ cap = run_main("docker", ["--no-net"], ["true"])
 check("exec(docker): program is docker", cap.get("prog") == "docker", cap.get("prog"))
 check("exec(docker): image precedes cmd", cap.get("argv", [])[-2:] == ["debian:bookworm-slim", "true"], cap.get("argv"))
 
-cap = run_main(None, [], ["echo", "hi"])   # no sandbox -> run unsandboxed
-check("exec(no sandbox): argv is just the cmd", cap.get("argv") == ["echo", "hi"], cap.get("argv"))
+cap = run_main(None, [], ["echo", "hi"])   # no backend -> fail closed, never exec
+check("no sandbox backend: aborts (exit 2) rather than running unsandboxed",
+      cap.get("exit") == 2 and "argv" not in cap, str(cap))
 
 print()
 print("PASS" if fails == 0 else f"FAIL ({fails})")

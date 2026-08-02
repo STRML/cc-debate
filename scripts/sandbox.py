@@ -211,8 +211,14 @@ def main():
 
     sand = detect_sandbox()
     if sand is None:
-        print("sandbox.py: no bwrap/sandbox-exec/docker found; running unsandboxed", file=sys.stderr)
-        prefix = []
+        # Fail closed. This wrapper exists only to isolate a review, so being asked to
+        # sandbox and having no backend to do it with is a configuration error, not a
+        # prompt to run unsandboxed — silently degrading an explicit isolation request
+        # is the kind of surprise a security boundary must not contain.
+        print("sandbox.py: no bwrap/sandbox-exec/docker found; refusing to run unsandboxed", file=sys.stderr)
+        print("  Install one (apt install bubblewrap / macOS ships sandbox-exec / install docker),", file=sys.stderr)
+        print("  or call the wrapped command directly if it does not need isolation.", file=sys.stderr)
+        sys.exit(2)
     elif sand == "bwrap":
         prefix = bwrap_cmd(a.repo, a.repo_sandbox, a.no_net, bind_pwd=os.getcwd())
     elif sand == "sandbox-exec":
