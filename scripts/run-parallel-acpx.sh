@@ -161,8 +161,10 @@ fi
 # session) makes the subsequent parallel submits all find their session.
 # Skipped when SKIP_SESSION_CHECK is set (tests / mock acpx), for agents that bypass
 # acpx sessions entirely (antigravity and opus are invoked as direct CLIs
-# — keep this list in step with IS_DIRECT_CLI in invoke-acpx.sh), and for reviewers
-# running one-shot (`mode: "exec"`), which never open a session to warm.
+# — keep this list in step with IS_DIRECT_CLI in invoke-acpx.sh), for codex-exec (a
+# removed agent that invoke-acpx.sh rejects before any session logic — warming it
+# would just be a failing call), and for reviewers running one-shot (`mode: "exec"`),
+# which never open a session to warm.
 if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
   if command -v acpx >/dev/null 2>&1; then
     WARM_ACPX=(acpx)
@@ -172,19 +174,23 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
     WARM_ACPX=()
   fi
   if [ ${#WARM_ACPX[@]} -gt 0 ]; then
-    declare -A WARMED=()
+    # A plain string, not `declare -A`: associative arrays need bash 4+ and stock macOS
+    # ships 3.2, where `declare -A` is a fatal error under set -e that killed the whole
+    # runner. Agent names are sanitized to [a-zA-Z0-9_-] above, so space-delimiting is
+    # unambiguous.
+    WARMED=""
     for NAME in "${REVIEWERS[@]}"; do
       [[ "$NAME" =~ ^[a-zA-Z0-9_-]+$ ]] || continue
       AGENT=$(jq -r --arg name "$NAME" '.reviewers[$name].agent // empty' "$CONFIG_FILE")
       [ -z "$AGENT" ] && continue
-      case "$AGENT" in antigravity|opus) continue ;; esac
+      case "$AGENT" in antigravity|opus|codex-exec) continue ;; esac
       # A one-shot reviewer never touches a session, so warming one for it is
       # wasted work — and a hang or failure here would delay a run that does not
       # need the session at all.
       MODE=$(jq -r --arg name "$NAME" '.reviewers[$name].mode // empty' "$CONFIG_FILE")
       [ "$MODE" = "exec" ] && continue
-      [ -n "${WARMED[$AGENT]:-}" ] && continue   # one ensure per distinct agent
-      WARMED[$AGENT]=1
+      [[ "$WARMED" == *" $AGENT "* ]] && continue   # one ensure per distinct agent
+      WARMED="$WARMED $AGENT "
       echo "[debate] Warming acpx session for '$AGENT'..." >&2
       "${WARM_ACPX[@]}" "$AGENT" sessions ensure >/dev/null 2>&1 \
         || echo "[debate] Warm-up for '$AGENT' failed (agent may be unconfigured)." >&2

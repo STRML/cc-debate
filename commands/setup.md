@@ -173,6 +173,38 @@ Skip this step silently — no output needed.
 
 ## Step 5: Check debate-acpx.json config
 
+### Migrating off codex-exec
+
+Run this first. `codex-exec` was a direct-CLI agent removed in #35, and nothing else
+migrates a config that still names it — an install that upgrades keeps the old value,
+acpx is asked for an agent that no longer exists, and every codex seat dies as
+"Failed to spawn agent command: codex-exec". The seats are the panel, so that reads as
+a broken tool rather than a stale key.
+
+```bash
+cp ~/.claude/debate-acpx.json ~/.claude/debate-acpx.json.pre-v3-migration
+python3 - << 'PY'
+import json, os
+p = os.path.expanduser('~/.claude/debate-acpx.json')
+d = json.load(open(p)); changed = []
+for name, r in d.get('reviewers', {}).items():
+    if r.get('agent') == 'codex-exec':
+        r['agent'] = 'codex'      # acpx agent, not the removed direct CLI
+        r['mode'] = 'exec'        # one-shot, which is what codex-exec always was
+        r.pop('effort', None)     # acpx takes no effort argument
+        changed.append(name)
+if changed:
+    json.dump(d, open(p, 'w'), indent=2, ensure_ascii=False); open(p, 'a').write('\n')
+    print('migrated:', ', '.join(changed))
+else:
+    print('already migrated')
+PY
+```
+
+`effort` goes because the acpx path has nowhere to send it; leaving it is harmless but
+the reference lint flags values it does not recognise. Take the backup — this rewrites
+the only copy of the reviewer config.
+
 Read `~/.claude/debate-acpx.json`. Report:
 
 - File exists → show reviewer list:

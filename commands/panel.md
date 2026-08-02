@@ -95,7 +95,26 @@ only in your context, that state is one compaction or one dropped session away f
 gone, and the run cannot be finished without re-classifying. On disk it survives both.
 Read it back in step 6 rather than trusting recall.
 
-**5. Run the seats. This step is yours, not the workflow's.**
+**5. Drop the seats this machine has not configured.**
+
+```bash
+for s in <seat1> <seat2> ...; do
+  jq -e --arg s "$s" '.reviewers[$s].agent // empty' "<HOME>/.claude/debate-acpx.json" \
+    > /dev/null 2>&1 && echo "HAVE $s" || echo "UNCONFIGURED $s"
+done
+```
+
+Run only the `HAVE` seats in the next step, and carry the `UNCONFIGURED` ones into step 7
+as `seatsNotConfigured`.
+
+A seat the lens table asks for is not the same as a seat this install owns. The optional
+ones — `deepseek`, and anything added with `create-opencode-agent.sh` — need a wrapper, an
+acpx registration, a reviewer entry and a key before they can start. Without the check the
+runner skips them with a line on stderr nobody reads, they leave no exit file, and step 6
+scores a missing file as a dead seat — so every panel on a fresh clone reports seats that
+failed when they were never installed. "Not configured" and "failed" want different words.
+
+**6. Run the seats. This step is yours, not the workflow's.**
 
 ```bash
 DEBATE_FREEZE_DIFF=1 bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "<HOME>/.claude/debate-acpx.json" "<REVIEW_ID>" "<seat1,seat2,...>"
@@ -125,19 +144,25 @@ Both flags matter, and so does whose call this is:
   wait returns in under a minute, and the harness then reaps the runner it backgrounded,
   killing every seat mid-review. The whole panel comes back empty and looks clean.
 
-**6. Work out which seats actually reported, then report.**
+**7. Work out which seats actually reported, then report.**
 
 ```bash
-for s in <seat1> <seat2> ...; do
+for s in <the HAVE seats>; do
   e=$(cat "<WORK_DIR>/$s-exit.txt" 2>/dev/null || echo -1)
   b=$(wc -c < "<WORK_DIR>/$s-output.md" 2>/dev/null || echo 0)
   [ "$e" = "0" ] && [ "$b" -gt 0 ] && echo "RAN $s" || echo "FAILED $s (exit $e, $b bytes)"
 done
 ```
 
-A seat with no exit file never ran at all — `run-parallel-acpx.sh` skips a seat your
-config has no entry for, and says nothing about it. Read `<WORK_DIR>/panel-state.json`
-back for `diff` and `seatsSkipped`, and feed the split in with them:
+Non-empty is the test, not the whole story: an exit file of 0 with non-empty output can
+still be an error dump the agent printed to stdout and exited 0 on. You are reading every
+`-output.md` in full below anyway — a seat whose output is an error dump rather than a
+review did not deliver, whatever its exit file says. (And the reverse: a review needs no
+ASCII, so a non-Latin review may carry no `VERDICT:` marker and still be a valid review.)
+
+Every seat here was configured, so a missing exit file now means it really did die.
+Read `<WORK_DIR>/panel-state.json` back for `diff` and `seatsSkipped`, and feed the split
+in with them:
 
 ```
 Workflow({
@@ -148,6 +173,7 @@ Workflow({
     repoRoot: "<REPO_ROOT>",
     seats: ["<the RAN ones>"],
     seatsFailed: ["<the FAILED ones>"],
+    seatsNotConfigured: ["<the UNCONFIGURED ones from step 5>"],
     diff: <the diff object from step 4>,
     seatsSkipped: <the seatsSkipped array from step 4>
   }

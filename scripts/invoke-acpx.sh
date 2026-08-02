@@ -83,9 +83,15 @@ create_exit_file() {
     # is finished, and it reads the output immediately after seeing it — so publishing
     # the code before the fallback text exists reopens the same race one line further
     # down: the parent finds a finished seat with no review.
-    if [ ! -f "$WORK_DIR/${REVIEWER}-output.md" ]; then
+    if [ ! -s "$WORK_DIR/${REVIEWER}-output.md" ]; then
       echo "invoke-acpx: process terminated unexpectedly (exit $code)" > "$WORK_DIR/${REVIEWER}-output.md"
     fi
+    # The trap only fires when the seat did NOT complete normally — the normal path
+    # disables the trap before exit. Whatever the shell reports as $?, a killed seat
+    # has no review, so publishing 0 reads as a successful review and a verdict gets
+    # synthesized from nothing (observed: a harness kill left exit.txt=0 with an empty
+    # output.md, and the orchestrator treats exit 0 as success). Never publish 0 here.
+    [ "$code" = "0" ] && code=1
     publish_exit "$code"
   fi
 }
@@ -96,6 +102,17 @@ if [ ! -d "$WORK_DIR" ]; then
   echo "invoke-acpx: work_dir does not exist: $WORK_DIR" >&2
   exit 1
 fi
+
+# Fresh round, fresh artifacts. Re-running over the same REVIEW_ID leaves a prior
+# round's <name>-output.md / <name>-exit.txt in place, and a seat that dies without
+# writing then leaves last round's review looking fresh — the exact hazard the Claude
+# side solves with per-round -r<N>- filenames (commands/run.md). Clearing here covers
+# both the parallel runner and direct invocations (debate rounds, verify passes).
+# -invoke.log is deliberately NOT cleared: run-parallel-acpx.sh opens it at spawn and
+# owns it, so deleting it here would orphan the child's stderr.
+rm -f "$WORK_DIR/${REVIEWER}-output.md" \
+      "$WORK_DIR/${REVIEWER}-exit.txt" \
+      "$WORK_DIR/${REVIEWER}-stderr.log"
 
 # A review target is either a plan or, when no plan was staged, the changeset
 # the runner captured. Exactly one has to be non-empty.
@@ -119,6 +136,18 @@ fi
 AGENT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].agent // empty' "$CONFIG_FILE")
 if [ -z "$AGENT" ]; then
   echo "invoke-acpx: no agent for '$REVIEWER' in $CONFIG_FILE" >&2
+  exit 1
+fi
+
+# `codex-exec` was a direct-CLI agent removed in #35. Nothing migrates an existing
+# config, so an install that upgrades keeps the old value and every codex seat would
+# otherwise die inside acpx as "Failed to spawn agent command: codex-exec" — an error
+# about a missing binary, for what is really a stale config key. Name the fix instead.
+if [ "$AGENT" = "codex-exec" ]; then
+  echo "invoke-acpx: reviewer '$REVIEWER' uses agent 'codex-exec', which was removed." >&2
+  echo "  Migrate $CONFIG_FILE: set \"agent\": \"codex\" and \"mode\": \"exec\" on every" >&2
+  echo "  codex-exec reviewer, and drop \"effort\" (acpx does not take it)." >&2
+  echo "  See 'Migrating off codex-exec' in commands/setup.md." >&2
   exit 1
 fi
 
@@ -362,10 +391,16 @@ handle_invocation_result() {
         cat "$WORK_DIR/${REVIEWER}-stderr.log" 2>/dev/null || echo "(no stderr)"
       } > "$WORK_DIR/${REVIEWER}-output.md"
     fi
-  elif ! output_is_blank "$WORK_DIR/${REVIEWER}-output.md"; then
-    # Only claim a review arrived once we know one did. The blank case is
-    # reported by the guard below, and announcing both reads as a contradiction
-    # in the runner log.
+  elif ! output_is_blank "$WORK_DIR/${REVIEWER}-output.md" \
+       && grep -q "VERDICT:" "$WORK_DIR/${REVIEWER}-output.md"; then
+    # Only claim a review arrived once we know one did. The blank case is reported by
+    # the guard below, and announcing both reads as a contradiction in the runner log.
+    # The VERDICT line is a diagnostic hint that separates a real review from an error
+    # dump the agent wrote to stdout and exited 0 on (observed: agy printed its
+    # permission error as the "review"). It is NOT a delivery gate — delivery is decided
+    # by exit code + non-empty output below, because a review needs no ASCII at all and
+    # a non-Latin review may carry no English VERDICT marker. This line is purely for
+    # the operator; a seat that delivers without the marker simply stays quiet here.
     echo "[$REVIEWER] Review received." >&2
   fi
 
@@ -440,7 +475,18 @@ if [ "$AGENT" = "antigravity" ]; then
 
   # Prompt as a positional argument (quirk 1). Pass via env so plan content (newlines,
   # quotes, anything) reaches agy verbatim with zero shell/Python re-escaping.
-  AGY_PROMPT="$(cat "$PROMPT_FILE")"
+  #
+  # Append a no-tool directive: agy runs in an empty throwaway workspace with the full
+  # target in-prompt and no repo access (the containment in quirk 3), and the shared
+  # prompt can invite a reviewer to open the surrounding code. Any tool request is
+  # auto-denied in headless mode and kills the seat (observed: "a tool required the
+  # 'command' permission that headless mode cannot prompt for, so it was auto-denied").
+  # Say so up front so the model answers from the text instead of dying on a denied tool.
+  AGY_PROMPT="$(cat "$PROMPT_FILE")
+Do NOT attempt any command, file read, file write, or tool call. You are in an empty
+throwaway workspace with no repo access. Everything you need is in the text above;
+answer from it directly. Any tool request is auto-denied in headless mode and ends
+this review."
   export AGY_PROMPT
   export AGY_BIN; AGY_BIN="$(command -v agy)"
   export AGY_PRINT_TIMEOUT="${TIMEOUT}s"     # Go duration for --print-timeout
