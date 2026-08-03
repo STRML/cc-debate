@@ -503,6 +503,33 @@ Then clean up and exit.
 
 ## Step 3: Present Reviewer Outputs
 
+**Changeset mode — merge and verify findings in code first.** When no plan was staged
+(changeset mode), run the panel workflow's **report** stage before reading outputs by
+hand. This is what the old `/debate:panel` did after its seats ran: it transcribes each
+seat's review into structured findings, groups them by `file:line`, has one verifier per
+location try to refute each claim against the code, and ranks the survivors. The diff
+shape and skipped seats came from the classify stage (Step 1a, changeset mode); the
+`seatsFailed` / `seatsNotConfigured` come from the Step 2c check-results and the HAVE
+probe.
+
+```text
+Workflow({
+  scriptPath: "~/.claude/debate-workflows/review-panel.js",
+  args: {
+    stage: "report", workDir: "<WORK_DIR>", repoRoot: "<REPO_ROOT>",
+    seats: ["<the seats that reported>"], seatsFailed: ["..."],
+    seatsNotConfigured: ["..."], diff: <diff shape from classify>,
+    seatsSkipped: <seatsSkipped from classify>
+  }
+})
+```
+
+Present the returned `findings` (survived, ranked; `refuted` with why; `unverified`
+labeled as unverified) in place of a hand-rolled dedupe. This does **not** replace the
+full reads below — you still read every `-output.md` in full and synthesize. The report's
+finding list is what feeds the verdict. In plan mode there is no report stage; read all
+outputs in full as below.
+
 **CRITICAL: You MUST use the Read tool to read each `-output.md` file IN FULL** — acpx `<name>-output.md` and Claude `claude-<persona>-r<N>-output.md` alike. Do NOT use grep, awk, sed, head, tail, or any other tool to extract snippets or search for keywords. Do NOT summarize without reading. Each reviewer catches different issues — skimming loses findings. Read every word.
 
 For each completed acpx reviewer:
