@@ -36,7 +36,7 @@ _Updated: 2026-08-03_
 - `plan.md` — plan to review (always required)
 - `<name>-prompt.txt` — debate/resume prompt (optional; falls back to config system_prompt + plan.md)
 - `MODEL` env (optional) — per-seat model override from the panel selector; passed to acpx as `--model <id>` (or `codex -m <id>` on the direct branch). `run-parallel-acpx.sh` sets it per seat from `ACPX_SEAT_MODELS` (the select-panel.py output or a flat `{seat: model_id}` map) or the single-model `DEBATE_MODEL`.
-- `EFFORT` env (optional) — per-seat reasoning effort from the selector (`effective_effort`). Only a `codex` seat honors it, via the direct branch (`codex exec --ephemeral -c model_reasoning_effort=<level> -s read-only -o <outfile> -`). Every other transport logs `EFFORT=<level> not supported by transport <agent>` and runs at its default. The runner always sets it (empty = agent default), so a caller's `EFFORT` cannot leak into a seat.
+- `EFFORT` env (optional) — per-seat reasoning effort from the selector (`effective_effort`). Only a `codex` seat honors it, via the direct branch (`codex exec --ephemeral -c model_reasoning_effort=<level> -s read-only -o <outfile> -`). Every other transport handled by `invoke-acpx.sh` logs `EFFORT=<level> not supported by transport <agent>` and runs at its default. A `subagent`-harness seat never reaches `invoke-acpx.sh` (filtered in `run-parallel-acpx.sh` pre-spawn; dispatched via Hermes `delegate_task` instead), so it receives neither `EFFORT` nor the fallback log. The runner always sets `EFFORT` (empty = agent default), so a caller's `EFFORT` cannot leak into a seat.
 
 ### Outputs
 - `<name>-output.md` — review text

@@ -77,7 +77,9 @@ repo_aware + family/lab + available.
    on each seat's `invoke-acpx.sh`. A `codex` seat with `EFFORT` runs the codex CLI directly
    (`codex exec --ephemeral -m <model> -c model_reasoning_effort=<level> -s read-only
    -o <outfile> -`); every other transport logs `EFFORT=<level> not supported by transport
-   <agent>` and runs at its default. `--model ID` applies one model to every seat in the
+   <agent>` and runs at its default. `subagent`-harness seats are filtered out before the
+   runner spawns anything — they dispatch via Hermes `delegate_task` and never receive
+   `EFFORT` or the fallback log. `--model ID` applies one model to every seat in the
    dispatch.
 
 Seed `debate-models.json` (and refresh) marks `available:false` for harnesses you haven't
