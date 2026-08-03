@@ -172,9 +172,13 @@ Only ask the user what to review when the runner exits non-zero reporting no pla
 
 ### 1f. Changeset mode — size the panel from the diff
 
-When no plan is staged (changeset mode), do **not** resolve the acpx panel from the config.
-The change sizes its own panel. Run the panel workflow's **classify** stage to measure the
-diff and pick the seats:
+When no plan is staged (changeset mode), the change sizes its own panel **unless an
+explicit selector was given**. A preset name or reviewer subset (Step 1a) remains an
+override and keeps the seats it names — a `/debate:run tight` on a changeset still runs the
+`tight` panel. Lens classification picks the seats only when no panel argument was
+supplied. Either way, the **classify** stage still runs to measure the diff — it produces
+the `diff` shape and `seatsSkipped` that the report stage (Step 3) needs, and the HAVE probe
+still drops seats this machine cannot run:
 
 ```text
 Workflow({
@@ -185,7 +189,9 @@ Workflow({
 
 It returns `{ diff, seats, seatsSkipped }`. Write that object to `<WORK_DIR>/panel-state.json`
 — it is needed again at report time (Step 3), half an hour of seats separates the two, and
-held only in context it is one compaction away from gone.
+held only in context it is one compaction away from gone. When an explicit selector was
+given, the `diff`/`seatsSkipped` come from classify but the **seats** are the explicit
+ones (a preset's `reviewers` or the subset), not the lens picks.
 
 Then **drop the seats this machine has not configured** with the HAVE probe. For each lens
 seat, verify its agent can actually spawn — a direct CLI present for `antigravity`/`opus`, a
@@ -249,7 +255,7 @@ python3 "<SCRIPT_DIR>/select-panel.py" \
   --registry "$REGISTRY" \
   --seats "<resolved-seat-list>" --deepest "<deepest-seat>" \
   --installed-harnesses acpx,subagent > "<WORK_DIR>/panel.json" \
-  || { echo "⚠️ selector failed for this panel — running configured defaults" >&2; rm -f "<WORK_DIR>/panel.json"; }
+  || { echo "⚠️ selector failed for this panel" >&2; rm -f "<WORK_DIR>/panel.json"; }
 ```
 
 Then dispatch, passing the per-seat model/effort map when the selector wrote one:
@@ -259,13 +265,20 @@ ACPX_SEAT_MODELS="<WORK_DIR>/panel.json" \
   bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
 ```
 
-`ACPX_SEAT_MODELS` is only set when `panel.json` was written; on selector failure (the
-file removed above) run the runner without it — plan-mode seats fall back to their
-configured defaults. If a reviewer subset was specified, pass the comma-separated list as
-the third argument. Run this Bash call with `run_in_background: true` (do **not** block on
-it) — the runner internally blocks until all reviewers complete or time out, and you'll get
-a task-completion notification when it exits. This keeps the call from serializing the
-skeptic subagents behind it.
+`ACPX_SEAT_MODELS` is only set when `panel.json` was written. On selector failure the mode
+decides what happens:
+- **Plan mode** — run the runner without it; seats fall back to their configured defaults
+  (a warning was already printed).
+- **Changeset mode** — **fail closed.** A changeset seat has no configured default to fall
+  back to, so there is nothing safe to run. Dispatch only the seats the selector assigned;
+  record the skipped ones with the selector's reason, and if no seats remain, stop with an
+  explicit no-seats result rather than spawning anything.
+
+If a reviewer subset was specified, pass the comma-separated list as the third argument.
+Run this Bash call with `run_in_background: true` (do **not** block on it) — the runner
+internally blocks until all reviewers complete or time out, and you'll get a task-completion
+notification when it exits. This keeps the call from serializing the skeptic subagents
+behind it.
 
 **Run this Bash call with `dangerouslyDisableSandbox: true`.** The external reviewers need to escape the Claude Code sandbox: the `antigravity` reviewer writes its project config to `~/.gemini/config/projects/` before it can open a conversation (a sandboxed write there fails with `operation not permitted`, and `agy` then reports `failed to send message: no active conversation` — surfacing as an empty/garbage review), and codex/gemini need outbound network the seatbelt policy otherwise blocks. `nohup`/`disown` inside the runner dodge permission prompts but do **not** lift the seatbelt sandbox — only launching the call unsandboxed does. (Alternative if you prefer not to disable the sandbox per-call: add `~/.gemini` to the write allowlist in `settings.json`.)
 

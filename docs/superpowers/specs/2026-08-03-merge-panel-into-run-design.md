@@ -69,12 +69,19 @@ ACPX_SEAT_MODELS="$WORK_DIR/panel.json" \
   bash "$SCRIPT_DIR/run-parallel-acpx.sh" "$CONFIG" "$REVIEW_ID" "$SEAT_LIST"
 ```
 
-**Graceful fallback.** The selector can error (no model for a harness, `--max-cost`
-infeasible, empty registry) or return nothing for a seat. If it fails or a seat has
-no assignment, that seat falls back to its configured agent default (today's
-behavior) with a warning. `/debate:run` is never worse than it is today. The runner
-already reads `panel.json` — `.seats[s].model_id` → `MODEL`, `.seats[s].effective_effort`
-→ `EFFORT` — and filters `subagent` seats, so the dispatch side needs no changes.
+**Graceful fallback, mode-dependent.** The selector can error (no model for a harness,
+`--max-cost` infeasible, empty registry) or return nothing for a seat. How the dispatch
+responds depends on the mode:
+- **Plan mode** — a seat with no assignment falls back to its configured agent default
+  (today's behavior) with a warning. `/debate:run` is never worse than it is today.
+- **Changeset mode** — **fail closed.** A changeset seat has no config default behind it,
+  so one with no selector assignment is skipped and reported with the selector's reason;
+  if no seats remain, the run stops with an explicit no-seats result rather than spawning
+  anything at the agent's default.
+
+The runner already reads `panel.json` — `.seats[s].model_id` → `MODEL`,
+`.seats[s].effective_effort` → `EFFORT` — and filters `subagent` seats, so the dispatch
+side needs no changes.
 
 ### 3. Post-run processing — changeset mode only
 

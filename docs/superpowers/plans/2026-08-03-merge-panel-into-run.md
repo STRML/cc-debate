@@ -40,11 +40,11 @@ every seat. Resolve the registry in this order, first existing wins:
 2. `<SCRIPT_DIR>/../hermes/templates/debate-models.json` (bundled seed)
 
 Run the selector (Step 2a below) and write its output to
-`<WORK_DIR>/panel.json`. If the selector errors or returns no assignment for a
-seat (no available model for an installed harness, infeasible `--max-cost`,
-empty registry), that seat falls back to its configured agent default with a
-`⚠️` warning naming the seat. The panel is never smaller than it would be
-without the selector.
+`<WORK_DIR>/panel.json`. On selector failure the fallback is **mode-dependent**:
+a plan-mode seat falls back to its configured agent default with a `⚠️` warning
+naming the seat; a changeset seat (no config default) is skipped and reported with
+the selector's reason, and a run left with no seats stops explicitly rather than
+spawning anything.
 ```
 
 - [ ] **Step 2: Wire `panel.json` into the Step 2a dispatch**
@@ -64,7 +64,7 @@ python3 "<SCRIPT_DIR>/select-panel.py" \
   --registry "$REGISTRY" \
   --seats "<resolved-seat-list>" --deepest "<deepest-seat>" \
   --installed-harnesses acpx,subagent > "<WORK_DIR>/panel.json" \
-  || echo "⚠️ selector failed for this panel — running configured defaults" >&2
+  || echo "⚠️ selector failed for this panel" >&2
 
 # Dispatch with the per-seat model/effort map
 ACPX_SEAT_MODELS="<WORK_DIR>/panel.json" \

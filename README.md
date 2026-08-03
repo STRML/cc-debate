@@ -524,7 +524,6 @@ The value of multiple reviewers is getting genuinely different lenses. Some idea
 | `/debate:claude-custom-review` | Interactive picker — choose personalities and model. |
 | `/debate:fable` | Single Fable Skeptic — deep behavioral reasoning (hang paths, consumer-side gaps). Alias: `/debate:mythos`. |
 | `/debate:opus` | Single Opus Skeptic — precision checks (arithmetic, boundaries, consistency sweeps, test coverage). |
-| `/debate:panel` | (removed in 3.1.0 — `/debate:run` now sizes its own panel) |
 
 **The skeptic pair.** Fable 5 and Opus 4.8 fail differently: in panel comparisons, Fable's unique confirmed findings were behavioral (blocking/hang paths, consumer-side parser gaps) and it self-corrects by verifying library behavior; Opus wins on exact worst-case arithmetic, boundary nits, and labeling consistency, but its emergent-behavior claims get refuted more often. The two skeptic prompts are tuned to those strengths, and convergent findings between them are the strongest signal. Fable costs roughly **2x Opus**, so the pair is opt-in: set `"skeptic": ["fable","opus"]` in `claude_reviewers` for both, or `"skeptic": "opus"` for a solo Opus Skeptic. `/debate:fable` and `/debate:mythos` ignore config — invoking them by name is explicit consent to fable's cost.
 
