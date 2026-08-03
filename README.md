@@ -2,7 +2,7 @@
 
 Get a second (and third, and fourth) opinion on your implementation plan before you write a line of code. `debate` sends your plan to multiple AI reviewers in parallel, synthesizes their feedback, has them argue out contradictions, and produces a consensus verdict.
 
-**v2 is a ground-up rewrite.** Everything now runs through [acpx](https://github.com/openclaw/acpx) — a single unified CLI that talks to any coding agent. No more managing individual CLIs, session files, or API keys per provider. One config, any combination of models.
+**v2 is a ground-up rewrite.** Reviews run through [acpx](https://github.com/openclaw/acpx) — a single unified CLI that talks to any coding agent — with three direct-CLI exceptions: `antigravity` and `opus` (acpx has no adapter for their CLIs), and effort-scaled `codex` seats (acpx cannot pass `model_reasoning_effort` through). No more managing individual CLIs, session files, or API keys per provider. One config, any combination of models.
 
 ## Quick Start
 
@@ -161,6 +161,14 @@ Codex subscription via OAuth (`codex login`), and for a diff you do not trust, t
 platform-adaptive sandbox wrapper (`scripts/sandbox.py` — bwrap / sandbox-exec / docker)
 provides the OS-level isolation the old seat never had: read-only repo mount, isolated
 `HOME`, optional `--no-net`.
+
+**Effort-scaled codex seats bypass acpx.** The panel selector derives a per-seat reasoning
+effort (`effective_effort`); a `codex` seat with one runs the `codex` CLI directly —
+`codex exec --ephemeral -m <model> -c model_reasoning_effort=<level> -s read-only
+-o <outfile> -` — because acpx cannot pass the effort flag through. This is a deliberate
+direct-CLI path like `antigravity`/`opus`: any future acpx middleware (telemetry,
+token-refresh, retries) does not apply to it. Every other transport logs
+`EFFORT=<level> not supported by transport <agent>` and runs at its default effort.
 
 Use the `untrusted` preset for a diff from someone you do not trust; its seats are
 prompt-only or run without repo access. The sample's coherence test enforces that

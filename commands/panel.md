@@ -172,7 +172,11 @@ python3 "<SCRIPT_DIR>/select-panel.py" \
 
 The runner reads `.seats[<seat>].model_id` per seat and forwards it as `--model` on the acpx
 call (a flat `{seat: model_id}` map works too, and `DEBATE_MODEL=<id>` sets one model for the
-whole panel). Without this the seats run their agents' default models and the panel
+whole panel). It also reads `.seats[<seat>].effective_effort` and forwards it as `EFFORT`: a
+`codex` seat with one runs the codex CLI directly (`codex exec --ephemeral -c
+model_reasoning_effort=<level> …`) because acpx cannot pass the effort flag through; every
+other transport logs `EFFORT=<level> not supported by transport <agent>` and runs at its
+default. Without the model map the seats run their agents' default models and the panel
 selection is inert. The registry path above is the standard `$HERMES_HOME/debate-models.json`;
 point `--registry` at wherever the registry actually lives.
 

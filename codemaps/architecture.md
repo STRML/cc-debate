@@ -1,9 +1,9 @@
 # Architecture — debate plugin
-_Updated: 2026-07-11_
+_Updated: 2026-08-03_
 
 ## Overview
 
-`cc-debate` is a Claude Code plugin that sends implementation plans to multiple AI models for parallel review via [acpx](https://github.com/openclaw/acpx). It synthesizes feedback, resolves contradictions via targeted debate, and produces a consensus verdict before code is written.
+`cc-debate` is a Claude Code plugin that sends implementation plans to multiple AI models for parallel review via [acpx](https://github.com/openclaw/acpx) — with direct-CLI exceptions for `antigravity`/`opus` and an effort-scaled `codex` seat. It synthesizes feedback, resolves contradictions via targeted debate, and produces a consensus verdict before code is written.
 
 ## Top-level Layout
 
@@ -28,7 +28,10 @@ cc-debate/
          ├── 1e. Detect EXEC_MODE (team / agent)
          │
          ├── Round N: Parallel review (acpx reviewers + Claude teammates)
-         │    ├── acpx reviewers → run-parallel-acpx.sh → invoke-acpx.sh → acpx <agent>
+         │    ├── reviewers → run-parallel-acpx.sh → invoke-acpx.sh
+         │    │    ├── acpx <agent> (default)
+         │    │    ├── agy / claude --print (direct: antigravity / opus)
+         │    │    └── codex exec (direct, when EFFORT set — effort auto-scaling)
          │    │    writes <WORK_DIR>/<name>-output.md
          │    └── Claude teammates → Agent tool, run_in_background: true
          │         each writes <WORK_DIR>/claude-<persona>-r<N>-output.md
@@ -56,17 +59,21 @@ cc-debate/
 
 All command files call `bash ~/.claude/debate-scripts/<script>.sh` — literal, stable path; no version in path, no runtime glob.
 
-## acpx Agent Invocation
+## Reviewer Invocation
 
-All reviewers are invoked through `acpx --format quiet --approve-reads <agent> --file <prompt>`. The `invoke-acpx.sh` script wraps this with timeout handling, config resolution, and output file management. Reviewer configuration (agent name, timeout, system prompt) is stored in `~/.claude/debate-acpx.json`.
+Reviewers run through `invoke-acpx.sh`, which wraps timeout handling, config resolution, and output file management. Most seats go through `acpx --format quiet --approve-reads <agent> --file <prompt>`, but three run the agent CLI directly:
+- `antigravity` — `agy -p "<plan>" --sandbox` under a Python PTY (acpx has no adapter).
+- `opus` — `claude --print --permission-mode plan --model <id>` (acpx has no adapter).
+- `codex` with `EFFORT` set — `codex exec --ephemeral -m <model> -c model_reasoning_effort=<level> -s read-only -o <outfile> -` (acpx cannot pass `model_reasoning_effort`; effort auto-scaling #31 Q2). A non-codex seat with `EFFORT` logs the fallback and runs at its default.
+
+Reviewer configuration (agent name, timeout, system prompt) is stored in `~/.claude/debate-acpx.json`. The panel selector's per-seat model and effort reach the child as `MODEL`/`EFFORT` env vars via `run-parallel-acpx.sh`.
 
 ## Delivery — file-based for every reviewer (v2.6.0)
 
 Both reviewer channels converge on files in `<WORK_DIR>`, so the orchestrator reads
 outputs uniformly and never depends on a mailbox message surfacing:
 
-- **acpx reviewers** — the `invoke-acpx.sh` runner captures the agent's stdout to
-  `<WORK_DIR>/<name>-output.md`. The agent itself is write-denied.
+- **reviewers** — the `invoke-acpx.sh` runner captures the agent's output (stdout for acpx/opus, the `-o` file for direct codex) to `<WORK_DIR>/<name>-output.md`. The agent itself is write-denied.
 - **Claude teammates** (skeptic/persona, spawned via the Agent tool) — no runner to
   capture output, so each teammate writes its **own** review to
   `<WORK_DIR>/claude-<persona>-r<N>-output.md`. That single write is its only permitted

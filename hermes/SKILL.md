@@ -24,9 +24,12 @@ This is the Hermes **plugin** that orchestrates the debate workflow. Model acces
 **transport-agnostic** — acpx, opencode, and Hermes all reach the same providers (OpenRouter,
 Nous, DeepSeek, Z.AI, OpenAI...). Reviewers are dispatched through **acpx**
 (`run-acpx-review.sh` -> `run-parallel-acpx.sh`; one CLI, any provider/model from the
-registry). A `subagent` backend stays as the cheap same-model default. No bespoke "hermes
-backend". `codex-exec` is gone (repo reading is generic via acpx; Codex subscription credits
-work via the plain acpx codex agent's OAuth).
+registry) — with three direct-CLI exceptions: `antigravity` (agy), `opus` (`claude --print`),
+and an effort-scaled `codex` seat (acpx cannot pass `model_reasoning_effort` through, so a
+codex seat with an `effective_effort` runs `codex exec` directly). A `subagent` backend stays
+as the cheap same-model default. No bespoke "hermes backend". `codex-exec` is gone (repo
+reading is generic via acpx; Codex subscription credits work via the plain acpx codex agent's
+OAuth).
 
 ## The model registry + dynamic selection
 
@@ -57,18 +60,27 @@ repo_aware + family/lab + available.
    the harness/pricing before it can be picked.
 2. **Route the panel**: `python3 scripts/select-panel.py --registry $HERMES_HOME/debate-models.json
    --seats simplifier,operator,pentester --deepest pentester --installed-harnesses acpx,subagent`
-   -> seat -> {model, harness, provider, model_id, effort, cost_per_task, repo_aware}.
-   Selection: harness-feasibility -> lab diversity -> strong-reasoning model on the deepest seat
-   at effort>=xhigh -> cheapest cost_per_task elsewhere -> no duplicate model -> low-diversity
-   warning.
+   -> seat -> {model, harness, provider, model_id, effective_effort, cost_per_task,
+   effective_cost, repo_aware}. The selector derives a per-seat reasoning effort
+   (`effective_effort`, depth-tiered from the deepest seat down, capped to the model's
+   `effort_range`) and an effort-scaled `effective_cost`. Selection: harness-feasibility ->
+   lab diversity -> strong-reasoning model on the deepest seat at effort>=xhigh -> cheapest
+   cost_per_task elsewhere -> no duplicate model -> low-diversity warning. Under `--max-cost`
+   the effort pass degrades monotonically, shallowest seats first, protecting the deepest
+   seat's reasoning.
 3. **Dispatch** each seat via its harness (`subagent` -> delegate_task; else acpx), optionally
    sandboxed (`run-acpx-review.sh ... --sandbox --repo-sandbox --repo ROOT` wraps bwrap /
    sandbox-exec / docker, read-only repo mount + isolated HOME for repo-aware seats).
-   **The selector's per-seat model reaches the acpx call**: pass the panel output to
+   **The selector's per-seat model reaches the dispatch**: pass the panel output to
    `run-acpx-review.sh --models <panel.json>` (or a flat `{seat: model_id}` file). It forwards
-   the map to `run-parallel-acpx.sh`, which sets `MODEL=<model_id>` on each seat's
-   `invoke-acpx.sh`, which passes `--model <model_id>` to acpx — overriding the agent's
-   default. `--model ID` applies one model to every seat in the dispatch.
+   the map to `run-parallel-acpx.sh`, which sets `MODEL=<model_id>` AND `EFFORT=<effective_effort>`
+   on each seat's `invoke-acpx.sh`. A `codex` seat with `EFFORT` runs the codex CLI directly
+   (`codex exec --ephemeral -m <model> -c model_reasoning_effort=<level> -s read-only
+   -o <outfile> -`); every other transport logs `EFFORT=<level> not supported by transport
+   <agent>` and runs at its default. `subagent`-harness seats are filtered out before the
+   runner spawns anything — they dispatch via Hermes `delegate_task` and never receive
+   `EFFORT` or the fallback log. `--model ID` applies one model to every seat in the
+   dispatch.
 
 Seed `debate-models.json` (and refresh) marks `available:false` for harnesses you haven't
 configured; only `available:true` + an installed harness are selectable. Refresh

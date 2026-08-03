@@ -10,6 +10,7 @@ PARALLEL="$PROJECT_DIR/scripts/run-parallel-acpx.sh"
 MOCK="$SCRIPT_DIR/mock-acpx.sh"
 MOCK_AGY="$SCRIPT_DIR/mock-agy.sh"
 MOCK_CLAUDE="$SCRIPT_DIR/mock-claude.sh"
+MOCK_CODEX="$SCRIPT_DIR/mock-codex.sh"
 
 PASS=0
 FAIL=0
@@ -757,20 +758,120 @@ EOF
   rm -rf "$work_dir" "$tmp_dir"
 }
 
+# --- effort auto-scaling (#31 Q2) ---
+#
+# The runner reads .seats[<seat>].effective_effort from the selector output and
+# forwards it to each seat's invoke-acpx.sh as EFFORT=<level>. An inherited
+# EFFORT from the caller's environment must not leak into a seat without an
+# effective_effort entry.
+
+test_effort_forwarded_from_selector_output() {
+  local tmp_dir review_id work_dir codex_log
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-effort"
+  work_dir=".tmp/ai-review-${review_id}"
+  codex_log="$tmp_dir/codex-log.txt"
+
+  cat > "$tmp_dir/panel.json" << 'EOF'
+{"seats": {"alpha": {"model_id": "m-alpha", "effective_effort": "high"}, "beta": {"model_id": "m-beta", "effective_effort": "low"}}, "distinct_labs": 2}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  PATH="$SCRIPT_DIR:$PATH" \
+  SKIP_SESSION_CHECK=1 \
+  ACPX_SEAT_MODELS="$tmp_dir/panel.json" \
+  MOCK_CODEX_LOG="$codex_log" \
+  MOCK_CODEX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" "alpha" 2>/dev/null
+
+  [ "$(cat "$work_dir/alpha-exit.txt")" = "0" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  grep -q -- "-c model_reasoning_effort=high" "$codex_log" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
+test_effort_cleared_when_no_entry() {
+  # A seat without an effective_effort entry must NOT inherit the caller's
+  # EFFORT — the runner always sets EFFORT=<mapped-or-empty>.
+  local tmp_dir review_id work_dir codex_log
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-noeffort"
+  work_dir=".tmp/ai-review-${review_id}"
+  codex_log="$tmp_dir/codex-log.txt"
+
+  cat > "$tmp_dir/panel.json" << 'EOF'
+{"seats": {"alpha": {"model_id": "m-alpha"}, "beta": {"model_id": "m-beta"}}, "distinct_labs": 2}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  # Deliberately set EFFORT in the caller's env: it must not leak.
+  PATH="$SCRIPT_DIR:$PATH" \
+  SKIP_SESSION_CHECK=1 \
+  ACPX_SEAT_MODELS="$tmp_dir/panel.json" \
+  EFFORT="max" \
+  MOCK_CODEX_LOG="$codex_log" \
+  MOCK_CODEX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" "alpha" 2>/dev/null
+
+  # alpha is a codex seat with no effective_effort, so EFFORT must be empty and
+  # the seat runs via acpx (not the direct codex branch).
+  ! grep -q "model_reasoning_effort" "$codex_log" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ "$(cat "$work_dir/alpha-exit.txt")" = "0" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
+test_subagent_seat_skipped() {
+  # A subagent-harness seat is not this runner's job; it must be filtered before
+  # spawn — no exit file, and no acpx/codex invocation.
+  local tmp_dir review_id work_dir acpx_log codex_log out
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-subagent"
+  work_dir=".tmp/ai-review-${review_id}"
+  acpx_log="$tmp_dir/acpx-log.txt"
+  codex_log="$tmp_dir/codex-log.txt"
+
+  cat > "$tmp_dir/panel.json" << 'EOF'
+{"seats": {"alpha": {"model_id": "m-alpha", "harness": "subagent", "effective_effort": "high"}}, "distinct_labs": 1}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  out=$(PATH="$SCRIPT_DIR:$PATH" \
+    SKIP_SESSION_CHECK=1 \
+    ACPX_SEAT_MODELS="$tmp_dir/panel.json" \
+    MOCK_ACPX_LOG="$acpx_log" MOCK_CODEX_LOG="$codex_log" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" "alpha" 2>&1) || true
+
+  [ ! -f "$work_dir/alpha-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  echo "$out" | grep -q "subagent harness is dispatched by the caller" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ ! -s "$acpx_log" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ ! -s "$codex_log" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
 # --- Run ---
 
 echo ""
 echo "=== run-parallel-acpx.sh tests ==="
 echo ""
 
-# Create mock binaries on PATH for acpx, agy, and claude (direct CLI paths)
+# Create mock binaries on PATH for acpx, agy, claude, and codex (direct CLI paths)
 ln -sf "$MOCK" "$SCRIPT_DIR/acpx"
 chmod +x "$SCRIPT_DIR/acpx"
 ln -sf "$MOCK_AGY" "$SCRIPT_DIR/agy"
 chmod +x "$SCRIPT_DIR/agy"
 ln -sf "$MOCK_CLAUDE" "$SCRIPT_DIR/claude"
 chmod +x "$SCRIPT_DIR/claude"
-trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/agy" "$SCRIPT_DIR/claude"' EXIT
+ln -sf "$MOCK_CODEX" "$SCRIPT_DIR/codex"
+chmod +x "$SCRIPT_DIR/codex"
+trap 'rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/agy" "$SCRIPT_DIR/claude" "$SCRIPT_DIR/codex"' EXIT
 
 run_test "parallel happy path" test_parallel_happy_path
 run_test "subset reviewers" test_subset_reviewers
@@ -799,6 +900,9 @@ run_test "seat models map reaches reviewers" test_seat_models_map_reaches_review
 run_test "seat models map accepts full selector output" test_seat_models_full_selector_output
 run_test "single DEBATE_MODEL forwarded to all" test_single_model_env_forwarded
 run_test "one failure doesnt block others" test_one_failure_doesnt_block_others
+run_test "effective_effort forwarded from selector output" test_effort_forwarded_from_selector_output
+run_test "EFFORT cleared when no effective_effort entry" test_effort_cleared_when_no_entry
+run_test "subagent harness seat skipped by this runner" test_subagent_seat_skipped
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="
