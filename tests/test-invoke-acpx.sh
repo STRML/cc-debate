@@ -1359,6 +1359,28 @@ test_codex_effort_still_ensures_session() {
   rm -rf "$work_dir"
 }
 
+test_codex_effort_set_failure_falls_back() {
+  # acpx < 0.13.0 lacks `codex set reasoning_effort`. A failed set must warn
+  # and still run the review at default effort, not lose the seat.
+  local work_dir config stderr_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  stderr_out="$work_dir/invoke-stderr.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  EFFORT="high" \
+  MOCK_ACPX_SET_EXIT=1 \
+  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>"$stderr_out"
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
+  grep -q "VERDICT: APPROVED" "$work_dir/test-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
+  grep -q "acpx codex set reasoning_effort failed" "$stderr_out" || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
 test_codex_effort_uses_config_model_when_no_env() {
   # EFFORT set but no MODEL env: the config's `.model` must reach acpx.
   local work_dir config acpx_log
@@ -1495,6 +1517,7 @@ run_test "MODEL env used for opus direct CLI" test_model_env_used_for_opus
 run_test "MODEL env used for antigravity direct CLI" test_model_env_used_for_antigravity
 run_test "codex EFFORT uses acpx" test_codex_effort_uses_acpx
 run_test "codex EFFORT still ensures session" test_codex_effort_still_ensures_session
+run_test "codex EFFORT set failure falls back" test_codex_effort_set_failure_falls_back
 run_test "codex EFFORT uses config model when no env MODEL" test_codex_effort_uses_config_model_when_no_env
 run_test "non-codex EFFORT logs fallback" test_non_codex_effort_logs_fallback
 run_test "codex-exec guard message preserved in output" test_codex_exec_guard_message_preserved
