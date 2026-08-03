@@ -1196,6 +1196,38 @@ run_test "denied permission keeps the review" test_denied_permission_keeps_the_r
 run_test "denied permission blank is retried" test_denied_permission_blank_is_retried
 run_test "denied and blank forever still fails" test_denied_permission_blank_forever_still_fails
 
+# --- orphan reaping (PR #21) ---
+
+# The mock exits 0, so this is the SUCCESS path — where `timeout` never fires
+# and therefore never signals the group. That is precisely the case that
+# leaked: acpx returns, its spawned adapter keeps running and reparents to
+# init. MOCK_ACPX_ORPHAN makes the mock leave exactly such a child behind.
+test_orphaned_adapter_reaped() {
+  local work_dir config orphan_file orphan_pid i
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  orphan_file="$work_dir/orphan.pid"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_ORPHAN="$orphan_file" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2> /dev/null
+
+  [ -f "$orphan_file" ] || { rm -rf "$work_dir"; return 1; }
+  orphan_pid=$(cat "$orphan_file")
+  # Give the sweep a moment, then confirm the orphan is gone.
+  for i in 1 2 3 4 5; do
+    kill -0 "$orphan_pid" 2>/dev/null || break
+    sleep 0.2
+  done
+  if kill -0 "$orphan_pid" 2>/dev/null; then
+    echo "  orphan pid $orphan_pid still alive after reap"
+    rm -rf "$work_dir"; return 1
+  fi
+  rm -rf "$work_dir"
+}
+run_test "orphaned adapter is reaped after a success" test_orphaned_adapter_reaped
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="
 

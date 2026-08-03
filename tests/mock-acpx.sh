@@ -95,6 +95,15 @@ if [ -n "$STDERR" ]; then
   echo "$STDERR" >&2
 fi
 
+# Simulate real acpx leaving its agent adapter running after it exits: spawn a
+# child and deliberately do NOT reap it, so it outlives this process and
+# reparents to init. The pid is recorded so the test can assert that
+# invoke-acpx.sh's process-group sweep cleaned it up.
+if [ -n "${MOCK_ACPX_ORPHAN:-}" ]; then
+  sleep 300 &
+  echo $! > "$MOCK_ACPX_ORPHAN"
+fi
+
 # Only output response if non-empty (simulates truly empty output)
 if [ -n "$RESPONSE" ]; then
   echo "$RESPONSE"
