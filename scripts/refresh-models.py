@@ -287,7 +287,11 @@ def best_effort_metrics(payload, registry):
                or variants.get("max")
                or next(iter(variants.values())))   # e.g. gemini-3-1-pro's 'preview'
         if row:
-            updates[key] = _aa_to_update(row)
+            u = _aa_to_update(row)
+            # A row with no primary metrics (strengths/cost/price) is not an update —
+            # reporting it as "merged" would claim a refresh happened when nothing did.
+            if u.get("strengths") or u.get("cost") or u.get("price"):
+                updates[key] = u
     new_entries = [_aa_to_new_entry(new_by_base[b]) for b in sorted(new_by_base)]
     if new_entries:
         updates[NEW] = new_entries
@@ -669,27 +673,18 @@ def main():
     a = ap.parse_args()
 
     reg = json.load(open(a.registry))
-    # TTL guard: a very fresh manual registry is not worth a network round-trip.
-    # Parse each as_of defensively — a single hand-edited or odd value used to abort
-    # the whole refresh with a traceback instead of being ignored. Entries without an
-    # as_of (a newly hand-added model) don't count toward freshness; they must not
-    # defeat the check for the whole registry.
-    # calendar.timegm, not time.mktime: as_of is a UTC "Z" timestamp written by merge(),
-    # and mktime would interpret the naive struct as LOCAL time, skewing the cache age
-    # by the host's timezone offset (wrong refresh cadence on non-UTC hosts).
-    ages = []
-    for m in reg.values():
-        if not m.get("as_of"):
-            continue
-        try:
-            ages.append(time.time() - calendar.timegm(time.strptime(m["as_of"], "%Y-%m-%dT%H:%M:%SZ")))
-        except (ValueError, TypeError, OverflowError):
-            continue   # malformed as_of — ignore this entry, don't crash
-    if ages and min(ages) < a.ttl_hours * 3600:
+    # TTL guard: the registry FILE's mtime is the last successful sync. A per-entry
+    # as_of is individual freshness, and an orphaned model (absent from both sources,
+    # so never updated) can never advance its as_of — an aggregate of per-entry ages
+    # then considers the cache stale forever and hits the upstream APIs on every
+    # invocation (the poison pill). mtime also advances on a hand-edit, which is right:
+    # a human just touched the file. --dry-run still shows what a refresh would change,
+    # so it proceeds past the guard.
+    mtime = os.path.getmtime(a.registry) if os.path.exists(a.registry) else 0
+    if time.time() - mtime < a.ttl_hours * 3600:
         # A fresh cache needs no write — rewriting the file would reformat the seed and
-        # bury a hand edit in whole-file churn. --dry-run still shows what a refresh
-        # would change, so it proceeds past the guard.
-        print(f"cache fresh ({int(min(ages)//3600)}h old); skipping refresh (--ttl-hours {a.ttl_hours})")
+        # bury a hand edit in whole-file churn.
+        print(f"cache fresh ({int((time.time() - mtime) // 3600)}h old); skipping refresh (--ttl-hours {a.ttl_hours})")
         if not a.dry_run:
             sys.exit(0)
 
