@@ -22,15 +22,25 @@ import argparse, calendar, copy, json, os, sys, time, urllib.request
 # AA's own leaderboard JSON endpoint is not stable enough to pin, so the AA fetcher
 # points at a free mirror that serves the Artificial Analysis Intelligence Index with
 # attribution (https://automationscookbook.com/api/llm-leaderboard, meta.source
-# artificialanalysis.ai). Swap this URL for AA's own endpoint when one is confirmed;
-# the parser keys on the shape below, not the URL. LMArena's endpoint is not wired yet.
+# artificialanalysis.ai). When ARTIFICIAL_ANALYSIS_API_KEY is set, the official free
+# endpoint is used instead — it is the only source of a real per-task cost
+# (cost_per_task.total_cost), which the mirror does not expose. The parser keys on the
+# shape below, not the URL.
 FETCHERS = {
     "AA": "https://automationscookbook.com/api/llm-leaderboard",
-    "LMArena": "https://huggingface.co/api/spaces/lmarena-ai/arena-leaderboard",
+    "LMArena": ("https://datasets-server.huggingface.co/rows"
+                "?dataset=lmarena-ai%%2Fleaderboard-dataset&config=text&split=latest"
+                "&offset=%d&length=100"),
 }
+AA_FREE_URL = "https://artificialanalysis.ai/api/v2/language/models/free"
+# The overall leaderboard is ~383 rows, contiguous at the top of the text/latest split.
+LMARENA_MAX_ROWS = 500
 
-def fetch(url, timeout=15):
-    req = urllib.request.Request(url, headers={"User-Agent": "cc-debate-refresh/1.0"})
+def fetch(url, timeout=15, headers=None):
+    h = {"User-Agent": "cc-debate-refresh/1.0"}
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(url, headers=h)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "replace")
 
@@ -60,15 +70,13 @@ def _num(x):
 VARIANT_SUFFIXES = ("preview", "nonreasoning", "reasoning", "thinking",
                     "xhigh", "high", "medium", "low", "max")
 
-def _match_key(norm, reg_norm):
-    if norm in reg_norm:
-        return reg_norm[norm]
+def _split_variant(norm):
+    """Split an AA/LMArena slug into (base, variant): 'gpt56lunahigh' -> ('gpt56luna','high').
+    The base (max-effort) row has no suffix; a bare slug is base-only."""
     for suf in VARIANT_SUFFIXES:
-        if norm.endswith(suf):
-            base = norm[:-len(suf)]
-            if base in reg_norm:
-                return reg_norm[base]
-    return None
+        if norm.endswith(suf) and len(norm) > len(suf):
+            return norm[:-len(suf)], suf
+    return norm, ""
 
 def _strengths_from(index, price_in, latency):
     """Capability tags from the AA row. Never fabricates a fallback tag — an empty
@@ -91,44 +99,62 @@ def _cost_bucket(price_in):
     if price_in < 5: return "mid"
     return "premium"
 
-def best_effort_metrics(payload, registry):
-    """Map the Artificial Analysis payload into {registry_key: {strengths, price, cost}}.
+def _registry_norm(registry):
+    """normalized model_id/name -> registry key, warning on collisions.
 
-    Matches AA models to registry entries by normalized `model_id`/`name` (dot/dash and
-    case insensitive), stripping known variant suffixes so `gemini-3-1-pro-preview` maps
-    to the `gemini-3.1-pro` entry. Rows are sorted by Intelligence Index descending so
-    the base (max-effort) row wins regardless of the source's own ordering.
-
-    `effort`/`effort_range` and `cost_per_task` are deliberately NOT set: effort is a
-    run-config knob, and the source exposes whole-index cost, not a per-task cost. merge
-    unions strengths so curated tags (tricky/math/speed/general) survive.
-
-    Returns {} when nothing matched (including LMArena's metadata payload, which has no
-    `models` array).
+    The raw key is deliberately NOT a candidate: keys like `gemini_pro` normalize to
+    `geminipro`, which collides with the unrelated LMArena row `gemini-pro`. model_id
+    and name are specific enough; the key is not.
     """
-    models = (payload or {}).get("models") or []
-    if not models or not registry:
-        return {}
-    # normalized registry lookup: model_id, name and key all point at the entry
     reg_norm = {}
     for key, m in registry.items():
-        for candidate in (m.get("model_id"), m.get("name"), key):
+        for candidate in (m.get("model_id"), m.get("name")):
             if candidate:
                 n = _norm(candidate)
                 if n in reg_norm and reg_norm[n] != key:
                     print("refresh: %s and %s both normalize to '%s'; the second won't match"
                           % (reg_norm[n], key, n), file=sys.stderr)
                 reg_norm.setdefault(n, key)
-    models = sorted(models, key=lambda m: _num(m.get("intelligenceIndex")) or 0, reverse=True)
-    updates = {}
+    return reg_norm
+
+def best_effort_metrics(payload, registry):
+    """Map the Artificial Analysis payload into {registry_key: {strengths, price, cost}}.
+
+    Matches AA models to registry entries by normalized `model_id`/`name`, splitting
+    effort-variant suffixes so `gemini-3-1-pro-preview` maps to `gemini-3.1-pro` and
+    `gpt-5-6-luna-xhigh` to `gpt-5.6-luna`. The row AT the entry's configured `effort`
+    is preferred (per-effort strengths), else the base (max-effort) row.
+
+    `effort`/`effort_range` are deliberately NOT set (run-config knobs), and
+    `cost_per_task` is only set when the row carries a real per-task cost (the AA free
+    API, via normalize_aa_free); the mirror exposes only whole-index cost. merge unions
+    strengths so curated tags survive.
+
+    Returns {} when nothing matched.
+    """
+    models = (payload or {}).get("models") or []
+    if not models or not registry:
+        return {}
+    reg_norm = _registry_norm(registry)
+    by_base = {}
     for m in models:
         norm = _norm(m.get("slug")) or _norm(m.get("name"))
         if not norm:
             continue
-        key = _match_key(norm, reg_norm)
-        if not key or key in updates:
-            continue                          # base (max-effort) row wins
-        updates[key] = _aa_to_update(m)
+        base, variant = _split_variant(norm)
+        if base in reg_norm:
+            by_base.setdefault(reg_norm[base], {}).setdefault(variant, m)
+    updates = {}
+    for key, m in registry.items():
+        variants = by_base.get(key)
+        if not variants:
+            continue
+        row = (variants.get(_norm(m.get("effort")))
+               or variants.get("")
+               or variants.get("max")
+               or next(iter(variants.values())))   # e.g. gemini-3-1-pro's 'preview'
+        if row:
+            updates[key] = _aa_to_update(row)
     return updates
 
 def _aa_to_update(m):
@@ -148,9 +174,74 @@ def _aa_to_update(m):
         price["in"] = price_in
     if price_out is not None:
         price["out"] = price_out
+    cpt = _num(m.get("costPerTask"))
+    if cpt is not None:
+        price["cost_per_task"] = cpt
     if price:
         u["price"] = price
     return u
+
+def normalize_aa_free(payload):
+    """Convert the AA free-API shape to the mirror shape best_effort_metrics parses.
+
+    The free API carries the real per-task cost (artificial_analysis_intelligence_index_cost
+    -> cost_per_task.total_cost), which the mirror lacks, so cost_per_task becomes
+    available here. Other fields map onto the same keys.
+    """
+    out = {"models": []}
+    for m in (payload or {}).get("data") or []:
+        evals = m.get("evaluations") or {}
+        cost = m.get("artificial_analysis_intelligence_index_cost") or {}
+        pricing = m.get("pricing") or {}
+        out["models"].append({
+            "slug": m.get("slug") or m.get("name"),
+            "name": m.get("name"),
+            "intelligenceIndex": (evals.get("artificial_analysis_intelligence_index")
+                                  or evals.get("intelligence_index")),
+            "priceInputPer1m": pricing.get("price_1m_input_tokens"),
+            "priceOutputPer1m": pricing.get("price_1m_output_tokens"),
+            "costPerTask": (cost.get("cost_per_task") or {}).get("total_cost"),
+        })
+    return out
+
+def fetch_lmarena(timeout=20):
+    """Page the LMArena text leaderboard, returning only the 'overall' category rows."""
+    rows = []
+    offset = 0
+    while offset < LMARENA_MAX_ROWS:
+        text = fetch(FETCHERS["LMArena"] % offset, timeout)
+        payload = parse_payload(text)
+        batch = (payload or {}).get("rows") or []
+        if not batch:
+            break
+        rows += [r["row"] for r in batch if r.get("row", {}).get("category") == "overall"]
+        offset += len(batch)
+    return rows
+
+def lmarena_metrics(registry):
+    """Map LMArena overall Elo rows into {registry_key: {elo}} updates (secondary confidence)."""
+    rows = fetch_lmarena()
+    if not rows or not registry:
+        return {}
+    reg_norm = _registry_norm(registry)
+    by_base = {}
+    for r in rows:
+        norm = _norm(r.get("model_name")) or _norm(r.get("organization") or "")
+        base, variant = _split_variant(norm)
+        if base in reg_norm:
+            by_base.setdefault(reg_norm[base], {}).setdefault(variant, r)
+    updates = {}
+    for key, m in registry.items():
+        variants = by_base.get(key)
+        if not variants:
+            continue
+        row = (variants.get(_norm(m.get("effort")))
+               or variants.get("")
+               or variants.get("max")
+               or next(iter(variants.values())))
+        if row and _num(row.get("rating")) is not None:
+            updates[key] = {"elo": _num(row["rating"]), "source": "LMArena"}
+    return updates
 
 def write_registry(path, reg):
     """Atomic replace. Write to a temp then rename, so an interrupted refresh never
@@ -178,6 +269,8 @@ def merge(registry, updates):
             m["effort_range"] = u["effort_range"]
         if u.get("cost"):
             m["cost"] = u["cost"]
+        if u.get("elo") is not None:
+            m["elo"] = u["elo"]
         m.setdefault("price", {})
         for f in ("in", "out", "cost_per_task"):
             if u.get("price", {}).get(f) is not None:
@@ -220,14 +313,30 @@ def main():
     sources = ["AA", "LMArena"] if a.update_source == "all" else [a.update_source]
     for src in sources:
         try:
-            url = FETCHERS[src]
-            text = fetch(url)
-            payload = parse_payload(text)
-            # The parser is AA-specific (reads slug/intelligenceIndex/price…); don't
-            # run it on the LMArena payload, which would mis-stamp it and override AA.
-            u = best_effort_metrics(payload, reg) if src == "AA" else {}
+            if src == "LMArena":
+                u = lmarena_metrics(reg)
+            else:
+                url = FETCHERS[src]
+                headers = None
+                key = os.environ.get("ARTIFICIAL_ANALYSIS_API_KEY")
+                if src == "AA" and key:
+                    url = AA_FREE_URL
+                    headers = {"x-api-key": key}
+                text = fetch(url, headers=headers)
+                payload = parse_payload(text)
+                if src == "AA" and url == AA_FREE_URL:
+                    payload = normalize_aa_free(payload)
+                u = best_effort_metrics(payload, reg)
             if u:
-                updates = {**updates, **u}
+                # AA and LMArena update the same registry keys (AA: strengths/price,
+                # LMArena: elo), so union per key — {**updates, **u} would clobber AA's
+                # data the moment LMArena adds elo. The first source's `source` tag wins.
+                for k, v in u.items():
+                    merged = dict(updates.get(k) or {})
+                    if "source" in merged:
+                        v = {kk: vv for kk, vv in v.items() if kk != "source"}
+                    merged.update(v)
+                    updates[k] = merged
                 print(f"{src}: merged {len(u)} model updates")
             else:
                 print(f"{src}: no matching models parsed — registry unchanged")

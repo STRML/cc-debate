@@ -104,6 +104,49 @@ check("AA merge: strengths unioned", o3["strengths"]==["code","cost","reasoning"
 check("AA merge: source recorded", o3.get("source")=="AA")
 check("AA merge: as_of recorded", bool(o3.get("as_of")))
 
+# --- per-effort strengths: the row at the entry's configured effort is used ---
+PER_EFFORT_REG = {"foo": {"name":"Foo","harness":"acpx","provider":"x","model_id":"foo",
+  "effort":"low","effort_range":["low"],"strengths":["general"],
+  "price":{"in":1.0,"out":2.0,"cost_per_task":0.01},"family":"x","lab":"x",
+  "cost":"cheap","repo_aware":False,"available":True}}
+PER_EFFORT_AA = {"ok": True, "models": [
+  {"slug": "foo", "intelligenceIndex": 60, "priceInputPer1m": 1.0, "priceOutputPer1m": 2.0},
+  {"slug": "foo-low", "intelligenceIndex": 35, "priceInputPer1m": 1.0, "priceOutputPer1m": 2.0},
+]}
+UPD_PE = rm.best_effort_metrics(PER_EFFORT_AA, PER_EFFORT_REG)
+check("per-effort: low-effort row used (idx 35, no reasoning)", UPD_PE.get("foo", {}).get("strengths")==["cost"], UPD_PE.get("foo"))
+
+# --- cost-per-task via the AA free API shape ---
+AA_FREE = {"status": "ok", "data": [{"slug": "gpt-5-6-luna", "name": "GPT-5.6 Luna",
+  "evaluations": {"artificial_analysis_intelligence_index": 51.2},
+  "artificial_analysis_intelligence_index_cost": {"cost_per_task": {"total_cost": 0.18}},
+  "pricing": {"price_1m_input_tokens": 0.2, "price_1m_output_tokens": 1.2}}]}
+NORM = rm.normalize_aa_free(AA_FREE)
+check("aa-free: normalized to mirror shape", NORM["models"][0]["costPerTask"]==0.18, NORM["models"][0])
+UPD_CPT = rm.best_effort_metrics(NORM, REG_AA)
+check("aa-free: cost_per_task mapped from cost_per_task.total_cost", UPD_CPT.get("gpt56_luna", {}).get("price", {}).get("cost_per_task")==0.18, UPD_CPT.get("gpt56_luna"))
+
+# --- LMArena elo (secondary confidence) ---
+LMARENA_ROWS = [
+  {"model_name": "gpt-5-6-luna", "category": "overall", "rating": 1380.2, "organization": "openai"},
+  {"model_name": "gemini-3.1-pro-preview", "category": "overall", "rating": 1479.5, "organization": "google"},
+  {"model_name": "gemini-pro", "category": "overall", "rating": 1130.7, "organization": "google"},
+  {"model_name": "random-model", "category": "overall", "rating": 1300.0, "organization": "x"},
+]
+_old_fetch = rm.fetch_lmarena
+rm.fetch_lmarena = lambda: LMARENA_ROWS
+try:
+    UPD_ELO = rm.lmarena_metrics(REG_AA)
+finally:
+    rm.fetch_lmarena = _old_fetch
+check("lmarena: elo mapped", UPD_ELO.get("gpt56_luna", {}).get("elo")==1380.2, UPD_ELO)
+check("lmarena: gemini matches preview, not the key-colliding 'gemini-pro'",
+      UPD_ELO.get("gemini_31_pro", {}).get("elo")==1479.5, UPD_ELO)
+check("lmarena: unknown model ignored", "random_model" not in UPD_ELO, UPD_ELO)
+o4 = rm.merge(clone(REG_AA), clone(UPD_ELO))["gpt56_luna"]
+check("merge: elo stored", o4.get("elo")==1380.2, o4)
+check("merge: elo merge keeps AA fields when combined", o4["strengths"]==["speed","cost"], o4["strengths"])
+
 print()
 print("PASS" if fails==0 else f"FAIL ({fails})")
 sys.exit(0 if fails==0 else 1)

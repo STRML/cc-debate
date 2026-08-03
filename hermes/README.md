@@ -10,11 +10,13 @@
   strengths + effort + harness + repo_aware + family/lab + available).
 - `../scripts/select-panel.py` — pick the model mix for the seats (diversity/completeness/
   effort/budget/harness).
-- `../scripts/refresh-models.py` — the refresh path for registry metrics. It pulls the
-  Artificial Analysis Intelligence Index (via a mirror of artificialanalysis.ai), ADDS
-  capability tags to `strengths`, updates `price.in`/`price.out`, and re-derives the
-  `cost` bucket. It preserves user fields (harness/repo_aware/available/effort/
-  cost_per_task). The LMArena extractor is not written yet. Offline-safe; TTL-guarded.
+- `../scripts/refresh-models.py` — the refresh path for registry metrics. Pulls the
+  Artificial Analysis Intelligence Index (via a mirror of artificialanalysis.ai) and
+  LMArena human-preference Elo (a new `elo` field). ADDS capability tags to `strengths`
+  at the entry's configured effort, updates `price.in`/`price.out`, re-derives the
+  `cost` bucket. Preserves user fields (harness/repo_aware/available/effort/
+  cost_per_task). Set `ARTIFICIAL_ANALYSIS_API_KEY` to also refresh `cost_per_task`
+  from AA's own API (the mirror has no per-task cost). Offline-safe; TTL-guarded.
 - `../scripts/sandbox.py` — platform-adaptive sandbox (bwrap / sandbox-exec / docker) for
   repo-aware or untrusted seats.
 - `../scripts/run-acpx-review.sh` — acpx dispatch wrapper (fan-out/timeout/retry in

@@ -30,7 +30,8 @@
     "repo_aware": false,
     "available": true,
     "source": "AA",
-    "as_of": "2026-08-02T17:43:54Z"
+    "as_of": "2026-08-03T02:10:58Z",
+    "elo": 1429.2137372658854
   },
   "gpt56_terra": {
     "name": "GPT-5.6 Terra",
@@ -42,7 +43,8 @@
     "strengths": [
       "code",
       "general",
-      "reasoning"
+      "reasoning",
+      "speed"
     ],
     "effort": "high",
     "effort_range": [
@@ -61,7 +63,8 @@
     "repo_aware": false,
     "available": false,
     "source": "AA",
-    "as_of": "2026-08-02T17:43:54Z"
+    "as_of": "2026-08-03T02:10:58Z",
+    "elo": 1448.8252228749911
   },
   "gpt56_sol": {
     "name": "GPT-5.6 Sol",
@@ -93,7 +96,8 @@
     "repo_aware": false,
     "available": false,
     "source": "AA",
-    "as_of": "2026-08-02T17:43:54Z"
+    "as_of": "2026-08-03T02:10:58Z",
+    "elo": 1455.2892466368594
   },
   "glm52": {
     "name": "GLM-5.2",
@@ -124,7 +128,8 @@
     "repo_aware": true,
     "available": true,
     "source": "AA",
-    "as_of": "2026-08-02T17:43:54Z"
+    "as_of": "2026-08-03T02:10:58Z",
+    "elo": 1464.3590810035835
   },
   "claude_opus5": {
     "name": "Claude Opus 5",
@@ -155,7 +160,8 @@
     "repo_aware": false,
     "available": false,
     "source": "AA",
-    "as_of": "2026-08-02T17:43:54Z"
+    "as_of": "2026-08-03T02:10:58Z",
+    "elo": 1511.5966036132436
   },
   "gemini_pro": {
     "name": "Gemini 3.1 Pro",
@@ -185,7 +191,8 @@
     "repo_aware": true,
     "available": false,
     "source": "AA",
-    "as_of": "2026-08-02T17:43:54Z"
+    "as_of": "2026-08-03T02:10:58Z",
+    "elo": 1479.45578371284
   },
   "deepseek_v4pro": {
     "name": "DeepSeek V4 Pro",
@@ -216,6 +223,7 @@
     "repo_aware": true,
     "available": true,
     "source": "AA",
-    "as_of": "2026-08-02T17:43:54Z"
+    "as_of": "2026-08-03T02:10:58Z",
+    "elo": 1450.0776443762425
   }
 }
