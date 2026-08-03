@@ -58,6 +58,34 @@ a6, err6, nl6 = select_panel.pick(ONELAB, ["a", "b", "c"], "c", [], "xhigh")
 u = [m["key"] for m in a6.values()]
 check("no duplicate model even with one lab", len(u) == len(set(u)), str(u))
 
+# 8. F5: --max-cost below every available model is a hard error, never a silent
+#    unbudgeted panel. The error must name the cheapest available cost.
+a8, err8, nl8 = select_panel.pick(FIX, SEATS, "pentester", [], "xhigh", max_cost=0.001)
+check("budget below cheapest model is a hard error",
+      a8 is None and err8 is not None and "cheapest" in err8, err8)
+
+# 9. F10: --max-cost that cannot fill every requested seat is a hard error; a
+#    3-seat request must not silently collapse to 1 seat.
+a9, err9, nl9 = select_panel.pick(FIX, SEATS, "pentester", [], "xhigh", max_cost=0.10)
+check("budget shortfall for requested seats is a hard error",
+      a9 is None and err9 is not None and "cannot fill" in err9,
+      f"keys={list(a9.keys()) if a9 else None} err={err9}")
+
+# 10. F13: an available entry missing price/strengths/lab is skipped with a warning,
+#     not a crash; the rest of the panel still builds.
+MAL = {k: v for k, v in FIX.items()}
+MAL["broken"] = {"name": "Broken", "harness": "acpx", "provider": "x", "model_id": "b",
+                 "family": "b", "effort": "high", "effort_range": ["high"], "cost": "cheap",
+                 "repo_aware": False, "available": True}
+a10, err10, nl10 = select_panel.pick(MAL, SEATS, "pentester", [], "xhigh", max_cost=1.0)
+picked = [m["key"] for m in a10.values()] if a10 else []
+check("malformed available entry skipped, panel survives",
+      a10 is not None and "broken" not in picked, f"picked={picked} err={err10}")
+
+# 11. a budget that fits builds the full panel (control for 8-10)
+a11, err11, nl11 = select_panel.pick(FIX, SEATS, "pentester", [], "xhigh", max_cost=1.0)
+check("budget that fits builds full panel", a11 is not None and len(a11) == len(SEATS), str(a11))
+
 print()
 print("PASS" if fails == 0 else f"FAIL ({fails})")
 sys.exit(0 if fails == 0 else 1)
