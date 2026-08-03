@@ -1204,6 +1204,14 @@ run_test "denied and blank forever still fails" test_denied_permission_blank_for
 # init. MOCK_ACPX_ORPHAN makes the mock leave exactly such a child behind.
 test_orphaned_adapter_reaped() {
   local work_dir config orphan_file orphan_pid i
+  # The reap only works when the acpx call has its own process group, which
+  # `timeout`/`gtimeout` provides. Without one (e.g. macOS CI without
+  # coreutils) the mock shares this script's group and reap_process_group
+  # correctly declines — that is the designed fallback, so skip rather than
+  # fail. Verified on ubuntu (coreutils present) and local hosts.
+  if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1; then
+    return 0
+  fi
   work_dir=$(setup_work_dir)
   config=$(setup_config "$work_dir")
   orphan_file="$work_dir/orphan.pid"
