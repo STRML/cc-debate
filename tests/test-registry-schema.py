@@ -42,6 +42,8 @@ def main():
                 errs.append(f"{k}: price.{f} must be non-negative number")
         for flag in ("repo_aware", "available"):
             if not isinstance(m.get(flag), bool): errs.append(f"{k}: {flag} not bool")
+        if m.get("elo") is not None and not isinstance(m.get("elo"), (int, float)):
+            errs.append(f"{k}: elo must be a number")
         # NOTE: lab uniqueness is NOT enforced here — the registry legitimately holds
         # multiple models from one lab (e.g. GPT-5.6 Luna/Terra/Sol == openai). Lab
         # diversity is enforced by the SELECTOR (Task 2) at panel-pick time, not here.

@@ -28,6 +28,11 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+if [ "$REPO_SANDBOX" = "1" ] && [ -z "$REPO" ]; then
+  echo "run-acpx-review: --repo-sandbox requires --repo ROOT (the mount target)" >&2
+  exit 2
+fi
+
 SANDBOX_ARGS=()
 [ "$REPO_SANDBOX" = "1" ] && SANDBOX_ARGS+=(--repo-sandbox)
 [ -n "$REPO" ] && SANDBOX_ARGS+=(--repo "$REPO")
