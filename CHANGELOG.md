@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.1.1] — 2026-08-03 (codex effort through acpx; changeset fixes)
+
+- **Codex effort now routes through acpx, not the direct CLI.** Effort auto-scaling shipped
+  a direct-`codex` branch in 3.0.0 on an incomplete check of acpx's flags — acpx 0.13.0
+  actually exposes `codex set reasoning_effort <level>` session config, which `acpx codex
+  exec` honors. A live run showed the direct branch brittle. Codex is now a normal acpx
+  seat: effort is set just-in-time via `acpx codex set reasoning_effort` before the exec.
+  This also fixed a `set -e` bug in `reap_process_group` where a failing `ps` aborted a
+  seat after a successful exec.
+- **Changeset seats fall back to their configured default.** The 3.1.0 wording said a lens
+  seat with no selector assignment has no config default and must be skipped. A lens seat
+  that IS a `reviewers` config key (executor-b, cartographer, deepseek) has one, so it now
+  falls back like plan mode. Only a lens seat with no config entry is skipped.
+- **`/debate:run` on a specific PR's changeset** — document `DEBATE_FREEZE_DIFF=1` (capture
+  the base→head diff and freeze it; the runner regenerates from a clean tree otherwise).
+- **`/debate:acpx-setup` warns when acpx < 0.13.0** — the effort auto-scaling baseline.
+  `acpx-env-snapshot.sh` compares the installed version and prints the upgrade command.
+
 ## [3.1.0] — 2026-08-03 (one dynamic /debate:run)
 
 - **`/debate:run` is now fully dynamic; `/debate:panel` is gone.** The panel picks its
