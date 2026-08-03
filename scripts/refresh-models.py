@@ -14,16 +14,24 @@ strengths (reasoning/code/cost/speed), updates price.in/price.out, re-derives th
 bucket, and records a `source` + `as_of` so a stale cache is visible. If every source
 fails the last good copy is kept untouched and we exit 1 (offline fallback).
 
-A model id a datasource returns that the registry doesn't know is AUTO-ADDED as a new
-schema-valid entry. The datasource supplies name, slug, price, strengths and/or elo;
-everything else is a safe default (harness `acpx`, effort `medium` over the full
-effort_range, repo_aware false, family/lab derived from the creator when known else
-'unknown'). Auto-added entries are `available: false` — never selectable until a user
-enables them and confirms the harness, so the refresh can grow the registry without
-silently changing what the selector may pick.
+Auto-add is CAPPED and GATED. A model id a datasource returns that the registry doesn't
+know is only auto-added when it is a genuine registry improvement: it DOMINATES an
+existing available model (equal-or-better performance — AA intelligence index, else
+LMArena Elo — at equal-or-lower price — cost_per_task, else a blended in/out token
+price — with at least one strictly), or it is the strongest model from a lab the
+registry doesn't have yet (one per new lab). Mid-tier duplicates and strict tradeoffs
+are skipped, so a first live refresh cannot grow the registry by hundreds of stubs.
+What survives is added as a schema-valid entry with safe defaults: harness `acpx`,
+effort `medium` over the full effort_range, repo_aware false, family/lab derived from
+the creator when known else 'unknown', `available: false` — never selectable until a
+user enables them and confirms the harness. Metric refreshes on existing entries always
+apply automatically; ADDING entries requires confirmation (interactive `[y/N]` prompt,
+skipped in non-interactive runs, `--apply-new` to accept headless, `--dry-run` to
+preview what would change without writing).
 
 Usage:
-  refresh-models.py --registry <debate-models.json> [--out <path>] [--update-source AA|LMArena|all] [--ttl-hours N]
+  refresh-models.py --registry <debate-models.json> [--out <path>]
+      [--update-source AA|LMArena|all] [--ttl-hours N] [--apply-new] [--dry-run]
 """
 import argparse, calendar, copy, json, os, sys, time, urllib.request
 
@@ -157,7 +165,7 @@ def _key_for_new(model_id, out):
     return key
 
 def _new_entry(*, name, model_id, creator=None, provider=None, strengths=None,
-               price=None, cost=None, elo=None, source):
+               price=None, cost=None, elo=None, index=None, source):
     """Schema-complete registry entry for a model a datasource returned that the registry
     doesn't know yet. Everything the datasource can't provide is a SAFE default:
     harness 'acpx' (the default transport), available False (auto-added models are NEVER
@@ -184,6 +192,8 @@ def _new_entry(*, name, model_id, creator=None, provider=None, strengths=None,
     }
     if elo is not None:
         entry["elo"] = elo
+    if index is not None:
+        entry["index"] = index
     return entry
 
 def _strengths_from(index, price_in, latency):
@@ -282,6 +292,10 @@ def _aa_to_update(m):
     strengths = _strengths_from(idx, price_in, latency)
     if strengths:
         u["strengths"] = strengths
+    if idx is not None:
+        # Store the raw index so the auto-add cap can compare a new-model candidate
+        # against this entry on the same performance scale, not just last week's elo.
+        u["index"] = idx
     bucket = _cost_bucket(price_in)
     if bucket:
         u["cost"] = bucket
@@ -313,7 +327,7 @@ def _aa_to_new_entry(m):
     return _new_entry(name=name, model_id=_strip_variant_slug(slug),
                       creator=m.get("creator") or m.get("organization"),
                       strengths=_strengths_from(idx, price_in, _num(m.get("latencySeconds"))) or [],
-                      price=price, cost=_cost_bucket(price_in), source="AA")
+                      price=price, cost=_cost_bucket(price_in), index=idx, source="AA")
 
 def normalize_aa_free(payload):
     """Convert the AA free-API shape to the mirror shape best_effort_metrics parses.
@@ -439,21 +453,100 @@ def _merge_new(a, b):
                 old[k] = v
     return list(by_id.values())
 
-def merge(registry, updates):
-    out = copy.deepcopy(registry)   # never mutate the caller's nested dicts (F9)
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    # New-model candidates (the reserved NEW key) are schema-complete entries to ADD.
-    # available:false keeps them inert — never selectable until a user opts in. A model
-    # id the registry already knows is skipped: the curated entry wins, always.
-    known = {_norm(m.get("model_id")) for m in out.values()}
-    for cand in updates.get(NEW) or []:
-        nid = _norm(cand.get("model_id"))
-        if not nid or nid in known:
+def _perf_metric(m):
+    """Comparable performance for a model: the AA intelligence index when present, else
+    the LMArena Elo. Returns (value, source) with source in ('index', 'elo'), or
+    (None, None) when a model has neither. Dominance comparisons only happen within the
+    same source — an index (~50) and an Elo (~1400) are different scales."""
+    idx = _num(m.get("index"))
+    if idx is not None:
+        return idx, "index"
+    elo = _num(m.get("elo"))
+    if elo is not None:
+        return elo, "elo"
+    return None, None
+
+def _price_metric(m):
+    """Comparable price for a model: cost_per_task when the datasource gave a real
+    per-task figure, else a blended in/out token price (0.3*in + 0.7*out — a typical
+    agentic read/write mix). Returns None when the model has no pricing at all, so an
+    LMArena-only candidate (0.0 price placeholders) is never judged on price."""
+    cpt = _num((m.get("price") or {}).get("cost_per_task"))
+    if cpt not in (None, 0.0):
+        return cpt
+    p = m.get("price") or {}
+    inn, out = _num(p.get("in")), _num(p.get("out"))
+    if (inn in (None, 0.0)) and (out in (None, 0.0)):
+        return None
+    return 0.3 * (inn or 0.0) + 0.7 * (out or 0.0)
+
+def _fmt_perf(m):
+    p, s = _perf_metric(m)
+    return "-" if p is None else ("%.1f (%s)" % (p, s))
+
+def _fmt_price(m):
+    p = _price_metric(m)
+    return "-" if p is None else ("$%.3g" % p)
+
+def _cap_new(candidates, out):
+    """Filter auto-add candidates down to genuine registry improvements (#31).
+
+    A candidate is worth adding when either:
+      - it DOMINATES an existing *available* model — equal-or-better performance (AA
+        intelligence index, else LMArena Elo) at equal-or-lower price (cost_per_task,
+        else blended in/out), with at least one strictly better; or
+      - it is the strongest model from a lab the registry does not have yet (lab
+        diversity — at most ONE per new lab, so a fresh lab's whole lineup doesn't flood
+        the registry).
+
+    Everything else — mid-tier duplicates of labs already present, and strict
+    perf/price tradeoffs — is skipped, keeping the registry lean. 'unknown' is not a
+    real lab: an unrecognized creator's model is a data stub, not a diversity win, so it
+    can only get in by dominating (and usually can't, since it lacks pricing).
+
+    `out` must already have this refresh's metric updates applied (see merge), so a
+    candidate's index is compared against the registry's fresh index, not last week's.
+    """
+    if not candidates:
+        return []
+    labs = {m.get("lab") for m in out.values() if m.get("lab")}
+    avail = [m for m in out.values() if m.get("available")]
+    best_per_new_lab = {}
+    results = []
+    for cand in candidates:
+        pval, psrc = _perf_metric(cand)
+        price = _price_metric(cand)
+        lab = cand.get("lab")
+        if lab and lab != "unknown" and lab not in labs:
+            cur = best_per_new_lab.get(lab)
+            if cur is None:
+                best_per_new_lab[lab] = cand
+            else:
+                cp, _ = _perf_metric(cur)
+                if pval is not None and (cp is None or pval > cp):
+                    best_per_new_lab[lab] = cand
+        if pval is None or price is None:
             continue
-        entry = dict(cand)
-        entry["as_of"] = now
-        out[_key_for_new(cand["model_id"], out)] = entry
-        known.add(nid)
+        for em in avail:
+            ep, esrc = _perf_metric(em)
+            eprice = _price_metric(em)
+            if ep is None or eprice is None or esrc != psrc:
+                continue   # different performance scale — not comparable
+            if pval >= ep and price <= eprice and (pval > ep or price < eprice):
+                results.append(cand)
+                break
+    seen = {c.get("model_id") for c in results}
+    for cand in best_per_new_lab.values():
+        if cand.get("model_id") not in seen:
+            results.append(cand)
+    return results
+
+def _apply_metrics(out, updates):
+    """Apply per-key metric updates to a registry dict IN PLACE: union strengths, set
+    effort/effort_range/cost/elo/index, patch price fields, record source + as_of.
+    Never touches the user-owned fields (harness/provider/repo_aware/available/
+    cost_per_task unless the update carries one) and never adds new-model candidates."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     for key, m in out.items():
         u = updates.get(key)
         if not u:
@@ -470,6 +563,8 @@ def merge(registry, updates):
             m["cost"] = u["cost"]
         if u.get("elo") is not None:
             m["elo"] = u["elo"]
+        if u.get("index") is not None:
+            m["index"] = u["index"]
         m.setdefault("price", {})
         for f in ("in", "out", "cost_per_task"):
             if u.get("price", {}).get(f) is not None:
@@ -478,12 +573,68 @@ def merge(registry, updates):
         m["as_of"] = now
     return out
 
+def merge(registry, updates, add_new=True):
+    out = copy.deepcopy(registry)   # never mutate the caller's nested dicts (F9)
+    _apply_metrics(out, updates)
+    # New-model candidates (the reserved NEW key) are schema-complete entries to ADD —
+    # but only the ones _cap_new keeps (frontier winners + one per new lab). A model id
+    # the registry already knows is skipped: the curated entry wins, always.
+    if add_new:
+        known = {_norm(m.get("model_id")) for m in out.values()}
+        for cand in _cap_new(updates.get(NEW) or [], out):
+            nid = _norm(cand.get("model_id"))
+            if not nid or nid in known:
+                continue
+            entry = dict(cand)
+            entry["as_of"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            out[_key_for_new(cand["model_id"], out)] = entry
+            known.add(nid)
+    return out
+
+def _confirm_new(would_add, apply_new=False, interactive=None):
+    """Gate new-model additions (metric refreshes are NOT gated — only ADDING entries
+    grows the curated registry, so it needs consent).
+
+    - `apply_new`: accept headless (cron/CI) without prompting.
+    - no candidates: trivially accept (nothing to add).
+    - interactive (TTY): print the proposed models and prompt "add N new model(s)?
+      [y/N]"; anything but an explicit y/yes declines.
+    - non-interactive (no TTY): decline with a clear message — pass --apply-new to
+      accept. Never silently adds a model a human didn't see.
+    """
+    if not would_add:
+        return True
+    if apply_new:
+        return True
+    print("proposed new models (arrive available:false until enabled):")
+    for cand in would_add:
+        print("  - %s (%s)  lab=%s  perf=%s  price=%s"
+              % (cand.get("name"), cand.get("model_id"), cand.get("lab"),
+                 _fmt_perf(cand), _fmt_price(cand)))
+    if interactive is None:
+        interactive = sys.stdin.isatty()
+    if not interactive:
+        print("non-interactive run: skipping %d new model addition(s) "
+              "(pass --apply-new to accept them)" % len(would_add), file=sys.stderr)
+        return False
+    try:
+        ans = input("add %d new model(s)? [y/N] " % len(would_add))
+        return ans.strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--registry", required=True)
     ap.add_argument("--out", default=None)
     ap.add_argument("--update-source", default="all", choices=["AA", "LMArena", "all"])
     ap.add_argument("--ttl-hours", type=float, default=24*7)
+    ap.add_argument("--apply-new", action="store_true",
+                    help="add new models the datasources surfaced without prompting "
+                         "(headless/cron runs)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="print what the refresh would change (metric updates + the "
+                         "new models the cap would add) and exit without writing")
     a = ap.parse_args()
 
     reg = json.load(open(a.registry))
@@ -565,15 +716,37 @@ def main():
         print("registry unchanged — no datasource merged")
         sys.exit(0)
 
-    out = merge(reg, updates)
-    added = sorted(k for k in out if k not in reg)
+    # What the cap would add, evaluated against the registry WITH this refresh's metric
+    # updates applied (fresh index/elo make the dominance comparison like-for-like).
+    would_add = _cap_new(updates.get(NEW) or [],
+                         _apply_metrics(copy.deepcopy(reg), updates))
     dst = a.out or a.registry
+
+    if a.dry_run:
+        n_upd = len(updates) - (1 if NEW in updates else 0)
+        print(f"dry-run: {n_upd} model update(s)")
+        if would_add:
+            print(f"dry-run: would add {len(would_add)} new model(s) (available:false):")
+            for cand in would_add:
+                print("  - %s (%s)  lab=%s  perf=%s  price=%s"
+                      % (cand.get("name"), cand.get("model_id"), cand.get("lab"),
+                         _fmt_perf(cand), _fmt_price(cand)))
+        else:
+            print("dry-run: no new models pass the cap (frontier improvement or new lab)")
+        sys.exit(0)
+
+    add_new = _confirm_new(would_add, apply_new=a.apply_new)
+
+    out = merge(reg, updates, add_new=add_new)
     write_registry(dst, out)
+    added = sorted(k for k in out if k not in reg)
     msg = f"registry refreshed ({len(out)} entries) -> {dst}"
     if added:
         # Auto-added models are available:false — inert until a user enables them and
         # confirms the harness. Report the growth so it's visible, not silent.
         msg += f"; new models added (available:false): {', '.join(added)}"
+    elif would_add:
+        msg += f"; {len(would_add)} proposed new model(s) skipped (use --apply-new to accept)"
     print(msg)
 
 if __name__ == "__main__":

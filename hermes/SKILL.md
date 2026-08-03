@@ -44,8 +44,14 @@ repo_aware + family/lab + available.
    `cost_per_task` from a real per-task figure, set `ARTIFICIAL_ANALYSIS_API_KEY` (AA's
    free tier; the keyless mirror has no per-task cost). Offline-safe: if every source
    fails, the last good copy is kept.
-   A model id a datasource returns that the registry doesn't know is **auto-added** as a
-   new schema-valid entry with safe defaults: `harness:"acpx"`, `effort:"medium"` over the
+   Auto-add is **capped**: a model id a datasource returns that the registry doesn't
+   know is only added when it is a genuine improvement — it **dominates** an existing
+   `available` model (equal-or-better performance — AA intelligence index, else LMArena
+   Elo — at equal-or-lower price — `cost_per_task`, else a blended in/out token price),
+   or it is the **strongest model from a lab the registry doesn't have yet** (one per new
+   lab). Mid-tier duplicates and strict perf/price tradeoffs are skipped, so a first live
+   refresh can't grow the registry by hundreds of stubs. What survives is added as a
+   schema-valid entry with safe defaults: `harness:"acpx"`, `effort:"medium"` over the
    full effort_range, `repo_aware:false`, family/lab from the creator when known else
    `unknown`. It arrives **`available:false`** — never selectable. Enable it and confirm
    the harness/pricing before it can be picked.
@@ -63,6 +69,13 @@ Seed `debate-models.json` (and refresh) marks `available:false` for harnesses yo
 configured; only `available:true` + an installed harness are selectable. Refresh
 auto-adds brand-new datasource models the same way — they arrive `available:false` and
 stay inert until you enable them.
+
+**Adding new models needs consent.** Metric refreshes on existing entries (strengths,
+price, elo) always apply automatically. But ADDING entries grows the curated registry,
+so the refresh prints the proposed models and prompts `add N new model(s)? [y/N]`
+before writing them. In a non-interactive run (cron/CI, no TTY) the additions are
+skipped unless you pass **`--apply-new`**. Use **`--dry-run`** to preview what would
+be added (and how many metric updates) without writing anything.
 
 ## When to use
 

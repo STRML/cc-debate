@@ -16,10 +16,13 @@
   at the entry's configured effort, updates `price.in`/`price.out`, re-derives the
   `cost` bucket. Preserves user fields (harness/repo_aware/available/effort/
   cost_per_task). Set `ARTIFICIAL_ANALYSIS_API_KEY` to also refresh `cost_per_task`
-  from AA's own API (the mirror has no per-task cost). A model id a datasource returns
-  that the registry doesn't know is auto-added as a schema-valid entry with safe
-  defaults and `available:false` — never selectable until you enable it. Offline-safe;
-  TTL-guarded.
+  from AA's own API (the mirror has no per-task cost). Auto-add of unknown datasource
+  models is **capped** to price-performance winners (a candidate that dominates an
+  existing `available` model) plus at most one strong model per new lab; mid-tier
+  duplicates are skipped, and anything added lands as `available:false`. Adding entries
+  requires confirmation (`add N new model(s)? [y/N]`), is skipped in non-interactive
+  runs unless `--apply-new` is passed, and can be previewed with `--dry-run`. Metric
+  refreshes on existing entries always apply. Offline-safe; TTL-guarded.
 - `../scripts/sandbox.py` — platform-adaptive sandbox (bwrap / sandbox-exec / docker) for
   repo-aware or untrusted seats.
 - `../scripts/run-acpx-review.sh` — acpx dispatch wrapper (fan-out/timeout/retry in
@@ -30,8 +33,11 @@
 ```bash
 # seed the registry
 cp hermes/templates/debate-models.json $HERMES_HOME/debate-models.json
-# (edit `available`/`harness` to match what youve configured; optional) refresh:
+# (edit `available`/`harness` to match what youve configured; optional) refresh —
+# interactive, will prompt before adding new models; headless/cron: pass --apply-new:
 python3 scripts/refresh-models.py --registry $HERMES_HOME/debate-models.json --ttl-hours 168
+python3 scripts/refresh-models.py --registry $HERMES_HOME/debate-models.json --ttl-hours 168 --apply-new
+python3 scripts/refresh-models.py --registry $HERMES_HOME/debate-models.json --ttl-hours 168 --dry-run
 ```
 
 Then trigger the skill: `debate this plan`, `debate` (reviews the current changeset), or use
