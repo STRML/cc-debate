@@ -110,11 +110,17 @@ for s in <seat1> <seat2> ...; do
   if [ -z "$a" ]; then
     echo "UNCONFIGURED $s"
   elif [ "$a" = "antigravity" ]; then
-    command -v agy >/dev/null 2>&1 && echo "HAVE $s" || echo "UNCONFIGURED $s"
+    # agy is invoked through python3 (invoke-acpx.sh runs it under a PTY), so both
+    # must be present for the seat to actually spawn.
+    command -v agy >/dev/null 2>&1 && { command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; } \
+      && echo "HAVE $s" || echo "UNCONFIGURED $s"
   elif [ "$a" = "opus" ]; then
     command -v claude >/dev/null 2>&1 && echo "HAVE $s" || echo "UNCONFIGURED $s"
   elif [ -f "$HOME/.acpx/config.json" ] && cmd=$(jq -r --arg a "$a" '.agents[$a].command // empty' "$HOME/.acpx/config.json") && [ -n "$cmd" ] && [ -x "$cmd" ]; then
-    echo "HAVE $s"
+    # The wrapper is executable — check the runtime it boots (an opencode-backed
+    # agent's wrapper does `exec opencode acp`), so a missing binary is caught
+    # here rather than as a phantom FAILED seat.
+    command -v opencode >/dev/null 2>&1 && echo "HAVE $s" || echo "UNCONFIGURED $s"
   elif command -v "$a" >/dev/null 2>&1; then
     echo "HAVE $s"
   else
