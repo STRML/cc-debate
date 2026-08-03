@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/refresh-models.py (debate v3, #31)."""
-import importlib.util, json, os, sys
+import builtins, importlib.util, json, os, sys, tempfile
 _here = os.path.dirname(os.path.abspath(__file__))
 _src = os.path.join(_here, "..", "scripts", "refresh-models.py")
 _spec = importlib.util.spec_from_file_location("refresh_models", _src)
 rm = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(rm)
+# Import the real schema gate's constants so the auto-added entries are checked against
+# the same invariants tests/test-registry-schema.py enforces, not a copy.
+_ts = importlib.util.spec_from_file_location("reg_schema", os.path.join(_here, "test-registry-schema.py"))
+reg_schema = importlib.util.module_from_spec(_ts); _ts.loader.exec_module(reg_schema)
+
+NEW = rm.NEW
 
 def clone(o): return json.loads(json.dumps(o))
 
@@ -77,7 +83,7 @@ check("AA: cost bucket derived from price", UPD.get("gpt56_luna", {}).get("cost"
 check("AA: price mapped from per-M", UPD.get("gpt56_luna", {}).get("price")=={"in":1.0,"out":6.0}, UPD.get("gpt56_luna"))
 check("AA: base (max) row wins over -xhigh", UPD.get("gpt56_luna", {}).get("strengths")==["reasoning","code","cost"])
 check("AA: gemini matches via variant suffix (preview)", "gemini_31_pro" in UPD, UPD.keys())
-check("AA: unknown model ignored", "kimi_k3" not in UPD)
+check("AA: unknown model becomes a NEW candidate", any(c.get("model_id")=="kimi-k3" for c in UPD.get(NEW, [])), UPD.get(NEW))
 check("AA: cost_per_task untouched (no per-task source)", "cost_per_task" not in UPD.get("gpt56_luna", {}).get("price", {}))
 check("AA: empty payload -> {}", rm.best_effort_metrics({}, REG_AA)=={})
 check("AA: None payload -> {}", rm.best_effort_metrics(None, REG_AA)=={})
@@ -88,10 +94,13 @@ AA_STR = {"ok": True, "models": [
 UPD_STR = rm.best_effort_metrics(AA_STR, REG_AA)
 check("AA: string numerics coerced", UPD_STR.get("gpt56_luna", {}).get("price")=={"in":1.0,"out":6.0}, UPD_STR.get("gpt56_luna"))
 
-# unrelated slug must not hijack a registry entry (was: model_id 'opus' matched opus-4-6)
+# unrelated slug must not hijack a registry entry (was: model_id 'opus' matched opus-4-6);
+# it becomes a NEW candidate instead of landing on a wrong existing key
 UPD_NO = rm.best_effort_metrics({"ok": True, "models": [{"slug": "opus-4-6", "intelligenceIndex": 55.0,
   "priceInputPer1m": 3.0, "priceOutputPer1m": 15.0}]}, REG_AA)
-check("AA: unrelated slug not hijacked (opus-4-6)", UPD_NO=={}, UPD_NO)
+top = {k: v for k, v in UPD_NO.items() if k != NEW}
+check("AA: unrelated slug not hijacked (no existing key updated)", top=={}, top)
+check("AA: unrelated slug auto-added as NEW", any(c.get("model_id")=="opus-4-6" for c in UPD_NO.get(NEW, [])), UPD_NO)
 
 # merge the AA update into the registry: user-owned fields survive, strengths union
 o3 = rm.merge(clone(REG_AA), clone(UPD))["gpt56_luna"]
@@ -142,10 +151,162 @@ finally:
 check("lmarena: elo mapped", UPD_ELO.get("gpt56_luna", {}).get("elo")==1380.2, UPD_ELO)
 check("lmarena: gemini matches preview, not the key-colliding 'gemini-pro'",
       UPD_ELO.get("gemini_31_pro", {}).get("elo")==1479.5, UPD_ELO)
-check("lmarena: unknown model ignored", "random_model" not in UPD_ELO, UPD_ELO)
+check("lmarena: unknown model becomes a NEW candidate",
+      any(c.get("model_id")=="random-model" for c in UPD_ELO.get(NEW, [])), UPD_ELO.get(NEW))
 o4 = rm.merge(clone(REG_AA), clone(UPD_ELO))["gpt56_luna"]
 check("merge: elo stored", o4.get("elo")==1380.2, o4)
 check("merge: elo merge keeps AA fields when combined", o4["strengths"]==["speed","cost"], o4["strengths"])
+
+# --- auto-add: a datasource model the registry doesn't know becomes a NEW entry ---
+# Defaults per the epic line item: harness acpx, available False (must opt in),
+# repo_aware False, effort medium over the full effort_range, family/lab derived from
+# the creator when known else 'unknown', price fields numeric.
+KI = [c for c in UPD.get(NEW, []) if c.get("model_id") == "kimi-k3"]
+check("new: kimi-k3 is a NEW candidate", len(KI) == 1, UPD.get(NEW))
+KI = KI[0]
+check("new: harness defaults to acpx", KI["harness"] == "acpx", KI)
+check("new: available defaults to False (never silently selectable)", KI["available"] is False, KI)
+check("new: repo_aware defaults to False", KI["repo_aware"] is False)
+check("new: effort defaults to medium in the full standard range",
+      KI["effort"] == "medium" and KI["effort_range"] == list(rm.EFFORT_ORDER), (KI["effort"], KI["effort_range"]))
+check("new: family/lab generic when AA has no creator",
+      KI["family"] == "unknown" and KI["lab"] == "unknown", (KI["family"], KI["lab"]))
+check("new: price mapped from AA", KI["price"]["in"] == 2.0 and KI["price"]["out"] == 10.0, KI["price"])
+check("new: cost_per_task 0.0 placeholder (no per-task source)", KI["price"]["cost_per_task"] == 0.0, KI["price"])
+check("new: cost bucket derived from price", KI["cost"] == "mid", KI.get("cost"))
+check("new: strengths derived from AA index", set(KI["strengths"]) == {"reasoning", "code"}, KI["strengths"])
+check("new: source recorded", KI["source"] == "AA", KI.get("source"))
+
+# --- auto-add CAP: only frontier winners + one per new lab are added ---
+# The registry's available entries carry a comparable AA index and real token prices
+# (cost_per_task zeroed so the dominance comparison is blended-price vs blended-price).
+REG_CAP = {
+  "gpt56_luna": dict(REG_AA["gpt56_luna"], index=51.2,
+                     price=dict(REG_AA["gpt56_luna"]["price"], cost_per_task=0.0)),
+  "gemini_31_pro": dict(REG_AA["gemini_31_pro"], index=46.5,
+                        price=dict(REG_AA["gemini_31_pro"]["price"], cost_per_task=0.0)),
+}
+CAP_PAYLOAD = {"ok": True, "models": [
+  {"slug": "gpt-5.6-nova", "name": "GPT-5.6 Nova", "intelligenceIndex": 58.0,
+   "priceInputPer1m": 0.5, "priceOutputPer1m": 3.0, "creator": "OpenAI"},
+  {"slug": "gpt-5.6-delta", "name": "GPT-5.6 Delta", "intelligenceIndex": 40.0,
+   "priceInputPer1m": 5.0, "priceOutputPer1m": 20.0, "creator": "OpenAI"},
+  {"slug": "mistral-3", "name": "Mistral 3", "intelligenceIndex": 55.0,
+   "priceInputPer1m": 2.0, "priceOutputPer1m": 10.0, "creator": "Mistral"},
+]}
+UPD_CAP = rm.best_effort_metrics(CAP_PAYLOAD, REG_CAP)
+MERGED_CAP = rm.merge(clone(REG_CAP), clone(UPD_CAP), add_new=True)
+check("cap: frontier-improver from an existing lab added", "gpt_5_6_nova" in MERGED_CAP, list(MERGED_CAP))
+check("cap: dominated mid-tier duplicate skipped", "gpt_5_6_delta" not in MERGED_CAP, list(MERGED_CAP))
+check("cap: new-lab model added for diversity", "mistral_3" in MERGED_CAP, list(MERGED_CAP))
+check("cap: exactly the two winners added", len(MERGED_CAP) == len(REG_CAP) + 2, list(MERGED_CAP))
+k = MERGED_CAP["gpt_5_6_nova"]
+check("cap: added entry schema-valid (no required field missing)", not (reg_schema.REQUIRED - set(k)), reg_schema.REQUIRED - set(k))
+check("cap: added entry available:false", k["available"] is False, k)
+check("cap: added entry as_of recorded", bool(k.get("as_of")), k.get("as_of"))
+
+# one model per new lab — a lab's whole lineup must not flood the registry
+CAP2_PAYLOAD = {"ok": True, "models": [
+  {"slug": "qwen-2.5-72b", "name": "Qwen 2.5 72B", "intelligenceIndex": 52.0,
+   "priceInputPer1m": 1.0, "priceOutputPer1m": 5.0, "creator": "Alibaba"},
+  {"slug": "qwen-2.5-7b", "name": "Qwen 2.5 7B", "intelligenceIndex": 38.0,
+   "priceInputPer1m": 0.2, "priceOutputPer1m": 1.0, "creator": "Alibaba"},
+]}
+MERGED_CAP2 = rm.merge(clone(REG_CAP), clone(rm.best_effort_metrics(CAP2_PAYLOAD, REG_CAP)), add_new=True)
+check("cap: only the strongest model per new lab added",
+      "qwen_2_5_72b" in MERGED_CAP2 and "qwen_2_5_7b" not in MERGED_CAP2, list(MERGED_CAP2))
+
+# the unknown-lab kimi-k3 candidate (no dominance) is NOT auto-added anymore
+MERGED_KIMI = rm.merge(clone(REG_CAP), clone(UPD), add_new=True)
+check("cap: unknown-lab stub without dominance not added", "kimi_k3" not in MERGED_KIMI, list(MERGED_KIMI))
+
+# --- gating: adding grows the curated registry, so it needs consent ---
+cand_nova = [c for c in UPD_CAP.get(NEW, []) if c.get("model_id") == "gpt-5.6-nova"]
+check("gate: fixture has the frontier-improver candidate", len(cand_nova) == 1, cand_nova)
+check("gate: no candidates -> accepted trivially", rm._confirm_new([], apply_new=False, interactive=False) is True)
+check("gate: --apply-new accepts without prompting",
+      rm._confirm_new(cand_nova, apply_new=True, interactive=False) is True)
+check("gate: non-interactive default skips the additions",
+      rm._confirm_new(cand_nova, apply_new=False, interactive=False) is False)
+_real = builtins.input
+for ans, expect in (("y", True), ("", False), ("n", False)):
+    builtins.input = lambda prompt, _a=ans: _a
+    try:
+        got = rm._confirm_new(cand_nova, apply_new=False, interactive=True)
+    finally:
+        builtins.input = _real
+    check("gate: interactive prompt %r -> %s" % (ans, expect), got is expect, got)
+skipped = rm.merge(clone(REG_CAP), clone(UPD_CAP), add_new=False)
+check("gate: merge(add_new=False) adds nothing",
+      len(skipped) == len(REG_CAP), list(skipped))
+m_add = rm.merge(clone(REG_CAP), clone(UPD_CAP), add_new=True)
+check("gate: merge(add_new=True) adds the capped candidates",
+      "gpt_5_6_nova" in m_add and "mistral_3" in m_add, list(m_add))
+# metric refreshes apply even when additions are declined
+m_metrics = rm.merge(clone(REG_CAP), clone(UPD), add_new=False)
+check("gate: metric updates apply when additions are skipped",
+      m_metrics["gpt56_luna"].get("index") == 51.2 and m_metrics["gpt56_luna"].get("source") == "AA",
+      (m_metrics["gpt56_luna"].get("index"), m_metrics["gpt56_luna"].get("source")))
+
+# a NEW candidate whose model_id the registry already knows must NOT overwrite the
+# curated entry, and must not be added a second time
+dup_upd = {"__new__": [dict(KI, model_id="gpt-5.6-luna", name="Clone")]}
+MERGED_DUP = rm.merge(clone(REG_AA), dup_upd)
+check("new: existing model_id never overwritten by a NEW candidate",
+      MERGED_DUP["gpt56_luna"]["name"] == "GPT-5.6 Luna", MERGED_DUP["gpt56_luna"]["name"])
+check("new: duplicate candidate not added as an extra key", len(MERGED_DUP) == len(REG_AA), list(MERGED_DUP))
+
+# _merge_new: the same new model from AA + LMArena unions into ONE entry, filling elo
+# and the org-derived identity AA couldn't provide, while keeping AA's real price.
+lm_cand = rm._lmarena_to_new_entry({"model_name": "kimi-k3", "category": "overall",
+                                    "rating": 1410.0, "organization": "moonshot"})
+union = rm._merge_new([KI], [lm_cand])
+check("new: AA+LMArena candidates union to one entry", len(union) == 1, union)
+u = union[0]
+check("new: union keeps AA real price (LMArena 0.0 placeholder loses)",
+      u["price"]["in"] == 2.0 and u["price"]["out"] == 10.0, u["price"])
+check("new: union fills elo from LMArena", u.get("elo") == 1410.0, u.get("elo"))
+check("new: union fills family/lab from org", u["family"] == "kimi" and u["lab"] == "moonshot",
+      (u["family"], u["lab"]))
+check("new: union still available:false", u["available"] is False, u)
+
+# LMArena-only new candidate: price placeholders, elo recorded, org-derived identity
+RM = [c for c in UPD_ELO.get(NEW, []) if c.get("model_id") == "random-model"]
+check("new: lmarena random-model is a NEW candidate", len(RM) == 1, UPD_ELO.get(NEW))
+RM = RM[0]
+check("new: lmarena elo recorded", RM.get("elo") == 1300.0, RM.get("elo"))
+check("new: lmarena identity generic (org 'x' unknown)", RM["family"] == "unknown", RM.get("family"))
+check("new: lmarena price is numeric placeholder",
+      RM["price"]["in"] == 0.0 and RM["price"]["cost_per_task"] == 0.0, RM["price"])
+
+# --- main() end-to-end: non-interactive default skips additions, --apply-new adds ---
+def _run_main_registry(confirm_result):
+    d = tempfile.mkdtemp()
+    src = os.path.join(d, "reg.json"); dst = os.path.join(d, "out.json")
+    with open(src, "w") as f: json.dump(REG_CAP, f)
+    _fetch, _fl, _cn = rm.fetch, rm.fetch_lmarena, rm._confirm_new
+    _argv = sys.argv
+    rm.fetch = lambda url, timeout=15, headers=None: json.dumps(CAP_PAYLOAD)
+    rm.fetch_lmarena = lambda: []
+    rm._confirm_new = lambda would_add, apply_new=False, interactive=None: confirm_result
+    try:
+        sys.argv = ["refresh-models.py", "--registry", src, "--out", dst,
+                    "--update-source", "all", "--ttl-hours", "0"]
+        rm.main()
+    finally:
+        sys.argv = _argv
+        rm.fetch, rm.fetch_lmarena, rm._confirm_new = _fetch, _fl, _cn
+    return json.load(open(dst))
+
+out_skip = _run_main_registry(False)
+check("gate main: non-interactive default writes no new models",
+      "gpt_5_6_nova" not in out_skip and "mistral_3" not in out_skip
+      and len(out_skip) == len(REG_CAP), list(out_skip))
+out_add = _run_main_registry(True)
+check("gate main: --apply-new writes the capped new models",
+      "gpt_5_6_nova" in out_add and "mistral_3" in out_add, list(out_add))
+check("gate main: dominated mid-tier still skipped under --apply-new",
+      "gpt_5_6_delta" not in out_add, list(out_add))
 
 print()
 print("PASS" if fails==0 else f"FAIL ({fails})")
