@@ -119,6 +119,33 @@ These have native Agent Client Protocol support. Install the CLI, and acpx handl
 >
 > **Migrated from the Gemini CLI (June 2026):** Google is [transitioning the Gemini CLI to the Antigravity CLI](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/). This plugin's Google reviewer now uses `agy` directly — the old `gemini` agent has been replaced by `antigravity`.
 
+### The Grounder: checking a plan against the code it describes
+
+Every other reviewer judges the plan. The Grounder does something narrower and
+mechanical: it takes each claim the plan states as *given* — a path, a symbol, a
+schema, a count, a default — opens the file, and reports CONFIRMED / WRONG /
+UNVERIFIABLE with a `file:line`.
+
+That is worth a seat because plans rot in a specific direction. A revised plan
+carries forward assertions about existing behaviour that were true when someone
+first wrote them, and no later reviewer re-derives them — they read as settled
+context rather than as claims. A judgment-focused reviewer will happily reason on
+top of a premise that stopped being true three revisions ago.
+
+Two properties fall out of how narrow the job is:
+
+- It pairs naturally with the repo-aware `codex` acpx seat, which reads the
+  surrounding code rather than judging the diff in isolation.
+- It does not need a frontier model. Grounding is lookup-and-compare, so it is
+  bound by tool calls rather than reasoning, and a fast cheap model covers more
+  claims per minute than a slow expensive one.
+
+```jsonc
+{ "claude_reviewers": { "skeptic": "opus", "grounder": "sonnet" } }
+```
+
+Set it to `"auto"` to spawn it only when a plan actually cites the codebase.
+
 ### Repo-aware reviewing (generic acpx)
 
 No seat type is special any more: any acpx reviewer **reads the repo when you run it with
@@ -411,7 +438,7 @@ object adds in-session **Claude teammate** reviewers that run alongside it, mapp
 
 | Field | Values | Description |
 |-------|--------|-------------|
-| persona key | built-in name or file path | Built-ins: `skeptic`, `simplifier` (accidental complexity / YAGNI), `operator` (reliability / failure modes / 3 AM), `pentester` (security / attack surface) — bodies in `scripts/reviewer-prompts.md`. Any key that isn't a built-in name is treated as a **path to a custom persona file**, whose contents become the reviewer body. |
+| persona key | built-in name or file path | Built-ins: `skeptic`, `simplifier` (accidental complexity / YAGNI), `operator` (reliability / failure modes / 3 AM), `pentester` (security / attack surface), `grounder` (does the plan's account of the current code match the current code) — bodies in `scripts/reviewer-prompts.md`. Any key that isn't a built-in name is treated as a **path to a custom persona file**, whose contents become the reviewer body. |
 | model spec | model or array of models | Each model is `false` (off), `"opus"`, `"sonnet"`, `"fable"`, or `"auto"`. An array spawns one teammate per model — e.g. `"skeptic": ["fable","opus"]` runs the tuned pair. |
 
 The **skeptic** is model-tuned: `fable` → Fable Skeptic, `opus` → Opus Skeptic,
@@ -424,8 +451,8 @@ is the former `false`.)
 **`"auto"` discretion.** Under `"auto"`, a persona spawns only when the plan touches its
 area — `pentester` for security-sensitive changes (auth, untrusted input, secrets/crypto,
 shelling out, network, file uploads, permissions), `operator` for reliability/ops changes,
-`simplifier` for complexity/structural changes, and a custom persona per the focus its
-body describes. Routine (docs/config-only) changes stay lean.
+`simplifier` for complexity/structural changes, `grounder` for a plan that makes claims
+about the existing codebase, and a custom persona per the focus its body describes. Routine (docs/config-only) changes stay lean.
 
 **`pentester` never runs on `sonnet`** (weak at adversarial security reasoning — coerced
 to `opus` with a warning); valid values `"opus"`, `"fable"`, `"auto"`, `false`. `"auto"`
