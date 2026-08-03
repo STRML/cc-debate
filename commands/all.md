@@ -7,8 +7,10 @@ allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash 
 
 This is an alias for `/debate:run` with **exactly one difference**, and it is not a second
 copy of the orchestrator. Execute the `run` command as written — same arguments (a preset
-name, a comma-separated reviewer subset, and/or `skip-debate`), same steps. Any arguments
-passed to `/debate:all` apply unchanged.
+name, a comma-separated reviewer subset, and/or `skip-debate`), same steps, same dynamic
+panel (the selector picks models + effort for every seat; in changeset mode the diff sizes
+its own panel and the report stage merges and verifies the findings). Any arguments passed
+to `/debate:all` apply unchanged.
 
 **The difference — Step 1a, rule 3 (no panel argument).** `/debate:run` spawns no Claude
 teammates by default; `/debate:all` does. When no preset and no reviewer subset is given,
