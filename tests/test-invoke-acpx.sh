@@ -388,6 +388,45 @@ test_session_creation_fails_exits_4() {
   rm -rf "$work_dir"
 }
 
+test_session_failure_surfaces_acpx_stderr() {
+  # The cause of a session failure lives in acpx's stderr (unknown agent name,
+  # adapter crash, missing auth). It must reach output.md and the stderr log,
+  # otherwise every startup failure looks identical to the user.
+  local work_dir config console stderr_text
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  console="$work_dir/console.log"
+
+  # Six lines: the console preview is capped at five, the artifacts keep all six.
+  stderr_text=$(printf 'Failed to spawn agent command: codex-exec\nline-2\nline-3\nline-4\nline-5\nline-6-beyond-preview')
+
+  set +e
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_SESSION_ENSURE_EXIT=1 \
+  MOCK_ACPX_SESSION_STDERR="$stderr_text" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>"$console"
+  local exit_code=$?
+  set -e
+
+  [ "$exit_code" -eq 4 ] || return 1
+
+  # The console preview must name the cause, not just report a generic failure.
+  grep -q "stderr: Failed to spawn agent command: codex-exec" "$console" || return 1
+
+  # It carries five lines, and stops there.
+  grep -q "line-5" "$console" || return 1
+  ! grep -q "line-6-beyond-preview" "$console" || return 1
+
+  # The review output and stderr log keep the full text, past the preview cap.
+  grep -q "Failed to spawn agent command: codex-exec" \
+    "$work_dir/test-reviewer-output.md" || return 1
+  grep -q "line-6-beyond-preview" "$work_dir/test-reviewer-output.md" || return 1
+  grep -q "line-6-beyond-preview" \
+    "$work_dir/test-reviewer-stderr.log" || return 1
+
+  rm -rf "$work_dir"
+}
+
 test_session_exists_no_extra_calls() {
   # sessions ensure is idempotent: reuses existing session without creating a new one
   local work_dir config
@@ -1185,6 +1224,7 @@ run_test "unknown reviewer fails" test_unknown_reviewer_fails
 run_test "timeout override" test_timeout_override
 run_test "session auto-created" test_session_auto_created
 run_test "session creation fails exits 4" test_session_creation_fails_exits_4
+run_test "session failure surfaces acpx stderr" test_session_failure_surfaces_acpx_stderr
 run_test "session exists no extra calls" test_session_exists_no_extra_calls
 run_test "skip session check env" test_skip_session_check_env
 run_test "stderr surfaced on failure" test_stderr_surfaced_on_failure

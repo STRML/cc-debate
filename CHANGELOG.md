@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- **A failed session probe now tells you what actually failed.** `invoke-acpx.sh` ran `acpx <agent> sessions ensure > /dev/null 2>&1` and, on failure, wrote one fixed line: "Failed to ensure acpx session for '<agent>'". acpx had already printed the cause to the stderr being discarded, and the causes need completely different fixes — `Failed to spawn agent command: codex-exec` is a typo in `debate-acpx.json`, `Codex process has exited with code 1` is a broken ACP adapter, and `API key must be set when using the Gemini API` is a missing credential. All three produced the same message, so the fastest read of it — "the agent CLI is broken or unauthenticated" — sent you to re-verify a CLI that worked fine on its own, since `codex exec` and `gemini -p` don't go through the ACP adapter at all. The probe's stderr is now captured to `<reviewer>-stderr.log`, the first lines are echoed to the console, and the full text is appended to `<reviewer>-output.md` under an `acpx stderr:` heading, so the cause survives into the debate transcript. `/debate:acpx-setup` already probed with `2>&1`; the runner was the inconsistent one.
+
 ## [2.9.0] — 2026-07-30 (one-shot reviewers, blank-turn retries, and blank reviews stop passing as success)
 
 - **A blank turn now costs a retry instead of the reviewer's seat.** Some agents end a turn with no final message at random — `kimi-k3` through opencode does it on a large share of turns, on prompts as small as "reply PONG". The new `retries` field (default 1) re-prompts on a blank turn only. A non-zero exit is a real failure that will repeat, and a timeout has already spent its budget, so neither is retried. Set `retries: 0` to switch it off, or 2-3 for an agent you know to be unreliable.

@@ -19,6 +19,7 @@
 #   MOCK_ACPX_SESSION_LIST_EXIT   — exit code for `<agent> sessions list`   (default: 0)
 #   MOCK_ACPX_SESSION_NEW_EXIT    — exit code for `<agent> sessions new`     (default: 0)
 #   MOCK_ACPX_SESSION_ENSURE_EXIT — exit code for `<agent> sessions ensure`  (default: 0)
+#   MOCK_ACPX_SESSION_STDERR      — text written to stderr by session subcommands (default: "")
 #
 # When invoked as `acpx <agent> sessions list|new|ensure`, returns the configured exit code.
 
@@ -27,6 +28,9 @@ if [ $# -ge 3 ] && [ "$2" = "sessions" ]; then
   LOG="${MOCK_ACPX_LOG:-}"
   if [ -n "$LOG" ]; then
     echo "acpx $*" >> "$LOG"
+  fi
+  if [ -n "${MOCK_ACPX_SESSION_STDERR:-}" ]; then
+    echo "$MOCK_ACPX_SESSION_STDERR" >&2
   fi
   case "$3" in
     list)
