@@ -75,7 +75,7 @@ def scratch_dir(cwd):
         pass
     return d
 
-def auth_env(home_tmp):
+def auth_env():
     """Keep the agents' credentials reachable from an isolated HOME.
 
     acpx reads ~/.acpx and codex reads ~/.codex, both resolved from $HOME. Redirect
@@ -121,7 +121,7 @@ def bwrap_cmd(repo, repo_sandbox, no_net, bind_pwd):
     # after, so the writable bind wins for this one path.
     scratch = scratch_dir(bind_pwd)
     cmd += ["--bind", scratch, scratch]
-    for kv in auth_env(home_tmp):
+    for kv in auth_env():
         k, _, v = kv.partition("=")
         cmd += ["--setenv", k, v]
     return cmd
@@ -133,6 +133,7 @@ def seatbelt_cmd(repo, repo_sandbox, no_net, bind_pwd):
     scratch = scratch_dir(bind_pwd)
     home_tmp = os.path.join(tmp, "debate-home-%s" % os.getpid())
     os.makedirs(home_tmp, exist_ok=True)
+    os.chmod(home_tmp, 0o700)   # private: another local user must not read a seat's HOME
 
     # Writes go to this run's own HOME and the runner's scratch — not to the whole
     # temp directory. When TMPDIR is unset, gettempdir() resolves to /private/tmp,
@@ -160,7 +161,7 @@ def seatbelt_cmd(repo, repo_sandbox, no_net, bind_pwd):
     # TMPDIR points at this run's own HOME, which is the only temp path still
     # writable now that the profile no longer grants the whole shared tmp.
     return ["sandbox-exec", "-f", prof_path, "env",
-            "HOME=%s" % home_tmp, "TMPDIR=%s" % home_tmp, *auth_env(home_tmp)]
+            "HOME=%s" % home_tmp, "TMPDIR=%s" % home_tmp, *auth_env()]
 
 def docker_cmd(repo, repo_sandbox, no_net, bind_pwd, image):
     """Last-resort backend. Mounts what the wrapped command actually needs.
@@ -191,11 +192,17 @@ def docker_cmd(repo, repo_sandbox, no_net, bind_pwd, image):
         if r != cwd:
             vol += ["--volume", "%s:%s:ro" % (r, r)]
     env = []
-    for kv in auth_env(None):
+    for kv in auth_env():
         _, _, path = kv.partition("=")
         if os.path.isdir(path):
             vol += ["--volume", "%s:%s:ro" % (path, path)]
         env += ["--env", kv]
+    # The wrapped runner reads its reviewer config (~/.claude/debate-acpx.json); without
+    # ~/.claude mounted, every sandboxed docker review fails "Config not found" before a
+    # single seat starts.
+    home_claude = os.path.join(os.path.expanduser("~"), ".claude")
+    if os.path.isdir(home_claude):
+        vol += ["--volume", "%s:%s:ro" % (home_claude, home_claude)]
     net = ["--network", "none"] if no_net else []
     return ["docker", "run", "--rm", *net, *vol, *env, "--workdir", cwd, image]
 
@@ -205,7 +212,6 @@ def main():
     ap.add_argument("--repo", default=None)
     ap.add_argument("--no-net", action="store_true")
     ap.add_argument("--image", default="debian:bookworm-slim")
-    ap.add_argument("--label", default="review")
     ap.add_argument("args", nargs=argparse.REMAINDER, default=[])
     a = ap.parse_args()
 

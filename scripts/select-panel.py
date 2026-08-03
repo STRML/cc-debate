@@ -13,7 +13,6 @@ import argparse, json, sys
 from collections import Counter
 
 RANK = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
-EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"]
 
 def load(data):
     """Filter to available models usable via an installed harness."""
@@ -78,7 +77,7 @@ def pick(registry, seats, deepest, installed, min_effort, max_cost=None):
     assigned_keys = {m["key"]}
 
     def cost(x):
-        return x["price"].get("cost_per_task", 0)
+        return x.get("price", {}).get("cost_per_task", 0)
 
     spent = cost(assignment[deepest])
 
@@ -107,10 +106,13 @@ def pick(registry, seats, deepest, installed, min_effort, max_cost=None):
         assigned_keys.add(m["key"])
         spent += cost(m)
 
+    # Diversity is measured over the seats that were actually FILLED — a budget that
+    # leaves seats unfilled is a budget shortfall, not a diversity problem, and counting
+    # them here blamed the wrong knob (a 2/3 panel from two labs is not low diversity).
     n_labs = len(set(x["lab"] for x in assignment.values()))
-    if n_labs < len(seats):
+    if n_labs < len(assignment):
         warned = True
-        sys.stderr.write(f"⚠️ low model diversity — {len(seats)} seats, {n_labs} distinct labs\n")
+        sys.stderr.write(f"⚠️ low model diversity — {len(assignment)} seats, {n_labs} distinct labs\n")
     return assignment, None, n_labs
 
 def main():
@@ -124,6 +126,10 @@ def main():
     a = ap.parse_args()
     seats = [s.strip() for s in a.seats.split(",") if s.strip()]
     deepest = a.deepest or seats[-1] if seats else "pentester"
+    if deepest not in seats:
+        # --deepest names a seat the caller did not list; honor it rather than let it
+        # grab a slot and push a requested seat out.
+        seats = seats + [deepest]
     installed = [s.strip() for s in a.installed_harnesses.split(",") if s.strip()]
     reg = json.load(open(a.registry))
     assignment, err, nlabs = pick(reg, seats, deepest, installed, a.min_effort, a.max_cost)
@@ -132,7 +138,7 @@ def main():
     print(json.dumps({
         "seats": {seat: {"model": m["key"], "name": m["name"], "harness": m["harness"],
                          "provider": m["provider"], "model_id": m["model_id"],
-                         "effort": m["effort"], "cost_per_task": m["price"]["cost_per_task"],
+                         "effort": m["effort"], "cost_per_task": m.get("price", {}).get("cost_per_task", 0),
                          "repo_aware": m.get("repo_aware")} for seat, m in assignment.items()},
         "distinct_labs": nlabs,
     }, indent=2))
