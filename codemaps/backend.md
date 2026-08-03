@@ -35,6 +35,7 @@ _Updated: 2026-07-11_
 ### Inputs
 - `plan.md` — plan to review (always required)
 - `<name>-prompt.txt` — debate/resume prompt (optional; falls back to config system_prompt + plan.md)
+- `MODEL` env (optional) — per-seat model override from the panel selector; passed to acpx as `--model <id>`. `run-parallel-acpx.sh` sets it per seat from `ACPX_SEAT_MODELS` (the select-panel.py output or a flat `{seat: model_id}` map) or the single-model `DEBATE_MODEL`.
 
 ### Outputs
 - `<name>-output.md` — review text

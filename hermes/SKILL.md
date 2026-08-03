@@ -53,6 +53,11 @@ repo_aware + family/lab + available.
 3. **Dispatch** each seat via its harness (`subagent` -> delegate_task; else acpx), optionally
    sandboxed (`run-acpx-review.sh ... --sandbox --repo-sandbox --repo ROOT` wraps bwrap /
    sandbox-exec / docker, read-only repo mount + isolated HOME for repo-aware seats).
+   **The selector's per-seat model reaches the acpx call**: pass the panel output to
+   `run-acpx-review.sh --models <panel.json>` (or a flat `{seat: model_id}` file). It forwards
+   the map to `run-parallel-acpx.sh`, which sets `MODEL=<model_id>` on each seat's
+   `invoke-acpx.sh`, which passes `--model <model_id>` to acpx — overriding the agent's
+   default. `--model ID` applies one model to every seat in the dispatch.
 
 Seed `debate-models.json` (and refresh) marks `available:false` for harnesses you haven't
 configured; only `available:true` + an installed harness are selectable.

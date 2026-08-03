@@ -39,6 +39,18 @@ fi
 # via nohup/disown outside the sandbox, so it's fine here.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Per-seat model selection (F1). The panel selector picks a model per seat;
+# the orchestrator hands it to us one of two ways:
+#   ACPX_SEAT_MODELS  — path to a JSON map. Either the full select-panel.py
+#                       output ({seats: {seat: {model_id: ...}}}) or a flat
+#                       {seat: model_id}. A seat with an entry gets that model.
+#   DEBATE_MODEL      — a single model id applied to every seat without a map
+#                       entry (run-acpx-review.sh --model sets this).
+# Each seat's resolved model is forwarded to its invoke-acpx.sh as MODEL=<id>,
+# which passes it to acpx as `--model <id>`.
+SEAT_MODELS="${ACPX_SEAT_MODELS:-}"
+DEBATE_MODEL="${DEBATE_MODEL:-}"
+
 mkdir -p "$WORK_DIR" || { echo "Failed to create $WORK_DIR" >&2; exit 1; }
 # The work dir holds the full changeset and every reviewer transcript. On a shared
 # machine the default 0755 lets any local account read a diff that may carry
@@ -202,6 +214,20 @@ EXIT_FILES=()
 PIDS=()
 MAX_REVIEWER_BUDGET=0
 
+# The model map is load-bearing: a truncated or hand-edited file silently falling
+# back to defaults is how a panel loses its model selection without anyone
+# noticing (debate finding). Fail loudly when it is set but unusable.
+if [ -n "$SEAT_MODELS" ]; then
+  if [ ! -f "$SEAT_MODELS" ]; then
+    echo "[debate] FATAL: ACPX_SEAT_MODELS is set but the file is missing: $SEAT_MODELS" >&2
+    exit 1
+  fi
+  if ! jq -e . "$SEAT_MODELS" > /dev/null 2>&1; then
+    echo "[debate] FATAL: ACPX_SEAT_MODELS is not valid JSON: $SEAT_MODELS" >&2
+    exit 1
+  fi
+fi
+
 for NAME in "${REVIEWERS[@]}"; do
   # Sanitize reviewer name — must be alphanumeric/dash/underscore only
   if ! [[ "$NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
@@ -239,7 +265,33 @@ for NAME in "${REVIEWERS[@]}"; do
 
   echo "[debate] Spawning $NAME ($AGENT, timeout: ${TIMEOUT}s)..." >&2
   rm -f "$WORK_DIR/${NAME}-exit.txt"
-  nohup env SKIP_SESSION_CHECK="${SKIP_SESSION_CHECK:-}" \
+
+  # Resolve this seat's model: the per-seat map entry wins, then the single-model
+  # DEBATE_MODEL, then nothing (the agent's own default). model_id is the value
+  # acpx `--model` wants; the selector outputs it under .seats[<seat>].model_id.
+  CHILD_MODEL=""
+  if [ -n "$SEAT_MODELS" ] && [ -f "$SEAT_MODELS" ]; then
+    CHILD_MODEL=$(jq -r --arg s "$NAME" '
+      if type == "object" and has("seats") then .seats[$s].model_id
+      else .[$s] end // empty' "$SEAT_MODELS" 2>/dev/null || true)
+    # A seat whose selected model runs on the subagent harness is not an acpx
+    # seat — forwarding its model_id to acpx would run the wrong transport. Leave
+    # it to its configured agent default (debate finding).
+    HARNESS=$(jq -r --arg s "$NAME" '
+      if type == "object" and has("seats") then .seats[$s].harness
+      else empty end // empty' "$SEAT_MODELS" 2>/dev/null || true)
+    if [ "$HARNESS" = "subagent" ]; then
+      CHILD_MODEL=""
+    fi
+  fi
+  [ -z "$CHILD_MODEL" ] && CHILD_MODEL="$DEBATE_MODEL"
+
+  INVOKE_ENV=("SKIP_SESSION_CHECK=${SKIP_SESSION_CHECK:-}")
+  # Always set MODEL — empty means "use the agent default" — so an inherited
+  # MODEL from the caller's environment cannot leak into a seat that should use
+  # its default (debate finding F9).
+  INVOKE_ENV+=("MODEL=${CHILD_MODEL:-}")
+  nohup env "${INVOKE_ENV[@]}" \
     bash "$SCRIPT_DIR/invoke-acpx.sh" "$CONFIG_FILE" "$WORK_DIR" "$NAME" "$TIMEOUT" \
     > /dev/null 2>"$WORK_DIR/${NAME}-invoke.log" &
   PIDS+=("$!")
