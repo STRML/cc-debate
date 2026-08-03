@@ -92,11 +92,11 @@ half of 3.0.0. Resolve the registry in this order, first existing wins:
 2. `<SCRIPT_DIR>/../hermes/templates/debate-models.json` (bundled seed)
 
 Run the selector (Step 2a below) and write its output to `<WORK_DIR>/panel.json`.
-If the selector errors, or returns no assignment for a **plan-mode** seat (no
+If the selector errors, or returns no assignment for a seat (no
 available model for an installed harness, infeasible `--max-cost`, empty registry),
-that seat falls back to its configured agent default with a `⚠️` warning naming the
-seat — the panel is never smaller than it would be without the selector. (Changeset
-mode has no configured default to fall back to; see the changeset section in Step 1a.)
+the seat falls back to its configured agent default when it has one, with a `⚠️`
+warning naming the seat — the panel is never smaller than it would be without the
+selector. (Changeset-mode fallback rules: see Step 1f.)
 
 ### 1b. Generate session ID & temp dir
 
@@ -275,14 +275,11 @@ ACPX_SEAT_MODELS="<WORK_DIR>/panel.json" \
   bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
 ```
 
-`ACPX_SEAT_MODELS` is only set when `panel.json` was written. On selector failure the mode
-decides what happens:
-- **Plan mode** — run the runner without it; seats fall back to their configured defaults
-  (a warning was already printed).
-- **Changeset mode** — **fail closed.** A changeset seat has no configured default to fall
-  back to, so there is nothing safe to run. Dispatch only the seats the selector assigned;
-  record the skipped ones with the selector's reason, and if no seats remain, stop with an
-  explicit no-seats result rather than spawning anything.
+`ACPX_SEAT_MODELS` is only set when `panel.json` was written. On selector failure a seat
+falls back to its configured agent default when it has one (Step 1a / Step 1f), and a
+`⚠️` warning names it. A changeset lens seat with **no** `reviewers` config entry has no
+default — it is skipped and reported as failed with the selector's reason, and if no
+seats remain, stop with an explicit no-seats result rather than spawning anything.
 
 If a reviewer subset was specified, pass the comma-separated list as the third argument.
 Run this Bash call with `run_in_background: true` (do **not** block on it) — the runner
@@ -977,7 +974,7 @@ abort Cleanup path above):
 
 ## Rules
 
-- **acpx handles everything** — except two direct-CLI reviewers: `antigravity` and `opus` (no native acpx ACP support). `invoke-acpx.sh` detects `agent: antigravity` and runs the Antigravity CLI: `agy -p "<plan>" --sandbox` under a Python PTY (because `agy -p` drops its output when stdout is not a TTY), with OAuth or `ANTIGRAVITY_API_KEY` auth. The prompt is a positional argument (agy ignores stdin in print mode). Codex is a normal acpx seat; effort auto-scaling routes through `acpx codex set reasoning_effort <level>` (acpx ≥ 0.13.0). Note: `invoke-acpx.sh` still *supports* an `agent: opus` CLI reviewer (nested `claude --print`), but it is not in the default config — the Claude side of the panel is the in-session skeptic/persona teammates (§2b), not an acpx opus reviewer. The `opus`/`claude` read-only notes below describe that standing capability, not a reviewer that runs by default.
+- **acpx handles everything** — except three direct-CLI reviewers: `antigravity` and `opus` (no native acpx ACP support), and an effort-scaled `codex` seat (acpx cannot pass `model_reasoning_effort`). `invoke-acpx.sh` detects `agent: antigravity` and runs the Antigravity CLI: `agy -p "<plan>" --sandbox` under a Python PTY (because `agy -p` drops its output when stdout is not a TTY), with OAuth or `ANTIGRAVITY_API_KEY` auth. The prompt is a positional argument (agy ignores stdin in print mode). A `codex` seat with `EFFORT` set runs `codex exec --ephemeral -m <model> -c model_reasoning_effort=<level> -s read-only -o <outfile> -` directly — same reasoning as `antigravity`/`opus`. Note: `invoke-acpx.sh` still *supports* an `agent: opus` CLI reviewer (nested `claude --print`), but it is not in the default config — the Claude side of the panel is the in-session skeptic/persona teammates (§2b), not an acpx opus reviewer. The `opus`/`claude` read-only notes below describe that standing capability, not a reviewer that runs by default.
 - **Parallel via bash + Agent.** `run-parallel-acpx.sh` runs external reviewers as background processes. The Claude teammates (skeptic(s) plus any persona reviewers, per `claude_reviewers`) run in parallel via Agent with `run_in_background: true`. **The Bash runner call and every Claude Agent call must use `run_in_background: true` and be issued in the same tool-call message** — otherwise a blocking foreground runner serializes the teammates behind the full acpx wait (~8 min wasted). Step 2c waits for all of them.
 - **Reviewers are read-only — with one scoped exception for Claude teammates.** acpx agents get `--approve-reads --non-interactive-permissions deny` (reads auto-approved, writes auto-denied) and never write anything — the runner captures their stdout to `<name>-output.md`. `antigravity` has no hard read-only flag, so it runs from a throwaway workspace with the plan in-prompt plus `--sandbox`. Claude teammates have no runner to capture their output, so they deliver by writing their **own** output file, `<WORK_DIR>/claude-<persona>-r<N>-output.md` (allowlisted via `Write(.tmp/ai-review*)`) — that single write is their only permitted one. No reviewer, acpx or Claude, may edit `plan.md` or repo source: the review is the deliverable, not a fix. Don't grant a reviewer any write beyond its own output file to work around one that "wants to fix it inline."
 - **Delivery is file-based for every reviewer.** acpx and Claude teammates alike write `<WORK_DIR>/…-output.md`; the orchestrator reads files uniformly and never depends on a mailbox message surfacing. A Claude teammate also sends a one-line SendMessage liveness ping, but the ping's body is not the review — a dropped ping loses nothing. This converged the two channels: the acpx side was always file-based and reliable; the mailbox-based Claude side was lossy (a teammate's SendMessage'd review could drop silently) until this change.

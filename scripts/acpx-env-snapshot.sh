@@ -6,9 +6,9 @@
 # Output: key: value lines, then debate-acpx.json contents
 
 ACPX_PATH=$(command -v acpx 2>/dev/null || true)
-# Minimum version for effort auto-scaling: `acpx codex set reasoning_effort`
-# (used by invoke-acpx.sh for effort-scaled codex seats) requires acpx >= 0.13.0.
-# Earlier versions run codex at its default effort and say so.
+# Known-good acpx baseline. Codex effort runs direct via the codex CLI (acpx cannot
+# pass model_reasoning_effort), so it is independent of the acpx version — this is a
+# general freshness warning, not a hard gate.
 ACPX_MIN="0.13.0"
 
 # Numeric version compare, portably (no sort -V: stock macOS BSD sort lacks it).

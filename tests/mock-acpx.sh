@@ -23,17 +23,6 @@
 #
 # When invoked as `acpx <agent> sessions list|new|ensure`, returns the configured exit code.
 
-# Handle session config subcommands: acpx <agent> set <key> <value>
-# (effort auto-scaling routes codex effort through acpx's `codex set reasoning_effort`).
-# MOCK_ACPX_SET_EXIT lets a test simulate an old acpx that lacks the subcommand.
-if [ $# -ge 4 ] && [ "$2" = "set" ]; then
-  LOG="${MOCK_ACPX_LOG:-}"
-  if [ -n "$LOG" ]; then
-    echo "acpx $*" >> "$LOG"
-  fi
-  exit "${MOCK_ACPX_SET_EXIT:-0}"
-fi
-
 # Handle session subcommands: acpx <agent> sessions <list|new|ensure>
 if [ $# -ge 3 ] && [ "$2" = "sessions" ]; then
   LOG="${MOCK_ACPX_LOG:-}"

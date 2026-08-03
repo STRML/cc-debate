@@ -1305,99 +1305,82 @@ test_missing_config_guard_message_preserved() {
 
 # --- effort auto-scaling (#31 Q2) ---
 #
-# A codex seat with EFFORT set routes through acpx: acpx 0.13.0 exposes
-# `codex set reasoning_effort <level>` as a session config option that
-# `acpx codex exec` honors. The set lands just-in-time before the seat's exec.
+# A codex seat with EFFORT set bypasses acpx and runs the codex CLI directly:
+# acpx cannot pass model_reasoning_effort through (`acpx codex exec` hardcodes
+# its session options and never replays `codex set`'s config — verified against
+# acpx 0.13.0). The command shape: `codex exec --ephemeral [-m model]
+# -c model_reasoning_effort=<eff> -s read-only -o <outfile> -`, prompt on stdin.
 
-test_codex_effort_uses_acpx() {
-  local work_dir config acpx_log
+test_codex_effort_uses_direct_cli() {
+  local work_dir config codex_log
   work_dir=$(setup_work_dir)
   config=$(setup_config "$work_dir")
-  acpx_log="$work_dir/acpx-log.txt"
+  codex_log="$work_dir/codex-log.txt"
 
   SKIP_SESSION_CHECK=1 \
   PATH="$SCRIPT_DIR:$PATH" \
   EFFORT="high" \
   MODEL="gpt-5.6-luna" \
-  MOCK_ACPX_LOG="$acpx_log" \
-  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+  MOCK_CODEX_LOG="$codex_log" \
+  MOCK_CODEX_RESPONSE="Reviewed. VERDICT: APPROVED" \
     bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
 
   [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
   grep -q "VERDICT: APPROVED" "$work_dir/test-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
 
-  # Effort is set via acpx before the exec; the seat then runs through acpx.
-  [ -f "$acpx_log" ] || { rm -rf "$work_dir"; return 1; }
-  grep -q "codex set reasoning_effort high" "$acpx_log" || { rm -rf "$work_dir"; return 1; }
-  grep -q "codex --file" "$acpx_log" || { rm -rf "$work_dir"; return 1; }
-  grep -q -- "--model gpt-5.6-luna" "$acpx_log" || { rm -rf "$work_dir"; return 1; }
+  # Direct-codex command shape.
+  [ -f "$codex_log" ] || { rm -rf "$work_dir"; return 1; }
+  grep -q "codex exec --ephemeral" "$codex_log" || { rm -rf "$work_dir"; return 1; }
+  grep -q -- "-m gpt-5.6-luna" "$codex_log" || { rm -rf "$work_dir"; return 1; }
+  grep -q -- "-c model_reasoning_effort=high" "$codex_log" || { rm -rf "$work_dir"; return 1; }
+  grep -q -- "-s read-only" "$codex_log" || { rm -rf "$work_dir"; return 1; }
+  grep -q -- "-o $work_dir/test-reviewer-output.md" "$codex_log" || { rm -rf "$work_dir"; return 1; }
+  # Prompt reaches codex on stdin via a trailing `-`, not an acpx --file.
+  grep -q -- " -$" "$codex_log" || { rm -rf "$work_dir"; return 1; }
+
+  # No acpx-only flags may leak into the codex command (mock "rejects" them).
+  grep -q -- "--file" "$codex_log" && { rm -rf "$work_dir"; return 1; }
+  grep -q -- "--approve-reads" "$codex_log" && { rm -rf "$work_dir"; return 1; }
 
   rm -rf "$work_dir"
 }
 
-test_codex_effort_still_ensures_session() {
-  # A codex seat with EFFORT goes through acpx like any other seat, so the
-  # session ensure still runs. A failing `sessions ensure` must sink it.
+test_codex_effort_skips_session_ensure() {
+  # A direct-codex seat opens no acpx session, so a failing `sessions ensure`
+  # must not sink it. Deliberately does NOT set SKIP_SESSION_CHECK.
   local work_dir config log_file
   work_dir=$(setup_work_dir)
   config=$(setup_config "$work_dir")
   log_file="$work_dir/invoke-log.txt"
 
-  set +e
   PATH="$SCRIPT_DIR:$PATH" \
   EFFORT="medium" \
   MOCK_ACPX_SESSION_ENSURE_EXIT=1 \
   MOCK_ACPX_LOG="$log_file" \
     bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
-  local exit_code=$?
-  set -e
-
-  # Session ensure failed -> seat exits 4 (session creation failed).
-  [ "$exit_code" -eq 4 ] || { rm -rf "$work_dir"; return 1; }
-  grep -q "sessions ensure" "$log_file" 2>/dev/null || { rm -rf "$work_dir"; return 1; }
-
-  rm -rf "$work_dir"
-}
-
-test_codex_effort_set_failure_falls_back() {
-  # acpx < 0.13.0 lacks `codex set reasoning_effort`. A failed set must warn
-  # and still run the review at default effort, not lose the seat.
-  local work_dir config stderr_out
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-  stderr_out="$work_dir/invoke-stderr.txt"
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  EFFORT="high" \
-  MOCK_ACPX_SET_EXIT=1 \
-  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
-    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>"$stderr_out"
 
   [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
-  grep -q "VERDICT: APPROVED" "$work_dir/test-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
-  grep -q "acpx codex set reasoning_effort failed" "$stderr_out" || { rm -rf "$work_dir"; return 1; }
+  ! grep -q "sessions ensure" "$log_file" 2>/dev/null || { rm -rf "$work_dir"; return 1; }
 
   rm -rf "$work_dir"
 }
 
 test_codex_effort_uses_config_model_when_no_env() {
-  # EFFORT set but no MODEL env: the config's `.model` must reach acpx.
-  local work_dir config acpx_log
+  # EFFORT set but no MODEL env: the config's `.model` must reach codex.
+  local work_dir config codex_log
   work_dir=$(setup_work_dir)
   config=$(setup_config "$work_dir")
-  acpx_log="$work_dir/acpx-log.txt"
+  codex_log="$work_dir/codex-log.txt"
 
   SKIP_SESSION_CHECK=1 \
   PATH="$SCRIPT_DIR:$PATH" \
   EFFORT="low" \
-  MOCK_ACPX_LOG="$acpx_log" \
-  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+  MOCK_CODEX_LOG="$codex_log" \
+  MOCK_CODEX_RESPONSE="Reviewed. VERDICT: APPROVED" \
     bash "$INVOKE" "$config" "$work_dir" "model-reviewer" 2>/dev/null
 
   [ "$(cat "$work_dir/model-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
-  grep -q "codex set reasoning_effort low" "$acpx_log" || { rm -rf "$work_dir"; return 1; }
-  grep -q -- "--model cfg-default-model" "$acpx_log" || { rm -rf "$work_dir"; return 1; }
+  grep -q -- "-m cfg-default-model" "$codex_log" || { rm -rf "$work_dir"; return 1; }
 
   rm -rf "$work_dir"
 }
@@ -1515,9 +1498,8 @@ run_test "MODEL env reaches acpx --model" test_model_env_reaches_acpx
 run_test "MODEL env overrides config model" test_model_env_overrides_config_model
 run_test "MODEL env used for opus direct CLI" test_model_env_used_for_opus
 run_test "MODEL env used for antigravity direct CLI" test_model_env_used_for_antigravity
-run_test "codex EFFORT uses acpx" test_codex_effort_uses_acpx
-run_test "codex EFFORT still ensures session" test_codex_effort_still_ensures_session
-run_test "codex EFFORT set failure falls back" test_codex_effort_set_failure_falls_back
+run_test "codex EFFORT uses direct CLI" test_codex_effort_uses_direct_cli
+run_test "codex EFFORT skips session ensure" test_codex_effort_skips_session_ensure
 run_test "codex EFFORT uses config model when no env MODEL" test_codex_effort_uses_config_model_when_no_env
 run_test "non-codex EFFORT logs fallback" test_non_codex_effort_logs_fallback
 run_test "codex-exec guard message preserved in output" test_codex_exec_guard_message_preserved

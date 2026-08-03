@@ -29,11 +29,11 @@ Report:
   ✅ opencode  found at /path/to/opencode (enables OpenRouter models)
 ```
 
-If `acpx` is found but older than 0.13.0 (the minimum for effort auto-scaling —
-`acpx codex set reasoning_effort` requires it):
+If `acpx` is found but older than 0.13.0 (a known-good baseline; codex effort runs
+direct via the codex CLI, independent of acpx version):
 ```text
-  ⚠️  acpx version 0.12.1 is older than 0.13.0 — effort auto-scaling for codex seats
-     needs acpx >= 0.13.0. Codex seats will run at default effort.
+  ⚠️  acpx version 0.12.1 is older than 0.13.0. Effort auto-scaling for codex seats
+     is unaffected (it runs the codex CLI directly), but newer acpx has fixes.
      Upgrade: npm install -g acpx@latest
 ```
 

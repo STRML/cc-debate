@@ -240,6 +240,9 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
   # branch runs. Keep this list in step with the direct-CLI branches below.
   case "$AGENT" in
     antigravity|opus) IS_DIRECT_CLI=1 ;;
+    # An effort-scaled codex seat runs the codex CLI directly (acpx cannot pass
+    # model_reasoning_effort), so it never opens an acpx session.
+    codex) IS_DIRECT_CLI=$([ -n "$EFFORT" ] && echo 1 || echo 0) ;;
     *) IS_DIRECT_CLI=0 ;;
   esac
   # A one-shot (`mode: exec`) never touches a session, so ensuring one would be a
@@ -683,17 +686,46 @@ else
   echo "[$REVIEWER] Submitting plan to $AGENT via acpx (timeout: ${TIMEOUT}s)..." >&2
 fi
 
-# Effort auto-scaling through acpx: acpx 0.13.0 exposes `codex set reasoning_effort`
-# as a session config option, which `acpx codex exec` honors. Set it just-in-time so
-# this seat's exec sees its own effort — the codex seats are one-shot (`mode: exec`),
-# so the set lands right before this seat's run. (Known limitation: two codex seats
-# racing on the shared cwd config let the last set win for both; per-seat isolation
-# would need named sessions, out of scope.)
+# --- Direct Codex (effort-capable) ---
+# acpx cannot pass model_reasoning_effort through: `acpx codex exec` hardcodes its
+# session options to {model, allowedTools, maxTurns, systemPrompt} and creates a fresh
+# session per call, so `acpx codex set reasoning_effort` writes to a session the exec
+# never reads (verified against acpx 0.13.0 source). An effort-scaled codex seat runs
+# the codex CLI directly — the same pattern as the agy/opus direct branches. This
+# BYPASSES acpx: any future acpx middleware (telemetry, token-refresh, retries,
+# proxies) will not apply here — flagged tech debt. One-shot (--ephemeral), read-only
+# (-s read-only), final message only (-o), prompt on stdin. Verified:
+# -c model_reasoning_effort controls reasoning depth.
 if [ "$AGENT" = "codex" ] && [ -n "$EFFORT" ]; then
-  echo "[$REVIEWER] Setting codex reasoning_effort=$EFFORT via acpx..." >&2
-  "${ACPX_BIN[@]}" codex set reasoning_effort "$EFFORT" > /dev/null 2>"$WORK_DIR/${REVIEWER}-stderr.log" \
-    || echo "[$REVIEWER] WARNING: acpx codex set reasoning_effort failed (acpx < 0.13.0?) — running at default effort." >&2
+  if ! command -v codex > /dev/null 2>&1; then
+    echo "[$REVIEWER] codex CLI not found — cannot apply effort $EFFORT." >&2
+    echo "codex CLI not installed. Install @openai/codex to use effort-scaled codex seats." > "$WORK_DIR/${REVIEWER}-output.md"
+    publish_exit 1
+    trap - EXIT
+    exit 1
+  fi
+  echo "[$REVIEWER] Submitting plan to codex directly (effort $EFFORT, bypasses acpx; timeout: ${TIMEOUT}s)..." >&2
+
+  CODEX_CMD=("codex" "exec" "--ephemeral")
+  if [ -n "$MODEL" ] || [ -n "$CONFIG_MODEL" ]; then
+    CODEX_CMD+=(-m "${MODEL:-$CONFIG_MODEL}")
+  fi
+  CODEX_CMD+=(-c "model_reasoning_effort=$EFFORT" -s read-only -o "$WORK_DIR/${REVIEWER}-output.md")
+  if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
+    CODEX_CMD=("$TIMEOUT_BIN" "$TIMEOUT" "${CODEX_CMD[@]}")
+  fi
+
+  attempt_codex() {
+    set +e
+    "${CODEX_CMD[@]}" - < "$PROMPT_FILE" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+    EXIT_CODE=$?
+    set -e
+  }
+  run_with_blank_retry attempt_codex "codex (direct, effort $EFFORT)"
+  handle_invocation_result "codex (direct, effort $EFFORT)"
 fi
+
+# --- acpx call ---
 
 ACPX_CMD=()
 if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
