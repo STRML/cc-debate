@@ -1,6 +1,27 @@
 # Changelog
 
+## [3.1.2] — 2026-08-03 (revert codex effort to the direct CLI; changeset fixes)
+
+- **Codex effort routes back through the direct CLI.** 3.1.1 moved codex effort to
+  `acpx codex set reasoning_effort` — that mechanism does not work: `acpx codex exec`
+  hardcodes its session options and creates a fresh session per call, so it never replays
+  the `set`'s config (verified against the acpx 0.13.0 source and empirically — the exec
+  ran at the model's default `xhigh`, not the requested `low`). The working 3.0.0
+  mechanism — `codex exec --ephemeral -c model_reasoning_effort=<level>` — is restored.
+  This is the same direct-CLI pattern as `antigravity`/`opus`; acpx middleware does not
+  apply to it. 3.1.1's genuinely-good fixes stay: the `reap_process_group` `set -e` bug
+  (a failing `ps` aborted a seat after a successful exec), the changeset fallback
+  wording, the DEBATE_FREEZE_DIFF doc, and the acpx version freshness check.
+- **run.md no longer contradicts itself on changeset fallback.** The 3.1.1 change to
+  §1f (lens seats fall back to their configured default) conflicted with the unchanged
+  §2a/§1a text ("fail closed, no configured default"). Unified: a seat with a `reviewers`
+  config entry falls back to it; a lens seat with no config entry is skipped.
+
 ## [3.1.1] — 2026-08-03 (codex effort through acpx; changeset fixes)
+
+> **Superseded by 3.1.2.** The acpx-effort transport change in this release was reverted
+> in 3.1.2 — `acpx codex set reasoning_effort` does not propagate to `acpx codex exec`.
+> The changeset fixes below remain in effect.
 
 - **Codex effort now routes through acpx, not the direct CLI.** Effort auto-scaling shipped
   a direct-`codex` branch in 3.0.0 on an incomplete check of acpx's flags — acpx 0.13.0

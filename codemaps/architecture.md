@@ -31,7 +31,7 @@ cc-debate/
          │    ├── reviewers → run-parallel-acpx.sh → invoke-acpx.sh
          │    │    ├── acpx <agent> (default)
          │    │    ├── agy / claude --print (direct: antigravity / opus)
-         │    │    └── acpx codex (effort auto-scaling via `codex set reasoning_effort`)
+         │    │    └── codex exec (direct, when EFFORT set — effort auto-scaling)
          │    │    writes <WORK_DIR>/<name>-output.md
          │    └── Claude teammates → Agent tool, run_in_background: true
          │         each writes <WORK_DIR>/claude-<persona>-r<N>-output.md
@@ -65,7 +65,7 @@ Reviewers run through `invoke-acpx.sh`, which wraps timeout handling, config res
 - `antigravity` — `agy -p "<plan>" --sandbox` under a Python PTY (acpx has no adapter).
 - `opus` — `claude --print --permission-mode plan --model <id>` (acpx has no adapter).
 
-Codex is a normal acpx seat; effort auto-scaling (#31 Q2) routes through `acpx codex set reasoning_effort <level>` (acpx ≥ 0.13.0), which its `codex exec` honors. A non-codex seat with `EFFORT` logs the fallback and runs at its default.
+Codex with `EFFORT` set runs `codex exec --ephemeral -m <model> -c model_reasoning_effort=<level> -s read-only -o <outfile> -` directly (acpx cannot pass `model_reasoning_effort`; effort auto-scaling #31 Q2). A non-codex seat with `EFFORT` logs the fallback and runs at its default.
 
 Reviewer configuration (agent name, timeout, system prompt) is stored in `~/.claude/debate-acpx.json`. The panel selector's per-seat model and effort reach the child as `MODEL`/`EFFORT` env vars via `run-parallel-acpx.sh`.
 

@@ -25,7 +25,7 @@ _Updated: 2026-08-03_
 | `create-opencode-agent.sh` | Adds an acpx seat for any models.dev provider via opencode; writes the wrapper AND registers it in `~/.acpx/config.json` |
 | `create-litellm-agent.sh` | Same, for providers models.dev does not list — routes through a LiteLLM proxy |
 | `seat-report.sh` | Per-seat contribution from a panel result: sole vs corroborated vs refuted, for deciding whether a lens earns its slot |
-| `invoke-acpx.sh` | Invokes any acpx agent — plus the direct-CLI branches: `antigravity`/`agy`, `opus`/`claude --print`. Reads config, builds prompt, wraps with system `timeout`, captures output; routes codex effort through `acpx codex set reasoning_effort` |
+| `invoke-acpx.sh` | Invokes any acpx agent — plus the direct-CLI branches: `antigravity`/`agy`, `opus`/`claude --print`, and effort-scaled `codex` (`codex exec -c model_reasoning_effort`). Reads config, builds prompt, wraps with system `timeout`, captures output |
 | `run-parallel-acpx.sh` | Spawns `invoke-acpx.sh` per reviewer with nohup+disown, polls `*-exit.txt` until done; reads `effective_effort` per seat and forwards it as `EFFORT` |
 
 ## Script I/O Contract
@@ -36,7 +36,7 @@ _Updated: 2026-08-03_
 - `plan.md` — plan to review (always required)
 - `<name>-prompt.txt` — debate/resume prompt (optional; falls back to config system_prompt + plan.md)
 - `MODEL` env (optional) — per-seat model override from the panel selector; passed to acpx as `--model <id>` (or `codex -m <id>` on the direct branch). `run-parallel-acpx.sh` sets it per seat from `ACPX_SEAT_MODELS` (the select-panel.py output or a flat `{seat: model_id}` map) or the single-model `DEBATE_MODEL`.
-- `EFFORT` env (optional) — per-seat reasoning effort from the selector (`effective_effort`). Only a `codex` seat honors it, via acpx's `codex set reasoning_effort <level>` (acpx ≥ 0.13.0). Every other transport handled by `invoke-acpx.sh` logs `EFFORT=<level> not supported by transport <agent>` and runs at its default. A `subagent`-harness seat never reaches `invoke-acpx.sh` (filtered in `run-parallel-acpx.sh` pre-spawn; dispatched via Hermes `delegate_task` instead), so it receives neither `EFFORT` nor the fallback log. The runner always sets `EFFORT` (empty = agent default), so a caller's `EFFORT` cannot leak into a seat.
+- `EFFORT` env (optional) — per-seat reasoning effort from the selector (`effective_effort`). Only a `codex` seat honors it, via the direct branch (`codex exec -c model_reasoning_effort=<level>`). Every other transport handled by `invoke-acpx.sh` logs `EFFORT=<level> not supported by transport <agent>` and runs at its default. A `subagent`-harness seat never reaches `invoke-acpx.sh` (filtered in `run-parallel-acpx.sh` pre-spawn; dispatched via Hermes `delegate_task` instead), so it receives neither `EFFORT` nor the fallback log. The runner always sets `EFFORT` (empty = agent default), so a caller's `EFFORT` cannot leak into a seat.
 
 ### Outputs
 - `<name>-output.md` — review text
@@ -69,7 +69,7 @@ No exit file — a teammate has delivered iff its output file exists and is non-
 }
 ```
 
-Available acpx agents: codex, claude, cursor, copilot, kimi, kiro, qwen, opencode, kilocode. Two reviewers are invoked directly, not via acpx: `antigravity` (agy CLI) and `opus` (`claude --print`). Codex is a normal acpx seat; effort auto-scaling routes through `acpx codex set reasoning_effort`.
+Available acpx agents: codex, claude, cursor, copilot, kimi, kiro, qwen, opencode, kilocode. Three reviewers are invoked directly, not via acpx: `antigravity` (agy CLI), `opus` (`claude --print`), and an effort-scaled `codex` seat (`codex exec` when `EFFORT` is set — acpx cannot pass `model_reasoning_effort`). This is flagged tech debt: acpx middleware does not apply to direct seats.
 
 The config `effort` key is still unused (no agent reads a static per-reviewer effort); `tests/test-references.sh` flags any `effort` in a reviewer config as a silent no-op. The per-seat reasoning effort now arrives at runtime via the `EFFORT` env var from the selector's `effective_effort`. The timeout lint (positive integer) remains: both layers otherwise swallow a malformed value.
 

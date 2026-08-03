@@ -2,7 +2,7 @@
 
 Get a second (and third, and fourth) opinion on your implementation plan before you write a line of code. `debate` sends your plan to multiple AI reviewers in parallel, synthesizes their feedback, has them argue out contradictions, and produces a consensus verdict.
 
-**v2 is a ground-up rewrite.** Reviews run through [acpx](https://github.com/openclaw/acpx) — a single unified CLI that talks to any coding agent — with two direct-CLI exceptions: `antigravity` and `opus` (acpx has no adapter for their CLIs). Codex is a normal acpx seat, effort auto-scaling included (acpx ≥ 0.13.0). No more managing individual CLIs, session files, or API keys per provider. One config, any combination of models.
+**v2 is a ground-up rewrite.** Reviews run through [acpx](https://github.com/openclaw/acpx) — a single unified CLI that talks to any coding agent — with three direct-CLI exceptions: `antigravity` and `opus` (acpx has no adapter for their CLIs), and effort-scaled `codex` seats (acpx cannot pass `model_reasoning_effort` through). No more managing individual CLIs, session files, or API keys per provider. One config, any combination of models.
 
 ## Quick Start
 
@@ -162,12 +162,14 @@ platform-adaptive sandbox wrapper (`scripts/sandbox.py` — bwrap / sandbox-exec
 provides the OS-level isolation the old seat never had: read-only repo mount, isolated
 `HOME`, optional `--no-net`.
 
-**Effort auto-scaling routes through acpx.** The panel selector derives a per-seat
-reasoning effort (`effective_effort`); a `codex` seat with one gets it applied via acpx's
-`codex set reasoning_effort <level>` session config (acpx ≥ 0.13.0), which its `codex exec`
-honors. Codex is a normal acpx seat — it gets acpx middleware like every other transport.
-Every other agent logs `EFFORT=<level> not supported by transport <agent>` and runs at its
-default effort (acpx has no effort passthrough for them).
+**Effort auto-scaling for codex seats runs the codex CLI directly.** The panel selector
+derives a per-seat reasoning effort (`effective_effort`); a `codex` seat with one runs
+`codex exec --ephemeral -m <model> -c model_reasoning_effort=<level> -s read-only
+-o <outfile> -` directly, because acpx cannot pass `model_reasoning_effort` through (its
+`codex exec` hardcodes session options and never replays `codex set` config — verified
+against acpx 0.13.0). This is a deliberate direct-CLI path like `antigravity`/`opus`;
+acpx middleware does not apply to it. Every other agent logs
+`EFFORT=<level> not supported by transport <agent>` and runs at its default effort.
 
 Use the `untrusted` preset for a diff from someone you do not trust; its seats are
 prompt-only or run without repo access. The sample's coherence test enforces that

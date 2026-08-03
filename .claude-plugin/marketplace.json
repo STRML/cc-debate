@@ -8,7 +8,7 @@
     {
       "name": "debate",
       "description": "Multi-model AI plan and code review with parallel execution, synthesis, and debate — any acpx-supported agent",
-      "version": "3.1.1",
+      "version": "3.1.2",
       "source": "./",
       "author": {
         "name": "strml"
