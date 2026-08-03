@@ -530,7 +530,7 @@ The workflow runs in two stages with the seats in between: stage one measures th
 
 What it adds over `/debate:run`:
 
-**Seats follow the change.** A docs-only diff gets one seat. A wide, security-touching diff gets the whole table. The rule is a readable table in `workflows/review-panel.js` — a seat is earned by a condition, not by a name you typed.
+**Seats follow the change.** A docs-only diff gets one seat. A wide, security-touching diff gets the whole table. The rule is a readable table in `workflows/review-panel.js` — a seat is earned by a condition, not by a name you typed. Host availability is a Step-5 concern, not a classifier one: a seat whose agent is not installed on this machine is reported `UNCONFIGURED` and lands in `seatsNotConfigured`, never as a phantom failure.
 
 **Findings are grouped by `file:line` in JS, then collapsed by the verifier.** Measured on one run of twelve seats over a 13-line diff: six distinct findings, and five seats had independently reported the same one. Collapsing that by hand is the step that scales worst about a large panel. Identical wording merges in code; everything else at that line goes to a single verifier, which judges each claim on its own and says which ones restate which. Two defects that merely share a line stay two — a refuted claim never takes its neighbour with it — and five seats describing one bug five ways cost one verifier call, not five.
 

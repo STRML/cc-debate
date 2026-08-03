@@ -97,15 +97,44 @@ Read it back in step 6 rather than trusting recall.
 
 **5. Drop the seats this machine has not configured.**
 
+The check used to test only that the reviewer entry existed in the config, which is the
+wrong test for `deepseek`: the sample config ships its entry, so a fresh clone passed the
+check, the runner spawned `acpx deepseek`, the agent was never created, and the seat
+landed in `seatsFailed` instead of `seatsNotConfigured` — a phantom failure on every
+non-docs panel. The check below verifies the agent can actually spawn, not just that the
+config mentions it:
+
 ```bash
 for s in <seat1> <seat2> ...; do
-  jq -e --arg s "$s" '.reviewers[$s].agent // empty' "<HOME>/.claude/debate-acpx.json" \
-    > /dev/null 2>&1 && echo "HAVE $s" || echo "UNCONFIGURED $s"
+  a=$(jq -r --arg s "$s" '.reviewers[$s].agent // empty' "$HOME/.claude/debate-acpx.json")
+  if [ -z "$a" ]; then
+    echo "UNCONFIGURED $s"
+  elif [ "$a" = "antigravity" ]; then
+    # agy is invoked through python3 (invoke-acpx.sh runs it under a PTY), so both
+    # must be present for the seat to actually spawn.
+    command -v agy >/dev/null 2>&1 && { command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; } \
+      && echo "HAVE $s" || echo "UNCONFIGURED $s"
+  elif [ "$a" = "opus" ]; then
+    command -v claude >/dev/null 2>&1 && echo "HAVE $s" || echo "UNCONFIGURED $s"
+  elif [ -f "$HOME/.acpx/config.json" ] && cmd=$(jq -r --arg a "$a" '.agents[$a].command // empty' "$HOME/.acpx/config.json") && [ -n "$cmd" ] && [ -x "$cmd" ]; then
+    # The wrapper is executable — check the runtime it boots (an opencode-backed
+    # agent's wrapper does `exec opencode acp`), so a missing binary is caught
+    # here rather than as a phantom FAILED seat.
+    command -v opencode >/dev/null 2>&1 && echo "HAVE $s" || echo "UNCONFIGURED $s"
+  elif command -v "$a" >/dev/null 2>&1; then
+    echo "HAVE $s"
+  else
+    echo "UNCONFIGURED $s"
+  fi
 done
 ```
 
-Run only the `HAVE` seats in the next step, and carry the `UNCONFIGURED` ones into step 7
-as `seatsNotConfigured`.
+The `antigravity` and `opus` branches check the direct CLI they are invoked through
+(`agy` / `claude`). A custom opencode-backed agent (`deepseek`, anything from
+`create-opencode-agent.sh`) is registered in `~/.acpx/config.json` with an executable
+command; the check verifies both. Anything else resolves to an acpx built-in whose CLI
+must be on `PATH`. Run only the `HAVE` seats in the next step, and carry the `UNCONFIGURED`
+ones into step 7 as `seatsNotConfigured`.
 
 A seat the lens table asks for is not the same as a seat this install owns. The optional
 ones — `deepseek`, and anything added with `create-opencode-agent.sh` — need a wrapper, an
@@ -113,6 +142,9 @@ acpx registration, a reviewer entry and a key before they can start. Without the
 runner skips them with a line on stderr nobody reads, they leave no exit file, and step 6
 scores a missing file as a dead seat — so every panel on a fresh clone reports seats that
 failed when they were never installed. "Not configured" and "failed" want different words.
+The classify stage already refuses to request `deepseek` when the agent is absent, so the
+probe above mostly confirms the rest of the table; the seat's own `when` in the lens
+table is where the request is actually stopped.
 
 **6. Run the seats. This step is yours, not the workflow's.**
 
