@@ -170,6 +170,13 @@ If no plan is present, do **not** ask for one. Leave `plan.md` unwritten and con
 
 Only ask the user what to review when the runner exits non-zero reporting no plan and no changes, which means there is genuinely nothing to look at. If they name a specific target instead (a branch, a ref range), set `DEBATE_DIFF_BASE` accordingly rather than writing a plan.
 
+**Reviewing a specific PR's changeset.** When the user names a PR to review, capture its
+diff yourself and freeze it, or the runner will regenerate from the working tree (empty on
+a merged PR, since the tree is clean). Write the base→head diff to `<WORK_DIR>/changeset.diff`
+and the base SHA to `<WORK_DIR>/changeset-base.txt`, then set `DEBATE_FREEZE_DIFF=1` on the
+Step 2a dispatch — the runner honors a pre-written changeset only with that flag. This is
+the `/debate:panel` convention, needed now that `/debate:run` owns changeset review.
+
 ### 1f. Changeset mode — size the panel from the diff
 
 When no plan is staged (changeset mode), the change sizes its own panel **unless an
