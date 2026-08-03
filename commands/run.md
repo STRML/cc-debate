@@ -1,11 +1,16 @@
 ---
-description: Run the configured AI reviewers (all, a subset, or a named preset) in parallel via acpx, synthesize feedback, debate contradictions, and produce a consensus verdict. Configure reviewers and presets in ~/.claude/debate-acpx.json. Alias: /debate:all.
+description: Review a plan or changeset with a self-tuning panel — seats, models, and reasoning effort picked for the job — synthesize feedback, debate contradictions, and produce a consensus verdict. Configure reviewers and presets in ~/.claude/debate-acpx.json. Alias: /debate:all.
 allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/record-round.sh:*), Bash(bash ~/.claude/debate-scripts/safe-cleanup.sh:*), Bash(sha256sum:*), Bash(shasum:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Write(~/.acpx/**), Read(~/.acpx/**), Read(~/.claude/debate-scripts/reviewer-prompts.md), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
 ---
 
 # AI Multi-Model Plan Review (acpx)
 
-Run all configured AI reviewers in parallel via acpx, synthesize their feedback, debate contradictions, and produce a final consensus verdict. Max 3 total **revision** rounds (verification passes — re-reviewing a post-fix plan with no further revisions — do NOT count against this budget; see Step 6.5).
+Run a review panel that tunes itself to the job. A staged plan keeps the config's personas;
+a changeset sizes its own panel from the diff. The selector picks a model and reasoning
+effort for every seat (registry-driven, effort auto-scaled). Then synthesize their
+feedback, debate contradictions, and produce a final consensus verdict. Max 3 total
+**revision** rounds (verification passes — re-reviewing a post-fix plan with no further
+revisions — do NOT count against this budget; see Step 6.5).
 
 Arguments (order-independent; `skip-debate` may accompany either panel selector):
 - **Preset name** — a bare token matching a key in the config's `presets` object (e.g. `tight`). Selects that named panel — its acpx `reviewers` subset AND its `claude_reviewers` map — overriding the top-level defaults. Resolution in Step 1a.
@@ -80,6 +85,19 @@ must be a key in the top-level `reviewers` object with an `agent` field. If any 
 unknown, fail with the offending names listed (`⚠️ unknown reviewer(s): <names>`) rather
 than silently running a shrunk panel — the runner would skip them without telling you.
 
+**Model + effort selection (always).** After the acpx panel resolves, the panel
+selector picks a model and reasoning effort for every seat — this is the self-tuning
+half of 3.0.0. Resolve the registry in this order, first existing wins:
+1. `~/.claude/debate-models.json` (the user's seeded/refreshed registry)
+2. `<SCRIPT_DIR>/../hermes/templates/debate-models.json` (bundled seed)
+
+Run the selector (Step 2a below) and write its output to `<WORK_DIR>/panel.json`.
+If the selector errors, or returns no assignment for a **plan-mode** seat (no
+available model for an installed harness, infeasible `--max-cost`, empty registry),
+that seat falls back to its configured agent default with a `⚠️` warning naming the
+seat — the panel is never smaller than it would be without the selector. (Changeset
+mode has no configured default to fall back to; see the changeset section in Step 1a.)
+
 ### 1b. Generate session ID & temp dir
 
 Verify `~/.claude/debate-scripts` exists. If not:
@@ -152,6 +170,64 @@ If no plan is present, do **not** ask for one. Leave `plan.md` unwritten and con
 
 Only ask the user what to review when the runner exits non-zero reporting no plan and no changes, which means there is genuinely nothing to look at. If they name a specific target instead (a branch, a ref range), set `DEBATE_DIFF_BASE` accordingly rather than writing a plan.
 
+### 1f. Changeset mode — size the panel from the diff
+
+When no plan is staged (changeset mode), the change sizes its own panel **unless an
+explicit selector was given**. A preset name or reviewer subset (Step 1a) remains an
+override and keeps the seats it names — a `/debate:run tight` on a changeset still runs the
+`tight` panel. Lens classification picks the seats only when no panel argument was
+supplied. Either way, the **classify** stage still runs to measure the diff — it produces
+the `diff` shape and `seatsSkipped` that the report stage (Step 3) needs, and the HAVE probe
+still drops seats this machine cannot run:
+
+```text
+Workflow({
+  scriptPath: "~/.claude/debate-workflows/review-panel.js",
+  args: { stage: "classify", workDir: "<WORK_DIR>", repoRoot: "<REPO_ROOT>" }
+})
+```
+
+It returns `{ diff, seats, seatsSkipped }`. Write that object to `<WORK_DIR>/panel-state.json`
+— it is needed again at report time (Step 3), half an hour of seats separates the two, and
+held only in context it is one compaction away from gone. When an explicit selector was
+given, the `diff`/`seatsSkipped` come from classify but the **seats** are the explicit
+ones (a preset's `reviewers` or the subset), not the lens picks.
+
+Then **drop the seats this machine has not configured** with the HAVE probe. For each lens
+seat, verify its agent can actually spawn — a direct CLI present for `antigravity`/`opus`, a
+registered command in `~/.acpx/config.json` for an opencode-backed agent (also check its
+runtime, e.g. `opencode`), the CLI on PATH for the rest:
+
+```bash
+for s in <seat1> <seat2> ...; do
+  a=$(jq -r --arg s "$s" '.reviewers[$s].agent // empty' "$HOME/.claude/debate-acpx.json")
+  if [ -z "$a" ]; then
+    echo "UNCONFIGURED $s"
+  elif [ "$a" = "antigravity" ]; then
+    command -v agy >/dev/null 2>&1 && { command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; } \
+      && echo "HAVE $s" || echo "UNCONFIGURED $s"
+  elif [ "$a" = "opus" ]; then
+    command -v claude >/dev/null 2>&1 && echo "HAVE $s" || echo "UNCONFIGURED $s"
+  elif [ -f "$HOME/.acpx/config.json" ] && cmd=$(jq -r --arg a "$a" '.agents[$a].command // empty' "$HOME/.acpx/config.json") && [ -n "$cmd" ] && [ -x "$cmd" ]; then
+    command -v opencode >/dev/null 2>&1 && echo "HAVE $s" || echo "UNCONFIGURED $s"
+  elif command -v "$a" >/dev/null 2>&1; then
+    echo "HAVE $s"
+  else
+    echo "UNCONFIGURED $s"
+  fi
+done
+```
+
+Run only the `HAVE` seats; carry the `UNCONFIGURED` ones into `seatsNotConfigured` at
+report time. `--deepest` for the selector (Step 2a) is `pentester` when present, else the
+last lens seat.
+
+**Changeset seats have no config default.** A lens seat has no `reviewers` config entry
+behind it, so if the selector returns no assignment for one (no available model for its
+harness, or the registry has nothing for it), the seat is **skipped and reported as failed**
+with the selector's reason — never run at an agent's default (there is none). Only
+plan-mode seats fall back to a configured default.
+
 ---
 
 ## Step 2: Parallel Review (Round N)
@@ -162,11 +238,47 @@ Launch the acpx reviewers AND the Claude skeptic subagent(s) **in parallel**. Is
 
 ### 2a. acpx reviewers (Bash)
 
+First, run the panel selector for the resolved seats and capture its output. This picks a
+model + reasoning effort per seat (Step 1a's model/effort selection):
+
 ```bash
-bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
+# Resolve registry (first existing wins): user-seeded, else bundled seed.
+if [ -f "$HOME/.claude/debate-models.json" ]; then
+  REGISTRY="$HOME/.claude/debate-models.json"
+else
+  REGISTRY="<SCRIPT_DIR>/../hermes/templates/debate-models.json"
+fi
+
+# Run the selector for the resolved seats. --deepest is the arbiter: the last
+# resolved seat in plan mode, the pentester (or last lens seat) in changeset mode.
+python3 "<SCRIPT_DIR>/select-panel.py" \
+  --registry "$REGISTRY" \
+  --seats "<resolved-seat-list>" --deepest "<deepest-seat>" \
+  --installed-harnesses acpx,subagent > "<WORK_DIR>/panel.json" \
+  || { echo "⚠️ selector failed for this panel" >&2; rm -f "<WORK_DIR>/panel.json"; }
 ```
 
-If a reviewer subset was specified, pass the comma-separated list as the third argument. Run this Bash call with `run_in_background: true` (do **not** block on it) — the runner internally blocks until all reviewers complete or time out, and you'll get a task-completion notification when it exits. This keeps the call from serializing the skeptic subagents behind it.
+Then dispatch, passing the per-seat model/effort map when the selector wrote one:
+
+```bash
+ACPX_SEAT_MODELS="<WORK_DIR>/panel.json" \
+  bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
+```
+
+`ACPX_SEAT_MODELS` is only set when `panel.json` was written. On selector failure the mode
+decides what happens:
+- **Plan mode** — run the runner without it; seats fall back to their configured defaults
+  (a warning was already printed).
+- **Changeset mode** — **fail closed.** A changeset seat has no configured default to fall
+  back to, so there is nothing safe to run. Dispatch only the seats the selector assigned;
+  record the skipped ones with the selector's reason, and if no seats remain, stop with an
+  explicit no-seats result rather than spawning anything.
+
+If a reviewer subset was specified, pass the comma-separated list as the third argument.
+Run this Bash call with `run_in_background: true` (do **not** block on it) — the runner
+internally blocks until all reviewers complete or time out, and you'll get a task-completion
+notification when it exits. This keeps the call from serializing the skeptic subagents
+behind it.
 
 **Run this Bash call with `dangerouslyDisableSandbox: true`.** The external reviewers need to escape the Claude Code sandbox: the `antigravity` reviewer writes its project config to `~/.gemini/config/projects/` before it can open a conversation (a sandboxed write there fails with `operation not permitted`, and `agy` then reports `failed to send message: no active conversation` — surfacing as an empty/garbage review), and codex/gemini need outbound network the seatbelt policy otherwise blocks. `nohup`/`disown` inside the runner dodge permission prompts but do **not** lift the seatbelt sandbox — only launching the call unsandboxed does. (Alternative if you prefer not to disable the sandbox per-call: add `~/.gemini` to the write allowlist in `settings.json`.)
 
@@ -460,6 +572,38 @@ Then clean up and exit.
 ---
 
 ## Step 3: Present Reviewer Outputs
+
+**Changeset mode — merge and verify findings in code first.** When no plan was staged
+(changeset mode), run the panel workflow's **report** stage before reading outputs by
+hand. This is what the old `/debate:panel` did after its seats ran: it transcribes each
+seat's review into structured findings, groups them by `file:line`, has one verifier per
+location try to refute each claim against the code, and ranks the survivors. The diff
+shape and skipped seats came from the classify stage (Step 1a, changeset mode); the
+`seatsFailed` / `seatsNotConfigured` come from the Step 2c check-results and the HAVE
+probe.
+
+```text
+Workflow({
+  scriptPath: "~/.claude/debate-workflows/review-panel.js",
+  args: {
+    stage: "report", workDir: "<WORK_DIR>", repoRoot: "<REPO_ROOT>",
+    seats: ["<the seats that reported>"], seatsFailed: ["..."],
+    seatsNotConfigured: ["..."], diff: <diff shape from classify>,
+    seatsSkipped: <seatsSkipped from classify>
+  }
+})
+```
+
+The report also returns `seatsNotTranscribed` — seats that reviewed but whose review could
+not be read back. Their findings are missing from the counts, so report it alongside the
+findings and point at `<WORK_DIR>/<seat>-output.md`; a run with a non-empty
+`seatsNotTranscribed` is incomplete by exactly that much.
+
+Present the returned `findings` (survived, ranked; `refuted` with why; `unverified`
+labeled as unverified) in place of a hand-rolled dedupe. This does **not** replace the
+full reads below — you still read every `-output.md` in full and synthesize. The report's
+finding list is what feeds the verdict. In plan mode there is no report stage; read all
+outputs in full as below.
 
 **CRITICAL: You MUST use the Read tool to read each `-output.md` file IN FULL** — acpx `<name>-output.md` and Claude `claude-<persona>-r<N>-output.md` alike. Do NOT use grep, awk, sed, head, tail, or any other tool to extract snippets or search for keywords. Do NOT summarize without reading. Each reviewer catches different issues — skimming loses findings. Read every word.
 

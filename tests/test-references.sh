@@ -16,6 +16,8 @@ DELETED_FILES=(
   commands/openrouter-review.md
   commands/litellm-setup.md
   commands/openrouter-setup.md
+  commands/panel.md
+
   scripts/invoke-codex.sh
   scripts/invoke-gemini.sh
   scripts/invoke-opus.sh

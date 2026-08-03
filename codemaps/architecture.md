@@ -55,7 +55,7 @@ cc-debate/
 
 ## Stable Symlink Pattern
 
-`debate:setup` runs `scripts/create-links.sh`, creating `~/.claude/debate-scripts →` installed scripts dir and `~/.claude/debate-workflows →` installed workflows dir. Both are checked by `acpx-env-snapshot.sh`; the workflows link is what `/debate:panel` loads `review-panel.js` from, and an install missing only that link runs everything except the panel.
+`debate:setup` runs `scripts/create-links.sh`, creating `~/.claude/debate-scripts →` installed scripts dir and `~/.claude/debate-workflows →` installed workflows dir. Both are checked by `acpx-env-snapshot.sh`; the workflows link is what `/debate:run` loads `review-panel.js` from in changeset mode (classify + report stages), and an install missing only that link degrades changeset review.
 
 All command files call `bash ~/.claude/debate-scripts/<script>.sh` — literal, stable path; no version in path, no runtime glob.
 
