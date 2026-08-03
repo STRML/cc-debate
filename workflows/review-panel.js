@@ -85,7 +85,15 @@ const LENSES = [
   { seat: 'pentester', why: 'attacker', when: (d) => d.securitySensitive || d.securityGrep },
   { seat: 'simplifier', why: 'argues for less code', when: (d) => d.linesAdded >= 150 || d.addsAbstraction },
   { seat: 'antigravity', why: 'a non-OpenAI model', when: (d) => !d.docsOnly },
-  { seat: 'deepseek', why: 'a fourth vendor, told to argue', when: (d) => !d.docsOnly },
+  // The one seat gated on the host, not the diff. deepseek is an opencode-backed agent
+  // created by create-opencode-agent.sh / create-litellm-agent.sh; the sample config
+  // carries its reviewer entry, but most installs never created the agent. Asking for
+  // it unconditionally made every non-docs panel report a phantom FAILED deepseek: the
+  // acpx spawn failed, step 5's HAVE check had already passed on the config entry, and
+  // the seat landed in seatsFailed instead of seatsNotConfigured. The classifier now
+  // reports deepseekAvailable from the runtime config and the installed agents, and
+  // the seat is not requested when the agent cannot run.
+  { seat: 'deepseek', why: 'a fourth vendor, told to argue', when: (d) => !d.docsOnly && d.deepseekAvailable },
 ]
 
 // A docs-only change earns nothing but the floor, and the floor is one seat — unless
@@ -129,6 +137,13 @@ const DIFF_SHAPE = {
       description: 'adds a layer, wrapper, indirection or new module',
     },
     summary: { type: 'string', description: 'one sentence, what the diff does' },
+    deepseekAvailable: {
+      type: 'boolean',
+      description:
+        'whether the deepseek acpx agent is registered and runnable on this host; ' +
+        'transcribe the AVAILABLE/MISSING output of the deepseek probe command, and ' +
+        'report false when it cannot be determined',
+    },
   },
 }
 
@@ -215,6 +230,17 @@ the case it exists for, and it only ever adds the attacker seat. If it prints ER
 grep itself failed and the answer is unknown — say so in the summary and report
 securityGrep true, because an unknown must not read as an all-clear.
 
+Then determine whether the deepseek reviewer can run on this host. deepseek is an
+opencode-backed seat created by create-opencode-agent.sh / create-litellm-agent.sh, and
+most installs never created the agent — the reviewer entry exists in the sample config,
+but the agent does not. Run exactly this and report what it prints (AVAILABLE or MISSING):
+
+  agent=$(jq -r --arg s 'deepseek' '.reviewers[$s].agent // empty' "$HOME/.claude/debate-acpx.json" 2>/dev/null); [ -z "$agent" ] && agent=deepseek; if [ -f "$HOME/.acpx/config.json" ] && cmd=$(jq -r --arg a "$agent" '.agents[$a].command // empty' "$HOME/.acpx/config.json" 2>/dev/null) && [ -n "$cmd" ] && [ -x "$cmd" ]; then echo AVAILABLE; else echo MISSING; fi
+
+Set deepseekAvailable true for AVAILABLE, false for MISSING. Do not infer it from the
+config entry existing — the registered agent is the point, and a missing answer must
+read as false so the seat is not requested.
+
 If the file is missing, report every count as 0 and docsOnly true.
 
 Judge docsOnly, the three booleans and the summary by reading the diff — those are the
@@ -237,8 +263,19 @@ if (!shape.filesChanged && !shape.linesAdded && !shape.linesRemoved) {
 const seats = pickSeats(shape)
 log(`${shape.filesChanged} files, +${shape.linesAdded}/-${shape.linesRemoved}: ${shape.summary}`)
 log(`seats: ${seats.join(', ')}`)
+// deepseek is the one seat whose absence can be the host's doing rather than the
+// diff's: on a machine without the agent the lens is not bought because it cannot run,
+// and the log should say so instead of claiming the diff did not earn it.
+const skipReason = (l) => (l.seat === 'deepseek' && !shape.deepseekAvailable
+  ? 'the deepseek acpx agent is not installed on this host'
+  : l.why)
 for (const l of LENSES) {
-  if (!seats.includes(l.seat)) log(`  skipped ${l.seat} (${l.why}) — not earned by this diff`)
+  if (!seats.includes(l.seat)) {
+    const reason = l.seat === 'deepseek' && !shape.deepseekAvailable
+      ? `  skipped deepseek — ${skipReason(l)}`
+      : `  skipped ${l.seat} (${skipReason(l)}) — not earned by this diff`
+    log(reason)
+  }
 }
 
 // Stage one ends here. The command runs these seats and comes back with the ones that
@@ -247,7 +284,10 @@ return {
   stage: 'classify',
   diff: shape,
   seats,
-  seatsSkipped: LENSES.filter((l) => !seats.includes(l.seat)).map((l) => ({ seat: l.seat, why: l.why })),
+  seatsSkipped: LENSES.filter((l) => !seats.includes(l.seat)).map((l) => ({
+    seat: l.seat,
+    why: skipReason(l),
+  })),
 }
 
 } // end stage: 'classify'
