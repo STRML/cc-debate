@@ -666,11 +666,56 @@ fi
 # modify the plan doc or any file in the repo while reviewing.
 ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-permissions deny "${AGENT_ARGS[@]}" --file "$PROMPT_FILE")
 
+# acpx does not tear down the agent adapter it spawns, and `timeout` only
+# signals the process group when the timeout FIRES — on a normal exit it returns
+# as soon as the command does and signals nothing at all. So the adapter, and
+# the MCP server fleet that adapter boots, is left running: it reparents to init
+# and never exits. That is one orphan tree per reviewer per round on the SUCCESS
+# path, which is why it accumulates with routine use rather than only after
+# failures. Measured on one workstation after ~2 weeks of /debate use: 13
+# orphaned adapter trees, every one of them in a process group whose leader had
+# long since exited.
+#
+# `timeout` makes ITSELF the process-group leader — its pid equals its pgid, and
+# the command it runs joins that group — so $! is both the pid to wait on and
+# the group to sweep afterwards. Once it exits the survivors are orphans with
+# ppid=1, but they are still in that now-leaderless group, and the group is the
+# only remaining handle on them.
+#
+# Without a timeout binary the command shares THIS script's process group, and
+# sweeping it would kill the script mid-run. reap_process_group declines that
+# case, so a timeout-less host keeps exactly its current behaviour.
+reap_process_group() {
+  local pgid="${1:-}"
+  [ -n "$pgid" ] || return 0
+
+  local self_pgid
+  self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+  if [ -z "$self_pgid" ] || [ "$pgid" = "$self_pgid" ]; then
+    return 0
+  fi
+
+  # A negative pid means "every process in this group". An empty group is the
+  # normal, healthy outcome, so a failure here is expected and not worth
+  # reporting — hence the discard.
+  kill -TERM -- "-$pgid" 2> /dev/null || true
+}
+
 attempt_acpx() {
   set +e
-  "${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+  # Backgrounded solely to capture $! — the process group to sweep once the call
+  # is done. `wait` restores the blocking, in-order semantics of a foreground
+  # run, and stdout/stderr are redirected exactly as before. acpx takes its
+  # prompt via --file, so it never reads the stdin it no longer controls.
+  "${ACPX_CMD[@]}" > "$WORK_DIR/${REVIEWER}-output.md" 2>"$WORK_DIR/${REVIEWER}-stderr.log" &
+  ACPX_PID=$!
+  wait "$ACPX_PID"
   EXIT_CODE=$?
   set -e
+  # Sweep whatever acpx left behind, on both the timeout and the success path.
+  # Under `timeout` this pid IS the process-group id (see above); without one it
+  # is just acpx's pid in our own group, which reap_process_group declines.
+  reap_process_group "$ACPX_PID"
 
   # acpx exit 5 is PERMISSION_DENIED, and on this panel it is not a failed review.
   #
