@@ -192,6 +192,19 @@ if (STAGE === 'classify') {
 
 phase('Classify')
 
+// Plan mode: the seats are passed in, not sized by a diff. /debate:run with a staged
+// plan resolves its panel from the config; this branch lets the report stage reuse the
+// same extract/verify/rank path for both modes without measuring a diff that is not there.
+if (A.plan) {
+  log(`plan mode — seats: ${(A.seats || []).join(', ')}`)
+  return {
+    stage: 'classify',
+    plan: true,
+    seats: A.seats || [],
+    seatsSkipped: [],
+  }
+}
+
 const shape = await agent(
   `Report the shape of the changeset at ${WORK_DIR}/changeset.diff. Do not review it and
 do not judge it. Report only what is observably true of the diff.

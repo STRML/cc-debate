@@ -37,6 +37,15 @@ test_workflow_exists() {
   [ -f "$WF" ]
 }
 
+# A staged plan has no diff to size the panel from, so the seats are passed in.
+# The classify stage must short-circuit on A.plan and return them untouched,
+# letting /debate:run reuse the same extract/verify/rank path for both modes.
+test_plan_mode_uses_passed_seats() {
+  grep -q "if (A.plan)" "$WF" || { echo -n "(no plan-mode branch) "; return 1; }
+  grep -q "seats: A.seats" "$WF" || { echo -n "(plan mode ignores passed seats) "; return 1; }
+  return 0
+}
+
 # A syntax error here is invisible until someone spends a panel run finding it.
 test_workflow_parses() {
   if ! have_node; then
@@ -422,6 +431,7 @@ echo "=== workflow panel tests ==="
 echo ""
 
 run_test "workflow file exists" test_workflow_exists
+run_test "plan mode uses passed seats" test_plan_mode_uses_passed_seats
 run_test "workflow parses" test_workflow_parses
 run_test "declared phases match started phases" test_declared_phases_match_started_phases
 run_test "lens seats exist in sample config" test_lens_seats_exist_in_sample_config
