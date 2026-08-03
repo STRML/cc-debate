@@ -78,6 +78,15 @@ def scratch_dir(cwd):
     except Exception:
         pass
     d = os.path.realpath(os.path.join(cwd, ".tmp"))
+    # A repo-controlled `.tmp` symlink (e.g. `.tmp -> /tmp`) would redirect the
+    # sandbox's WRITABLE grant outside the repo — the realpath lands on a shared,
+    # other-process-owned directory the seat could then alter. Refuse rather than
+    # grant it (pentester finding).
+    root = os.path.realpath(cwd)
+    if not (d == root or d.startswith(root.rstrip(os.sep) + os.sep)):
+        raise SystemExit(
+            "sandbox.py: %s/.tmp resolves to %s, outside %s — refusing a symlinked scratch"
+            % (cwd, d, root))
     try:
         os.makedirs(d, exist_ok=True)
     except OSError:
@@ -128,6 +137,19 @@ def scrub_env(home, tmpdir, path=None):
     for k, v in os.environ.items():
         if (k.startswith("ACPX_") or k.startswith("CODEX_")) and k not in env:
             env[k] = v
+    # Runner controls the wrapped run-parallel-acpx.sh reads: DEBATE_FREEZE_DIFF /
+    # DEBATE_DIFF_BASE pick the diff, POLL_MAX_WAIT bounds the wait. A scrub that
+    # dropped these silently changed the review target inside the sandbox (#45).
+    for k in ("DEBATE_FREEZE_DIFF", "DEBATE_DIFF_BASE", "POLL_MAX_WAIT"):
+        if os.environ.get(k):
+            env[k] = os.environ[k]
+    # The antigravity direct-CLI seat authenticates via ANTIGRAVITY_API_KEY /
+    # GEMINI_API_KEY when no OAuth is stored; a scrub that dropped these made every
+    # sandboxed agy seat fail to authenticate (#45). They are already in the caller's
+    # env, so passing them to the seat is not a new exposure.
+    for k in ("ANTIGRAVITY_API_KEY", "GEMINI_API_KEY"):
+        if os.environ.get(k):
+            env[k] = os.environ[k]
     return env
 
 def bwrap_cmd(repo, repo_sandbox, no_net, bind_pwd):
@@ -177,13 +199,18 @@ def seatbelt_cmd(repo, repo_sandbox, no_net, bind_pwd):
     # files belonging to other processes on the host. bwrap gives /tmp a fresh tmpfs;
     # this is the Seatbelt equivalent of that scope. home_tmp is a subpath of scratch,
     # so its grant is redundant but kept for the write-scope contract.
+    # A path a local attacker can control (the checkout/working-directory name) is
+    # interpolated into the SBPL profile; quotes/newlines there would inject a rule
+    # (e.g. a write grant for /). Escape string literals (pentester finding).
+    def sbpl(s):
+        return (s or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
     rules = ["(deny file-write*)",
              # The runner's scripts redirect stdout/stderr to /dev/null throughout
              # (`git rev-parse ... 2>/dev/null`); with no /dev/null grant the seatbelt
              # sandbox can never run the pipeline, so keep the device sink writable.
              '(allow file-write* (literal "/dev/null"))',
-             '(allow file-write* (subpath "%s"))' % home_tmp,
-             '(allow file-write* (subpath "%s"))' % scratch]
+             '(allow file-write* (subpath "%s"))' % sbpl(home_tmp),
+             '(allow file-write* (subpath "%s"))' % sbpl(scratch)]
     if no_net:
         rules.append("(deny network*)")
     profile = "(version 1)\n(allow default)\n" + "\n".join(rules) + "\n"
