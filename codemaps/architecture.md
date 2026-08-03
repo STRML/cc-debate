@@ -3,7 +3,7 @@ _Updated: 2026-08-03_
 
 ## Overview
 
-`cc-debate` is a Claude Code plugin that sends implementation plans to multiple AI models for parallel review via [acpx](https://github.com/openclaw/acpx) — with direct-CLI exceptions for `antigravity`/`opus`. It synthesizes feedback, resolves contradictions via targeted debate, and produces a consensus verdict before code is written.
+`cc-debate` is a Claude Code plugin that sends implementation plans to multiple AI models for parallel review via [acpx](https://github.com/openclaw/acpx) — with direct-CLI exceptions for `antigravity`/`opus` and an effort-scaled `codex` seat. It synthesizes feedback, resolves contradictions via targeted debate, and produces a consensus verdict before code is written.
 
 ## Top-level Layout
 
@@ -61,9 +61,10 @@ All command files call `bash ~/.claude/debate-scripts/<script>.sh` — literal, 
 
 ## Reviewer Invocation
 
-Reviewers run through `invoke-acpx.sh`, which wraps timeout handling, config resolution, and output file management. Most seats go through `acpx --format quiet --approve-reads <agent> --file <prompt>`, but two run the agent CLI directly:
+Reviewers run through `invoke-acpx.sh`, which wraps timeout handling, config resolution, and output file management. Most seats go through `acpx --format quiet --approve-reads <agent> --file <prompt>`, but three run the agent CLI directly:
 - `antigravity` — `agy -p "<plan>" --sandbox` under a Python PTY (acpx has no adapter).
 - `opus` — `claude --print --permission-mode plan --model <id>` (acpx has no adapter).
+- `codex` with `EFFORT` set — `codex exec ...` (below; acpx cannot pass `model_reasoning_effort`).
 
 Codex with `EFFORT` set runs `codex exec --ephemeral -m <model> -c model_reasoning_effort=<level> -s read-only -o <outfile> -` directly (acpx cannot pass `model_reasoning_effort`; effort auto-scaling #31 Q2). A non-codex seat with `EFFORT` logs the fallback and runs at its default.
 

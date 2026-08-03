@@ -89,4 +89,4 @@ said nothing, so a contentless run is 1 byte, not 0.
 - `plugin.json` — name, version, description, author, license
 - `marketplace.json` — marketplace listing with install instructions
 
-Current version: **2.6.0**
+Current version: **3.1.2**
