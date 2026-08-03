@@ -24,9 +24,17 @@ Report:
 ## debate — acpx Setup Check
 
 ### Tools
-  ✅ acpx      found at /path/to/acpx (using: acpx)
+  ✅ acpx      found at /path/to/acpx (0.13.0) (using: acpx)
   ✅ jq        found at /path/to/jq
   ✅ opencode  found at /path/to/opencode (enables OpenRouter models)
+```
+
+If `acpx` is found but older than 0.13.0 (the minimum for effort auto-scaling —
+`acpx codex set reasoning_effort` requires it):
+```text
+  ⚠️  acpx version 0.12.1 is older than 0.13.0 — effort auto-scaling for codex seats
+     needs acpx >= 0.13.0. Codex seats will run at default effort.
+     Upgrade: npm install -g acpx@latest
 ```
 
 If `acpx` is not found but `npx` is:

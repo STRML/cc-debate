@@ -1,6 +1,6 @@
 {
   "name": "debate",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "Multi-model AI plan and code review: run any acpx-supported agent (Codex, Antigravity, Kimi, Qwen, etc.) in parallel, synthesize feedback, debate contradictions",
   "author": {
     "name": "strml",
@@ -9,5 +9,12 @@
   "homepage": "https://github.com/STRML/cc-debate",
   "repository": "https://github.com/STRML/cc-debate",
   "license": "MIT",
-  "keywords": ["review", "acpx", "ai", "plan-review", "multi-model", "debate"]
+  "keywords": [
+    "review",
+    "acpx",
+    "ai",
+    "plan-review",
+    "multi-model",
+    "debate"
+  ]
 }

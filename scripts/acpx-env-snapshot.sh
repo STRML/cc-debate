@@ -6,9 +6,35 @@
 # Output: key: value lines, then debate-acpx.json contents
 
 ACPX_PATH=$(command -v acpx 2>/dev/null || true)
+# Minimum version for effort auto-scaling: `acpx codex set reasoning_effort`
+# (used by invoke-acpx.sh for effort-scaled codex seats) requires acpx >= 0.13.0.
+# Earlier versions run codex at its default effort and say so.
+ACPX_MIN="0.13.0"
+
+# Numeric version compare, portably (no sort -V: stock macOS BSD sort lacks it).
+# Returns 0 when $1 >= $2. Accepts major.minor.patch; missing components are 0.
+version_ge() {
+  local a b ia ib i
+  IFS='.' read -r -a a <<< "$1"
+  IFS='.' read -r -a b <<< "$2"
+  for i in 0 1 2; do
+    ia="${a[$i]:-0}"; ib="${b[$i]:-0}"
+    # Strip any non-numeric suffix (e.g. "0.13.0-beta.1" -> "0")
+    ia="${ia%%[^0-9]*}"; ib="${ib%%[^0-9]*}"
+    ia="${ia:-0}"; ib="${ib:-0}"
+    [ "$ia" -gt "$ib" ] && return 0
+    [ "$ia" -lt "$ib" ] && return 1
+  done
+  return 0
+}
+
 if [ -n "$ACPX_PATH" ]; then
   ACPX_VER=$(acpx --version 2>/dev/null || echo "unknown")
   echo "acpx: $ACPX_PATH ($ACPX_VER)"
+  if [ "$ACPX_VER" != "unknown" ] && ! version_ge "$ACPX_VER" "$ACPX_MIN"; then
+    echo "  ⚠️ acpx < $ACPX_MIN — effort auto-scaling for codex seats needs acpx >= $ACPX_MIN."
+    echo "    Upgrade: npm install -g acpx@latest"
+  fi
 else
   echo "acpx: not found"
 fi

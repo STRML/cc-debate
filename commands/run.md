@@ -160,7 +160,7 @@ Reviewers:
 
 ### 1d. Verify sessions
 
-`invoke-acpx.sh` ensures an acpx session before a review run — no manual session creation is needed. Two kinds of reviewer skip this: direct-CLI agents (`antigravity`, `opus`, and an effort-scaled `codex` seat with `EFFORT` set), which never use an acpx session, and any reviewer set to `mode: "exec"`, which sends one-shots. If a reviewer fails with exit code 4 (session creation failed), it means the agent CLI is not installed or not authenticated. In that case, suggest running `/debate:acpx-setup` to diagnose.
+`invoke-acpx.sh` ensures an acpx session before a review run — no manual session creation is needed. Two kinds of reviewer skip this: direct-CLI agents (`antigravity`, `opus`), which never use an acpx session, and any reviewer set to `mode: "exec"`, which sends one-shots. If a reviewer fails with exit code 4 (session creation failed), it means the agent CLI is not installed or not authenticated. In that case, suggest running `/debate:acpx-setup` to diagnose.
 
 ### 1e. Capture the review target
 
@@ -169,6 +169,13 @@ First check whether a plan exists in the current conversation context. If one do
 If no plan is present, do **not** ask for one. Leave `plan.md` unwritten and continue — `run-parallel-acpx.sh` captures the current changeset and the reviewers debate that instead. Someone who runs this without a plan almost always means "review what I just did".
 
 Only ask the user what to review when the runner exits non-zero reporting no plan and no changes, which means there is genuinely nothing to look at. If they name a specific target instead (a branch, a ref range), set `DEBATE_DIFF_BASE` accordingly rather than writing a plan.
+
+**Reviewing a specific PR's changeset.** When the user names a PR to review, capture its
+diff yourself and freeze it, or the runner will regenerate from the working tree (empty on
+a merged PR, since the tree is clean). Write the base→head diff to `<WORK_DIR>/changeset.diff`
+and the base SHA to `<WORK_DIR>/changeset-base.txt`, then set `DEBATE_FREEZE_DIFF=1` on the
+Step 2a dispatch — the runner honors a pre-written changeset only with that flag. This is
+the `/debate:panel` convention, needed now that `/debate:run` owns changeset review.
 
 ### 1f. Changeset mode — size the panel from the diff
 
@@ -222,11 +229,14 @@ Run only the `HAVE` seats; carry the `UNCONFIGURED` ones into `seatsNotConfigure
 report time. `--deepest` for the selector (Step 2a) is `pentester` when present, else the
 last lens seat.
 
-**Changeset seats have no config default.** A lens seat has no `reviewers` config entry
-behind it, so if the selector returns no assignment for one (no available model for its
-harness, or the registry has nothing for it), the seat is **skipped and reported as failed**
-with the selector's reason — never run at an agent's default (there is none). Only
-plan-mode seats fall back to a configured default.
+**Changeset seats fall back to their configured default when they have one.** A lens seat
+that IS a key in the config's `reviewers` object (e.g. `executor-b`, `cartographer`,
+`deepseek`) has a configured agent default — if the selector returns no assignment for it
+(no available model for its harness, or the registry has nothing for it), it runs at that
+configured default, like plan mode. A lens seat with **no** `reviewers` config entry (a
+lens that names a seat this config never defined) is skipped and reported as failed with
+the selector's reason — it has no default to fall back to. The panel is never smaller than
+what the config and selector together can run.
 
 ---
 
@@ -967,7 +977,7 @@ abort Cleanup path above):
 
 ## Rules
 
-- **acpx handles everything** — except three direct-CLI reviewers: `antigravity` and `opus` (no native acpx ACP support), and an effort-scaled `codex` seat (acpx has no `model_reasoning_effort` passthrough). `invoke-acpx.sh` detects `agent: antigravity` and runs the Antigravity CLI: `agy -p "<plan>" --sandbox` under a Python PTY (because `agy -p` drops its output when stdout is not a TTY), with OAuth or `ANTIGRAVITY_API_KEY` auth. The prompt is a positional argument (agy ignores stdin in print mode). A `codex` seat with `EFFORT` set runs `codex exec --ephemeral -m <model> -c model_reasoning_effort=<level> -s read-only -o <outfile> -` directly — same reasoning as `antigravity`/`opus`. Note: `invoke-acpx.sh` still *supports* an `agent: opus` CLI reviewer (nested `claude --print`), but it is not in the default config — the Claude side of the panel is the in-session skeptic/persona teammates (§2b), not an acpx opus reviewer. The `opus`/`claude` read-only notes below describe that standing capability, not a reviewer that runs by default.
+- **acpx handles everything** — except two direct-CLI reviewers: `antigravity` and `opus` (no native acpx ACP support). `invoke-acpx.sh` detects `agent: antigravity` and runs the Antigravity CLI: `agy -p "<plan>" --sandbox` under a Python PTY (because `agy -p` drops its output when stdout is not a TTY), with OAuth or `ANTIGRAVITY_API_KEY` auth. The prompt is a positional argument (agy ignores stdin in print mode). Codex is a normal acpx seat; effort auto-scaling routes through `acpx codex set reasoning_effort <level>` (acpx ≥ 0.13.0). Note: `invoke-acpx.sh` still *supports* an `agent: opus` CLI reviewer (nested `claude --print`), but it is not in the default config — the Claude side of the panel is the in-session skeptic/persona teammates (§2b), not an acpx opus reviewer. The `opus`/`claude` read-only notes below describe that standing capability, not a reviewer that runs by default.
 - **Parallel via bash + Agent.** `run-parallel-acpx.sh` runs external reviewers as background processes. The Claude teammates (skeptic(s) plus any persona reviewers, per `claude_reviewers`) run in parallel via Agent with `run_in_background: true`. **The Bash runner call and every Claude Agent call must use `run_in_background: true` and be issued in the same tool-call message** — otherwise a blocking foreground runner serializes the teammates behind the full acpx wait (~8 min wasted). Step 2c waits for all of them.
 - **Reviewers are read-only — with one scoped exception for Claude teammates.** acpx agents get `--approve-reads --non-interactive-permissions deny` (reads auto-approved, writes auto-denied) and never write anything — the runner captures their stdout to `<name>-output.md`. `antigravity` has no hard read-only flag, so it runs from a throwaway workspace with the plan in-prompt plus `--sandbox`. Claude teammates have no runner to capture their output, so they deliver by writing their **own** output file, `<WORK_DIR>/claude-<persona>-r<N>-output.md` (allowlisted via `Write(.tmp/ai-review*)`) — that single write is their only permitted one. No reviewer, acpx or Claude, may edit `plan.md` or repo source: the review is the deliverable, not a fix. Don't grant a reviewer any write beyond its own output file to work around one that "wants to fix it inline."
 - **Delivery is file-based for every reviewer.** acpx and Claude teammates alike write `<WORK_DIR>/…-output.md`; the orchestrator reads files uniformly and never depends on a mailbox message surfacing. A Claude teammate also sends a one-line SendMessage liveness ping, but the ping's body is not the review — a dropped ping loses nothing. This converged the two channels: the acpx side was always file-based and reliable; the mailbox-based Claude side was lossy (a teammate's SendMessage'd review could drop silently) until this change.
