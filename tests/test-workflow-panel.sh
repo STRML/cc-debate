@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WF="$PROJECT_DIR/workflows/review-panel.js"
-PANEL_MD="$PROJECT_DIR/commands/panel.md"
+RUN_MD="$PROJECT_DIR/commands/run.md"
 SAMPLE="$PROJECT_DIR/debate-acpx.sample.json"
 
 PASS=0
@@ -83,12 +83,12 @@ test_lens_seats_exist_in_sample_config() {
 # workflow spawns Claude subagents, so the review itself must go through the
 # runner. If this ever fails, someone has turned the panel into one vendor.
 #
-# Checked against panel.md, because the runner is invoked from the command: it blocks
+# Checked against run.md, because the runner is invoked from the command: it blocks
 # for up to half an hour and nothing inside a workflow can wait that long. Checking the
 # workflow would pass on a passing mention of the runner in a comment, which is exactly
 # what it now contains.
 test_reviews_still_go_through_the_runner() {
-  grep -q "run-parallel-acpx.sh" "$PANEL_MD" || { echo -n "(command never runs the runner) "; return 1; }
+  grep -q "run-parallel-acpx.sh" "$RUN_MD" || { echo -n "(command never runs the runner) "; return 1; }
   # And the workflow must not quietly take the job back. Three agent() calls is the
   # design — classify, extract, verify — and none of them reviews the diff for defects.
   # Comments discuss agent() at length, so count code lines only.
@@ -201,8 +201,8 @@ test_shellarg_handles_hostile_paths() {
 # It also needs out of the sandbox: antigravity writes under ~/.gemini before it can
 # open a conversation.
 test_runner_is_backgrounded_and_unsandboxed() {
-  grep -q 'run_in_background: true' "$PANEL_MD" || { echo -n "(not backgrounded) "; return 1; }
-  grep -q 'dangerouslyDisableSandbox: true' "$PANEL_MD" || { echo -n "(sandboxed) "; return 1; }
+  grep -q 'run_in_background: true' "$RUN_MD" || { echo -n "(not backgrounded) "; return 1; }
+  grep -q 'dangerouslyDisableSandbox: true' "$RUN_MD" || { echo -n "(sandboxed) "; return 1; }
   return 0
 }
 
@@ -366,7 +366,7 @@ test_failed_extraction_is_not_zero_findings() {
   grep -q 'extractFailed.length === ran.length' "$WF" || { echo -n "(total failure not fatal) "; return 1; }
   # And a partial loss must reach the caller.
   grep -q 'seatsNotTranscribed' "$WF" || { echo -n "(partial loss not reported) "; return 1; }
-  grep -q 'seatsNotTranscribed' "$PANEL_MD" || { echo -n "(command does not report it) "; return 1; }
+  grep -q 'seatsNotTranscribed' "$RUN_MD" || { echo -n "(command does not report it) "; return 1; }
   return 0
 }
 
