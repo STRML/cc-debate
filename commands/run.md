@@ -165,6 +165,58 @@ If no plan is present, do **not** ask for one. Leave `plan.md` unwritten and con
 
 Only ask the user what to review when the runner exits non-zero reporting no plan and no changes, which means there is genuinely nothing to look at. If they name a specific target instead (a branch, a ref range), set `DEBATE_DIFF_BASE` accordingly rather than writing a plan.
 
+### 1f. Changeset mode — size the panel from the diff
+
+When no plan is staged (changeset mode), do **not** resolve the acpx panel from the config.
+The change sizes its own panel. Run the panel workflow's **classify** stage to measure the
+diff and pick the seats:
+
+```text
+Workflow({
+  scriptPath: "~/.claude/debate-workflows/review-panel.js",
+  args: { stage: "classify", workDir: "<WORK_DIR>", repoRoot: "<REPO_ROOT>" }
+})
+```
+
+It returns `{ diff, seats, seatsSkipped }`. Write that object to `<WORK_DIR>/panel-state.json`
+— it is needed again at report time (Step 3), half an hour of seats separates the two, and
+held only in context it is one compaction away from gone.
+
+Then **drop the seats this machine has not configured** with the HAVE probe. For each lens
+seat, verify its agent can actually spawn — a direct CLI present for `antigravity`/`opus`, a
+registered command in `~/.acpx/config.json` for an opencode-backed agent (also check its
+runtime, e.g. `opencode`), the CLI on PATH for the rest:
+
+```bash
+for s in <seat1> <seat2> ...; do
+  a=$(jq -r --arg s "$s" '.reviewers[$s].agent // empty' "$HOME/.claude/debate-acpx.json")
+  if [ -z "$a" ]; then
+    echo "UNCONFIGURED $s"
+  elif [ "$a" = "antigravity" ]; then
+    command -v agy >/dev/null 2>&1 && { command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; } \
+      && echo "HAVE $s" || echo "UNCONFIGURED $s"
+  elif [ "$a" = "opus" ]; then
+    command -v claude >/dev/null 2>&1 && echo "HAVE $s" || echo "UNCONFIGURED $s"
+  elif [ -f "$HOME/.acpx/config.json" ] && cmd=$(jq -r --arg a "$a" '.agents[$a].command // empty' "$HOME/.acpx/config.json") && [ -n "$cmd" ] && [ -x "$cmd" ]; then
+    command -v opencode >/dev/null 2>&1 && echo "HAVE $s" || echo "UNCONFIGURED $s"
+  elif command -v "$a" >/dev/null 2>&1; then
+    echo "HAVE $s"
+  else
+    echo "UNCONFIGURED $s"
+  fi
+done
+```
+
+Run only the `HAVE` seats; carry the `UNCONFIGURED` ones into `seatsNotConfigured` at
+report time. `--deepest` for the selector (Step 2a) is `pentester` when present, else the
+last lens seat.
+
+**Changeset seats have no config default.** A lens seat has no `reviewers` config entry
+behind it, so if the selector returns no assignment for one (no available model for its
+harness, or the registry has nothing for it), the seat is **skipped and reported as failed**
+with the selector's reason — never run at an agent's default (there is none). Only
+plan-mode seats fall back to a configured default.
+
 ---
 
 ## Step 2: Parallel Review (Round N)
