@@ -1,5 +1,5 @@
 # Frontend — debate plugin
-_Updated: 2026-03-01_
+_Updated: 2026-08-03_
 
 ## Note
 
@@ -18,8 +18,9 @@ This is a Claude Code CLI plugin — there is no web frontend. "Frontend" here m
 /debate:claude-custom-review  Interactive personality + model picker
 /debate:fable               Single Fable Skeptic (alias: /debate:mythos)
 /debate:opus                Single Opus Skeptic
-/debate:panel               Panel sized by the diff; merges and verifies findings in code
 ```
+`/debate:run` with no staged plan sizes its own panel from the diff and merges/verifies
+the findings in code (this replaced `/debate:panel` in 3.1.0).
 
 ## Output Format
 

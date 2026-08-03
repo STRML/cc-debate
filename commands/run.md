@@ -1,11 +1,16 @@
 ---
-description: Run the configured AI reviewers (all, a subset, or a named preset) in parallel via acpx, synthesize feedback, debate contradictions, and produce a consensus verdict. Configure reviewers and presets in ~/.claude/debate-acpx.json. Alias: /debate:all.
+description: Review a plan or changeset with a self-tuning panel — seats, models, and reasoning effort picked for the job — synthesize feedback, debate contradictions, and produce a consensus verdict. Configure reviewers and presets in ~/.claude/debate-acpx.json. Alias: /debate:all.
 allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/record-round.sh:*), Bash(bash ~/.claude/debate-scripts/safe-cleanup.sh:*), Bash(sha256sum:*), Bash(shasum:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Write(~/.acpx/**), Read(~/.acpx/**), Read(~/.claude/debate-scripts/reviewer-prompts.md), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
 ---
 
 # AI Multi-Model Plan Review (acpx)
 
-Run all configured AI reviewers in parallel via acpx, synthesize their feedback, debate contradictions, and produce a final consensus verdict. Max 3 total **revision** rounds (verification passes — re-reviewing a post-fix plan with no further revisions — do NOT count against this budget; see Step 6.5).
+Run a review panel that tunes itself to the job. A staged plan keeps the config's personas;
+a changeset sizes its own panel from the diff. The selector picks a model and reasoning
+effort for every seat (registry-driven, effort auto-scaled). Then synthesize their
+feedback, debate contradictions, and produce a final consensus verdict. Max 3 total
+**revision** rounds (verification passes — re-reviewing a post-fix plan with no further
+revisions — do NOT count against this budget; see Step 6.5).
 
 Arguments (order-independent; `skip-debate` may accompany either panel selector):
 - **Preset name** — a bare token matching a key in the config's `presets` object (e.g. `tight`). Selects that named panel — its acpx `reviewers` subset AND its `claude_reviewers` map — overriding the top-level defaults. Resolution in Step 1a.

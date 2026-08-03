@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+- **`/debate:run` is now fully dynamic; `/debate:panel` is gone.** The panel picks its
+  own reviewers, models, and effort. A staged plan keeps the config's personas; a changeset
+  sizes its own panel from the diff (docs-only → one seat, security → the attacker, wide →
+  the full table). The selector assigns model + effort to every seat; changeset mode
+  dedupes, verifies, and ranks the findings in code.
+
 ## [3.0.0] — 2026-08-03 (self-tuning panels: model registry, effort auto-scaling)
 
 The big one. The panel now picks its own reviewers from a data-refreshed model registry, and scales their reasoning effort to seat depth and budget.
