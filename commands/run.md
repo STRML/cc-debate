@@ -80,6 +80,19 @@ must be a key in the top-level `reviewers` object with an `agent` field. If any 
 unknown, fail with the offending names listed (`⚠️ unknown reviewer(s): <names>`) rather
 than silently running a shrunk panel — the runner would skip them without telling you.
 
+**Model + effort selection (always).** After the acpx panel resolves, the panel
+selector picks a model and reasoning effort for every seat — this is the self-tuning
+half of 3.0.0. Resolve the registry in this order, first existing wins:
+1. `~/.claude/debate-models.json` (the user's seeded/refreshed registry)
+2. `<SCRIPT_DIR>/../hermes/templates/debate-models.json` (bundled seed)
+
+Run the selector (Step 2a below) and write its output to `<WORK_DIR>/panel.json`.
+If the selector errors, or returns no assignment for a **plan-mode** seat (no
+available model for an installed harness, infeasible `--max-cost`, empty registry),
+that seat falls back to its configured agent default with a `⚠️` warning naming the
+seat — the panel is never smaller than it would be without the selector. (Changeset
+mode has no configured default to fall back to; see the changeset section in Step 1a.)
+
 ### 1b. Generate session ID & temp dir
 
 Verify `~/.claude/debate-scripts` exists. If not:
@@ -162,11 +175,40 @@ Launch the acpx reviewers AND the Claude skeptic subagent(s) **in parallel**. Is
 
 ### 2a. acpx reviewers (Bash)
 
+First, run the panel selector for the resolved seats and capture its output. This picks a
+model + reasoning effort per seat (Step 1a's model/effort selection):
+
 ```bash
-bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
+# Resolve registry (first existing wins): user-seeded, else bundled seed.
+if [ -f "$HOME/.claude/debate-models.json" ]; then
+  REGISTRY="$HOME/.claude/debate-models.json"
+else
+  REGISTRY="<SCRIPT_DIR>/../hermes/templates/debate-models.json"
+fi
+
+# Run the selector for the resolved seats. --deepest is the arbiter: the last
+# resolved seat in plan mode, the pentester (or last lens seat) in changeset mode.
+python3 "<SCRIPT_DIR>/select-panel.py" \
+  --registry "$REGISTRY" \
+  --seats "<resolved-seat-list>" --deepest "<deepest-seat>" \
+  --installed-harnesses acpx,subagent > "<WORK_DIR>/panel.json" \
+  || { echo "⚠️ selector failed for this panel — running configured defaults" >&2; rm -f "<WORK_DIR>/panel.json"; }
 ```
 
-If a reviewer subset was specified, pass the comma-separated list as the third argument. Run this Bash call with `run_in_background: true` (do **not** block on it) — the runner internally blocks until all reviewers complete or time out, and you'll get a task-completion notification when it exits. This keeps the call from serializing the skeptic subagents behind it.
+Then dispatch, passing the per-seat model/effort map when the selector wrote one:
+
+```bash
+ACPX_SEAT_MODELS="<WORK_DIR>/panel.json" \
+  bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
+```
+
+`ACPX_SEAT_MODELS` is only set when `panel.json` was written; on selector failure (the
+file removed above) run the runner without it — plan-mode seats fall back to their
+configured defaults. If a reviewer subset was specified, pass the comma-separated list as
+the third argument. Run this Bash call with `run_in_background: true` (do **not** block on
+it) — the runner internally blocks until all reviewers complete or time out, and you'll get
+a task-completion notification when it exits. This keeps the call from serializing the
+skeptic subagents behind it.
 
 **Run this Bash call with `dangerouslyDisableSandbox: true`.** The external reviewers need to escape the Claude Code sandbox: the `antigravity` reviewer writes its project config to `~/.gemini/config/projects/` before it can open a conversation (a sandboxed write there fails with `operation not permitted`, and `agy` then reports `failed to send message: no active conversation` — surfacing as an empty/garbage review), and codex/gemini need outbound network the seatbelt policy otherwise blocks. `nohup`/`disown` inside the runner dodge permission prompts but do **not** lift the seatbelt sandbox — only launching the call unsandboxed does. (Alternative if you prefer not to disable the sandbox per-call: add `~/.gemini` to the write allowlist in `settings.json`.)
 
