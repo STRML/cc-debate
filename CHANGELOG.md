@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [3.1.0] — 2026-08-03 (one dynamic /debate:run)
 
 - **`/debate:run` is now fully dynamic; `/debate:panel` is gone.** The panel picks its
   own reviewers, models, and effort. A staged plan keeps the config's personas; a changeset
