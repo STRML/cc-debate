@@ -576,6 +576,11 @@ Workflow({
 })
 ```
 
+The report also returns `seatsNotTranscribed` — seats that reviewed but whose review could
+not be read back. Their findings are missing from the counts, so report it alongside the
+findings and point at `<WORK_DIR>/<seat>-output.md`; a run with a non-empty
+`seatsNotTranscribed` is incomplete by exactly that much.
+
 Present the returned `findings` (survived, ranked; `refuted` with why; `unverified`
 labeled as unverified) in place of a hand-rolled dedupe. This does **not** replace the
 full reads below — you still read every `-output.md` in full and synthesize. The report's
