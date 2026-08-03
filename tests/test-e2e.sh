@@ -47,10 +47,9 @@ test_dispatch_writes_reviews(){
 # 4. dispatch (mock) passes the selected per-seat model AND effort through (F1 +
 #    effort auto-scaling). The selector emits effective_effort per seat; a codex
 #    seat with EFFORT set bypasses acpx and runs the codex CLI directly, so the
-#    mock-codex invocation log records `-m <model>` and
-#    `-c model_reasoning_effort=<eff>` instead of the acpx log.
+#    the mock-acpx invocation log records the effort set + model.
 test_dispatch_passes_selected_model(){
-  local wd out seats seats_csv review_id work_dir codex_log
+  local wd out seats seats_csv review_id work_dir acpx_log
   wd=$(mktemp -d); trap 'rm -rf "$wd"' EXIT
   out=$(python3 scripts/select-panel.py --registry hermes/templates/debate-models.json \
     --seats simplifier,operator,pentester --deepest pentester --installed-harnesses acpx 2>/dev/null)
@@ -67,15 +66,15 @@ PY
   review_id="e2e-model-$(date +%s)"
   work_dir="$wd/work"; mkdir -p "$work_dir"
   echo "Test plan" > "$work_dir/plan.md"
-  codex_log="$wd/codex-log.txt"
+  acpx_log="$wd/acpx-log.txt"
   WORK_DIR_OVERRIDE="$work_dir" PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
-    MOCK_CODEX_LOG="$codex_log" MOCK_CODEX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    MOCK_ACPX_LOG="$acpx_log" MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
     bash scripts/run-acpx-review.sh "$wd/config.json" "$review_id" "$seats_csv" --models "$wd/panel.json" 2>/dev/null
   for s in $seats; do
     model=$(echo "$out" | python3 -c "import sys,json;print(json.load(sys.stdin)['seats']['$s']['model_id'])")
     eff=$(echo "$out" | python3 -c "import sys,json;print(json.load(sys.stdin)['seats']['$s']['effective_effort'])")
-    grep -q -- "-m $model" "$codex_log" || { echo "  seat $s did not reach codex with -m $model"; trap - EXIT; rm -rf "$wd"; return 1; }
-    grep -q -- "-c model_reasoning_effort=$eff" "$codex_log" || { echo "  seat $s did not reach codex with effort $eff"; trap - EXIT; rm -rf "$wd"; return 1; }
+    grep -q -- "--model $model" "$acpx_log" || { echo "  seat $s did not reach acpx with --model $model"; trap - EXIT; rm -rf "$wd"; return 1; }
+    grep -q -- "codex set reasoning_effort $eff" "$acpx_log" || { echo "  seat $s did not set effort $eff via acpx"; trap - EXIT; rm -rf "$wd"; return 1; }
   done
   trap - EXIT; rm -rf "$wd"
 }

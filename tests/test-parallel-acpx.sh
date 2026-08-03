@@ -766,11 +766,11 @@ EOF
 # effective_effort entry.
 
 test_effort_forwarded_from_selector_output() {
-  local tmp_dir review_id work_dir codex_log
+  local tmp_dir review_id work_dir acpx_log
   tmp_dir=$(setup_env)
   review_id="test-$(date +%s)-effort"
   work_dir=".tmp/ai-review-${review_id}"
-  codex_log="$tmp_dir/codex-log.txt"
+  acpx_log="$tmp_dir/acpx-log.txt"
 
   cat > "$tmp_dir/panel.json" << 'EOF'
 {"seats": {"alpha": {"model_id": "m-alpha", "effective_effort": "high"}, "beta": {"model_id": "m-beta", "effective_effort": "low"}}, "distinct_labs": 2}
@@ -782,12 +782,12 @@ EOF
   PATH="$SCRIPT_DIR:$PATH" \
   SKIP_SESSION_CHECK=1 \
   ACPX_SEAT_MODELS="$tmp_dir/panel.json" \
-  MOCK_CODEX_LOG="$codex_log" \
-  MOCK_CODEX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+  MOCK_ACPX_LOG="$acpx_log" \
+  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
     bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" "alpha" 2>/dev/null
 
   [ "$(cat "$work_dir/alpha-exit.txt")" = "0" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
-  grep -q -- "-c model_reasoning_effort=high" "$codex_log" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  grep -q -- "codex set reasoning_effort high" "$acpx_log" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
 
   rm -rf "$work_dir" "$tmp_dir"
 }
@@ -795,11 +795,11 @@ EOF
 test_effort_cleared_when_no_entry() {
   # A seat without an effective_effort entry must NOT inherit the caller's
   # EFFORT — the runner always sets EFFORT=<mapped-or-empty>.
-  local tmp_dir review_id work_dir codex_log
+  local tmp_dir review_id work_dir acpx_log
   tmp_dir=$(setup_env)
   review_id="test-$(date +%s)-noeffort"
   work_dir=".tmp/ai-review-${review_id}"
-  codex_log="$tmp_dir/codex-log.txt"
+  acpx_log="$tmp_dir/acpx-log.txt"
 
   cat > "$tmp_dir/panel.json" << 'EOF'
 {"seats": {"alpha": {"model_id": "m-alpha"}, "beta": {"model_id": "m-beta"}}, "distinct_labs": 2}
@@ -813,13 +813,13 @@ EOF
   SKIP_SESSION_CHECK=1 \
   ACPX_SEAT_MODELS="$tmp_dir/panel.json" \
   EFFORT="max" \
-  MOCK_CODEX_LOG="$codex_log" \
-  MOCK_CODEX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+  MOCK_ACPX_LOG="$acpx_log" \
+  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
     bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" "alpha" 2>/dev/null
 
   # alpha is a codex seat with no effective_effort, so EFFORT must be empty and
-  # the seat runs via acpx (not the direct codex branch).
-  ! grep -q "model_reasoning_effort" "$codex_log" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  # the seat runs through acpx without a reasoning_effort set.
+  ! grep -q "reasoning_effort" "$acpx_log" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
   [ "$(cat "$work_dir/alpha-exit.txt")" = "0" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
 
   rm -rf "$work_dir" "$tmp_dir"
