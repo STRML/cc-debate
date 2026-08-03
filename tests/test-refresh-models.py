@@ -195,7 +195,7 @@ CAP_PAYLOAD = {"ok": True, "models": [
    "priceInputPer1m": 2.0, "priceOutputPer1m": 10.0, "creator": "Mistral"},
 ]}
 UPD_CAP = rm.best_effort_metrics(CAP_PAYLOAD, REG_CAP)
-MERGED_CAP = rm.merge(clone(REG_CAP), clone(UPD_CAP))
+MERGED_CAP = rm.merge(clone(REG_CAP), clone(UPD_CAP), add_new=True)
 check("cap: frontier-improver from an existing lab added", "gpt_5_6_nova" in MERGED_CAP, list(MERGED_CAP))
 check("cap: dominated mid-tier duplicate skipped", "gpt_5_6_delta" not in MERGED_CAP, list(MERGED_CAP))
 check("cap: new-lab model added for diversity", "mistral_3" in MERGED_CAP, list(MERGED_CAP))
@@ -212,12 +212,12 @@ CAP2_PAYLOAD = {"ok": True, "models": [
   {"slug": "qwen-2.5-7b", "name": "Qwen 2.5 7B", "intelligenceIndex": 38.0,
    "priceInputPer1m": 0.2, "priceOutputPer1m": 1.0, "creator": "Alibaba"},
 ]}
-MERGED_CAP2 = rm.merge(clone(REG_CAP), clone(rm.best_effort_metrics(CAP2_PAYLOAD, REG_CAP)))
+MERGED_CAP2 = rm.merge(clone(REG_CAP), clone(rm.best_effort_metrics(CAP2_PAYLOAD, REG_CAP)), add_new=True)
 check("cap: only the strongest model per new lab added",
       "qwen_2_5_72b" in MERGED_CAP2 and "qwen_2_5_7b" not in MERGED_CAP2, list(MERGED_CAP2))
 
 # the unknown-lab kimi-k3 candidate (no dominance) is NOT auto-added anymore
-MERGED_KIMI = rm.merge(clone(REG_CAP), clone(UPD))
+MERGED_KIMI = rm.merge(clone(REG_CAP), clone(UPD), add_new=True)
 check("cap: unknown-lab stub without dominance not added", "kimi_k3" not in MERGED_KIMI, list(MERGED_KIMI))
 
 # --- gating: adding grows the curated registry, so it needs consent ---

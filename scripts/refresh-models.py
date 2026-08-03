@@ -3,7 +3,7 @@
 
 Sources (best-effort; offline safe):
   - Artificial Analysis (primary): Intelligence Index -> strengths tags, prices.
-  - LMArena / Chatbot Arena (complement): human-preference Elo — extractor not written yet.
+  - LMArena / Chatbot Arena (complement): human-preference Elo -> the `elo` field.
 
 It does NOT overwrite the fields the user owns: harness, provider, repo_aware,
 available, effort, effort_range and cost_per_task. effort/effort_range are run-config
@@ -33,7 +33,7 @@ Usage:
   refresh-models.py --registry <debate-models.json> [--out <path>]
       [--update-source AA|LMArena|all] [--ttl-hours N] [--apply-new] [--dry-run]
 """
-import argparse, calendar, copy, json, os, sys, time, urllib.request
+import argparse, calendar, copy, json, os, sys, tempfile, time, urllib.request
 
 # AA's own leaderboard JSON endpoint is not stable enough to pin, so the AA fetcher
 # points at a free mirror that serves the Artificial Analysis Intelligence Index with
@@ -100,6 +100,12 @@ def _norm(s):
     """Lowercase + drop non-alphanumerics, so `gpt-5.6-luna` == `gpt-5-6-luna`."""
     return "".join(ch for ch in (s or "").lower() if ch.isalnum())
 
+def _safe_label(s):
+    """Strip control characters (CR/LF, ANSI/OSC escapes) from a datasource-supplied
+    name before it is echoed to a terminal or log — a hostile model_name must not be
+    able to spoof the proposed-model list or run terminal escapes."""
+    return "".join(ch for ch in (s or "") if ch >= " " or ch == "\t")
+
 def _num(x):
     """Coerce to float, or None. AA numeric fields can arrive as strings."""
     try:
@@ -129,8 +135,10 @@ def _strip_variant_slug(slug):
     Unlike _split_variant this works on the punctuated slug, preserving the dashes."""
     low = (slug or "").lower()
     for suf in VARIANT_SUFFIXES:
-        if low.endswith(suf) and len(slug) > len(suf):
-            return slug[:-len(suf)]
+        # Require the '-' separator and strip it with the suffix, so
+        # 'gpt-5-6-nova-xhigh' -> 'gpt-5-6-nova' (not 'gpt-5-6-nova-').
+        if low.endswith(suf) and len(slug) > len(suf) + 1 and slug[-(len(suf) + 1)] == "-":
+            return slug[:-(len(suf) + 1)]
     return slug
 
 def _identity(creator):
@@ -151,7 +159,9 @@ def _complete_price(price):
     out = {}
     for f in ("in", "out", "cost_per_task"):
         v = _num((price or {}).get(f))
-        out[f] = v if v is not None else 0.0
+        # A negative datasource price would fail the schema gate; clamp it to 0.0
+        # (an available:false stub, never selected, so a placeholder is safe).
+        out[f] = v if (v is not None and v >= 0) else 0.0
     return out
 
 def _key_for_new(model_id, out):
@@ -164,7 +174,7 @@ def _key_for_new(model_id, out):
         n += 1
     return key
 
-def _new_entry(*, name, model_id, creator=None, provider=None, strengths=None,
+def _new_entry(*, name, model_id, creator=None, strengths=None,
                price=None, cost=None, elo=None, index=None, source):
     """Schema-complete registry entry for a model a datasource returned that the registry
     doesn't know yet. Everything the datasource can't provide is a SAFE default:
@@ -177,7 +187,7 @@ def _new_entry(*, name, model_id, creator=None, provider=None, strengths=None,
     entry = {
         "name": name or model_id,
         "harness": "acpx",
-        "provider": provider or lab or "unknown",
+        "provider": lab or "unknown",
         "model_id": model_id,
         "family": family,
         "lab": lab,
@@ -344,6 +354,7 @@ def normalize_aa_free(payload):
         out["models"].append({
             "slug": m.get("slug") or m.get("name"),
             "name": m.get("name"),
+            "creator": (m.get("model_creator") or {}).get("name") or m.get("creator"),
             "intelligenceIndex": (evals.get("artificial_analysis_intelligence_index")
                                   or evals.get("intelligence_index")),
             "priceInputPer1m": pricing.get("price_1m_input_tokens"),
@@ -415,10 +426,11 @@ def _lmarena_to_new_entry(r):
                       elo=_num(r.get("rating")), source="LMArena")
 
 def write_registry(path, reg):
-    """Atomic replace. Write to a temp then rename, so an interrupted refresh never
-    truncates the user's curated registry in place."""
-    tmp = "%s.tmp" % path
-    with open(tmp, "w") as f:
+    """Atomic replace. Write to a unique temp in the destination directory then rename,
+    so an interrupted refresh never truncates the curated registry, and two concurrent
+    refreshes never collide on one shared temp path."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), suffix=".tmp")
+    with os.fdopen(fd, "w") as f:
         json.dump(reg, f, indent=2)
         f.write("\n")
     os.replace(tmp, path)
@@ -433,7 +445,9 @@ def _merge_new(a, b):
         if not nid:
             continue
         if nid not in by_id:
-            by_id[nid] = dict(cand)
+            # Deep-copy the nested price dict: later merges mutate it, and a shallow
+            # copy would write through to the source candidate payload (antigravity).
+            by_id[nid] = {**cand, "price": dict(cand.get("price") or {})}
             continue
         old, new = by_id[nid], cand
         for k, v in new.items():
@@ -467,25 +481,26 @@ def _perf_metric(m):
     return None, None
 
 def _price_metric(m):
-    """Comparable price for a model: cost_per_task when the datasource gave a real
-    per-task figure, else a blended in/out token price (0.3*in + 0.7*out — a typical
-    agentic read/write mix). Returns None when the model has no pricing at all, so an
-    LMArena-only candidate (0.0 price placeholders) is never judged on price."""
+    """Comparable price for a model: (value, unit). cost_per_task (dollars/task) when
+    the datasource gave a real per-task figure, else a blended in/out token price
+    (0.3*in + 0.7*out, dollars/million). Returns (None, None) when there is no pricing
+    at all. A dollars/task figure and a dollars/million figure are NOT comparable, so
+    callers must require the same unit."""
     cpt = _num((m.get("price") or {}).get("cost_per_task"))
     if cpt not in (None, 0.0):
-        return cpt
+        return cpt, "task"
     p = m.get("price") or {}
     inn, out = _num(p.get("in")), _num(p.get("out"))
     if (inn in (None, 0.0)) and (out in (None, 0.0)):
-        return None
-    return 0.3 * (inn or 0.0) + 0.7 * (out or 0.0)
+        return None, None
+    return 0.3 * (inn or 0.0) + 0.7 * (out or 0.0), "blended"
 
 def _fmt_perf(m):
     p, s = _perf_metric(m)
     return "-" if p is None else ("%.1f (%s)" % (p, s))
 
 def _fmt_price(m):
-    p = _price_metric(m)
+    p, _ = _price_metric(m)
     return "-" if p is None else ("$%.3g" % p)
 
 def _cap_new(candidates, out):
@@ -515,23 +530,39 @@ def _cap_new(candidates, out):
     results = []
     for cand in candidates:
         pval, psrc = _perf_metric(cand)
-        price = _price_metric(cand)
+        price, punit = _price_metric(cand)
         lab = cand.get("lab")
         if lab and lab != "unknown" and lab not in labs:
             cur = best_per_new_lab.get(lab)
             if cur is None:
                 best_per_new_lab[lab] = cand
             else:
-                cp, _ = _perf_metric(cur)
-                if pval is not None and (cp is None or pval > cp):
+                cp, csrc = _perf_metric(cur)
+                if pval is None:
+                    pass
+                # Different performance scales are not comparable: an AA index
+                # (~50) and an LMArena Elo (~1400) are different magnitudes, and the
+                # index is the primary metric — an Elo-only model must never beat an
+                # index-bearing one just because its number is bigger.
+                elif csrc != psrc:
+                    if psrc == "index":
+                        best_per_new_lab[lab] = cand
+                elif pval > cp:
                     best_per_new_lab[lab] = cand
         if pval is None or price is None:
             continue
+        # Dominance earns a slot only for a lab already in the registry. A NEW lab's
+        # model is admitted (at most ONE per lab) via best_per_new_lab below, so a
+        # fresh lab's whole lineup cannot flood the registry.
+        if lab not in labs:
+            continue
         for em in avail:
             ep, esrc = _perf_metric(em)
-            eprice = _price_metric(em)
-            if ep is None or eprice is None or esrc != psrc:
-                continue   # different performance scale — not comparable
+            eprice, eunit = _price_metric(em)
+            # Same performance scale AND same price unit, or the comparison is
+            # meaningless (an index vs an Elo; dollars/task vs dollars/million).
+            if ep is None or eprice is None or esrc != psrc or eunit != punit:
+                continue
             if pval >= ep and price <= eprice and (pval > ep or price < eprice):
                 results.append(cand)
                 break
@@ -573,7 +604,7 @@ def _apply_metrics(out, updates):
         m["as_of"] = now
     return out
 
-def merge(registry, updates, add_new=True):
+def merge(registry, updates, add_new=False):
     out = copy.deepcopy(registry)   # never mutate the caller's nested dicts (F9)
     _apply_metrics(out, updates)
     # New-model candidates (the reserved NEW key) are schema-complete entries to ADD —
@@ -609,7 +640,7 @@ def _confirm_new(would_add, apply_new=False, interactive=None):
     print("proposed new models (arrive available:false until enabled):")
     for cand in would_add:
         print("  - %s (%s)  lab=%s  perf=%s  price=%s"
-              % (cand.get("name"), cand.get("model_id"), cand.get("lab"),
+              % (_safe_label(cand.get("name")), cand.get("model_id"), cand.get("lab"),
                  _fmt_perf(cand), _fmt_price(cand)))
     if interactive is None:
         interactive = sys.stdin.isatty()
@@ -656,9 +687,11 @@ def main():
             continue   # malformed as_of — ignore this entry, don't crash
     if ages and min(ages) < a.ttl_hours * 3600:
         # A fresh cache needs no write — rewriting the file would reformat the seed and
-        # bury a hand edit in whole-file churn.
+        # bury a hand edit in whole-file churn. --dry-run still shows what a refresh
+        # would change, so it proceeds past the guard.
         print(f"cache fresh ({int(min(ages)//3600)}h old); skipping refresh (--ttl-hours {a.ttl_hours})")
-        sys.exit(0)
+        if not a.dry_run:
+            sys.exit(0)
 
     updates = {}
     failures = []
@@ -676,6 +709,11 @@ def main():
                     headers = {"x-api-key": key}
                 text = fetch(url, headers=headers)
                 payload = parse_payload(text)
+                if payload is None:
+                    # A non-JSON body (an error/rate-limit page) is a SOURCE FAILURE,
+                    # not "no matching models" — silently exiting 0 on a stale registry
+                    # is how a broken endpoint looks healthy in cron.
+                    raise ValueError("%s returned non-JSON (an error or rate-limit page?)" % src)
                 if src == "AA" and url == AA_FREE_URL:
                     payload = normalize_aa_free(payload)
                 u = best_effort_metrics(payload, reg)
@@ -729,7 +767,7 @@ def main():
             print(f"dry-run: would add {len(would_add)} new model(s) (available:false):")
             for cand in would_add:
                 print("  - %s (%s)  lab=%s  perf=%s  price=%s"
-                      % (cand.get("name"), cand.get("model_id"), cand.get("lab"),
+                      % (_safe_label(cand.get("name")), cand.get("model_id"), cand.get("lab"),
                          _fmt_perf(cand), _fmt_price(cand)))
         else:
             print("dry-run: no new models pass the cap (frontier improvement or new lab)")
