@@ -9,7 +9,9 @@
 - `templates/debate-models.json` — model registry seed (model + price/cost_per_task +
   strengths + effort + harness + repo_aware + family/lab + available).
 - `../scripts/select-panel.py` — pick the model mix for the seats (diversity/completeness/
-  effort/budget/harness).
+  effort/budget/harness). Emits a per-seat `effective_effort` (depth-tiered from the deepest
+  seat down, capped to the model's `effort_range`) and an effort-scaled `effective_cost`;
+  under `--max-cost` it degrades effort monotonically, shallowest seats first.
 - `../scripts/refresh-models.py` — the refresh path for registry metrics. Pulls the
   Artificial Analysis Intelligence Index (via a mirror of artificialanalysis.ai) and
   LMArena human-preference Elo (a new `elo` field). ADDS capability tags to `strengths`
@@ -42,8 +44,9 @@ python3 scripts/refresh-models.py --registry $HERMES_HOME/debate-models.json --t
 
 Then trigger the skill: `debate this plan`, `debate` (reviews the current changeset), or use
 the `code-review` skill (wraps debate with the current changeset as subject). The selector
-picks models by lab diversity + effort floor + budget; acpx reaches any provider; sandbox
-isolates repo-aware seats.
+picks models by lab diversity + effort floor + budget; acpx reaches any provider — with the
+direct-CLI exceptions of `antigravity`/`opus` and an effort-scaled `codex` seat (acpx cannot
+pass `model_reasoning_effort` through); sandbox isolates repo-aware seats.
 
 ## Note on `codex-exec`
 

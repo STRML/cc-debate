@@ -172,6 +172,19 @@ CONFIG_RETRIES=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].retries // empty'
 # MODEL wins over the config's `.model` (the seat's default), and neither is
 # required — absent both, the agent runs its own default model.
 MODEL="${MODEL:-}"
+# Per-run effort override (effort auto-scaling, #31 Q2). The selector derives a
+# per-seat effective effort and the runner forwards it as EFFORT=<level>. Only a
+# codex seat honors it (via a direct codex call); every other transport logs the
+# fallback. Empty means the agent's default.
+EFFORT="${EFFORT:-}"
+
+# Effort on a non-codex transport is a no-op (acpx has no effort passthrough, and
+# the agy/opus direct CLIs take no effort flag). Say so rather than silently
+# ignoring a selector-derived effort — an operator watching the logs learns the
+# seat ran at default depth, not the depth the panel asked for.
+if [ -n "$EFFORT" ] && [ "$AGENT" != "codex" ]; then
+  echo "[$REVIEWER] EFFORT=$EFFORT not supported by transport $AGENT — running at the agent's default effort." >&2
+fi
 
 # --- Blank-output retries ---
 # An agent that ends its turn without a final message costs the panel a seat, and
@@ -227,6 +240,9 @@ if [ -z "${SKIP_SESSION_CHECK:-}" ]; then
   # branch runs. Keep this list in step with the direct-CLI branches below.
   case "$AGENT" in
     antigravity|opus) IS_DIRECT_CLI=1 ;;
+    # An effort-scaled codex seat runs the codex CLI directly (acpx has no effort
+    # passthrough), so it never opens an acpx session.
+    codex) IS_DIRECT_CLI=$([ -n "$EFFORT" ] && echo 1 || echo 0) ;;
     *) IS_DIRECT_CLI=0 ;;
   esac
   # A one-shot (`mode: exec`) never touches a session, so ensuring one would be a
@@ -661,6 +677,43 @@ fi
 #                   -o at the output file keeps the transcript out of the
 #                   synthesizer's input.
 
+
+# --- Direct Codex (effort-capable) ---
+# acpx cannot pass model_reasoning_effort through (acpx codex exec has no config
+# passthrough), so an effort-scaled codex seat runs the codex CLI directly — the
+# same pattern as the agy/opus direct branches. This BYPASSES acpx: any future
+# acpx middleware (telemetry, token-refresh, retries, proxies) will not apply
+# here — flagged tech debt (effort plan rev 4). One-shot (--ephemeral), read-only
+# (-s read-only), final message only (-o), prompt on stdin. Verified:
+# -c model_reasoning_effort controls reasoning depth.
+if [ "$AGENT" = "codex" ] && [ -n "$EFFORT" ]; then
+  if ! command -v codex > /dev/null 2>&1; then
+    echo "[$REVIEWER] codex CLI not found — cannot apply effort $EFFORT." >&2
+    echo "codex CLI not installed. Install @openai/codex to use effort-scaled codex seats." > "$WORK_DIR/${REVIEWER}-output.md"
+    publish_exit 1
+    trap - EXIT
+    exit 1
+  fi
+  echo "[$REVIEWER] Submitting plan to codex directly (effort $EFFORT, bypasses acpx; timeout: ${TIMEOUT}s)..." >&2
+
+  CODEX_CMD=("codex" "exec" "--ephemeral")
+  if [ -n "$MODEL" ] || [ -n "$CONFIG_MODEL" ]; then
+    CODEX_CMD+=(-m "${MODEL:-$CONFIG_MODEL}")
+  fi
+  CODEX_CMD+=(-c "model_reasoning_effort=$EFFORT" -s read-only -o "$WORK_DIR/${REVIEWER}-output.md")
+  if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
+    CODEX_CMD=("$TIMEOUT_BIN" "$TIMEOUT" "${CODEX_CMD[@]}")
+  fi
+
+  attempt_codex() {
+    set +e
+    "${CODEX_CMD[@]}" - < "$PROMPT_FILE" 2>"$WORK_DIR/${REVIEWER}-stderr.log"
+    EXIT_CODE=$?
+    set -e
+  }
+  run_with_blank_retry attempt_codex "codex (direct, effort $EFFORT)"
+  handle_invocation_result "codex (direct, effort $EFFORT)"
+fi
 
 # --- acpx call ---
 

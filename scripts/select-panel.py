@@ -17,6 +17,10 @@ import argparse, json, math, sys
 from collections import Counter
 
 RANK = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
+# Effort-scaled cost multiplier (a documented, volatile estimate — not a real
+# spend cap). Reasoning effort raises cost; the budget uses this to prefer
+# lower effort on shallow seats.
+EFFORT_MULT = {"low": 1, "medium": 1, "high": 2, "xhigh": 4, "max": 8}
 # Binary-float comparisons on decimal budgets (0.10 + 0.20 vs 0.30) are off by
 # one ulp; a small tolerance keeps a feasible panel from being rejected.
 COST_EPS = 1e-9
@@ -31,6 +35,49 @@ def cost_of(m):
         return float((m.get("price") or {}).get("cost_per_task", 0))
     except (TypeError, ValueError):
         return 0
+
+def _effort_choices(m):
+    """Supported efforts for a model, sorted low->high. A missing/empty
+    effort_range (legacy model) defaults to ['medium'] — it can't go below."""
+    rng = m.get("effort_range")
+    if isinstance(rng, list) and rng:
+        valid = sorted([e for e in rng if e in RANK], key=lambda e: RANK[e])
+        if valid:
+            return valid
+    return ["medium"]
+
+def _tier_for(seat_index, deepest_index, min_effort):
+    """Depth-tier effort target for a seat. The deepest seat (the final arbiter)
+    gets --min-effort; its immediate predecessor one step below; all earlier
+    seats two steps below, floored at 'low'."""
+    depth = max(deepest_index - seat_index, 0)
+    step = max(RANK.get(min_effort, 3) - min(depth, 2), 0)
+    names = sorted(RANK, key=lambda e: RANK[e])
+    return names[min(step, len(names) - 1)]
+
+def _effort_for_model(m, tier):
+    """Highest supported effort at or below the depth tier, else the model's
+    lowest supported effort (round-2: sparse ranges must not yield an
+    unsupported value)."""
+    choices = _effort_choices(m)
+    tier_rank = RANK.get(tier, RANK["medium"])
+    at_or_below = [e for e in choices if RANK[e] <= tier_rank]
+    return max(at_or_below, key=lambda e: RANK[e]) if at_or_below else choices[0]
+
+def _step_down(m, eff):
+    """The next-lower supported effort, or eff if already the lowest."""
+    choices = _effort_choices(m)
+    idx = choices.index(eff) if eff in choices else 0
+    return choices[max(idx - 1, 0)]
+
+def _effective_cost(m, eff):
+    """cost_per_task scaled by effort WITHOUT double-counting: the registry's
+    cost_per_task is already measured at the model's DECLARED effort, so
+    effective = cost * mult(eff) / mult(declared). A model at its declared
+    effort keeps its exact cost (round-3 simplifier)."""
+    dm = EFFORT_MULT.get(m.get("effort") or "medium", 1)
+    em = EFFORT_MULT.get(eff, 1)
+    return cost_of(m) * em / dm
 
 def _safe_key(key):
     """A registry key may come from an untrusted file; strip control characters so
@@ -177,11 +224,52 @@ def pick(registry, seats, deepest, installed, min_effort, max_cost=None):
             % (max_cost, ", ".join(unfilled), spent)
         ), 0
 
+    # --- Effort auto-scaling (epic Q2) ---
+    # Derive a per-seat effective effort (depth tier, capped to the model's
+    # supported range) and the effort-scaled cost. Under a budget, degrade
+    # monotonically PROTECTING the deepest seat: shallowest seats first, the
+    # deepest only as a last resort (round-4 antigravity). No backtracking.
+    i_d = seats.index(deepest) if deepest in seats else len(seats) - 1
+    eff_by_seat = {}
+    for i, seat in enumerate(seats):
+        if seat not in assignment:
+            continue
+        eff_by_seat[seat] = _effort_for_model(assignment[seat], _tier_for(i, i_d, min_effort))
+
+    if max_cost is not None:
+        total = sum(_effective_cost(assignment[s], eff_by_seat[s]) for s in eff_by_seat)
+        order = [s for s in seats if s != deepest]   # shallowest first; deepest handled last
+        while total > max_cost + COST_EPS:
+            degraded = False
+            for seat in order + [deepest]:
+                m = assignment[seat]
+                nxt = _step_down(m, eff_by_seat[seat])
+                if nxt == eff_by_seat[seat]:
+                    continue
+                total += _effective_cost(m, nxt) - _effective_cost(m, eff_by_seat[seat])
+                eff_by_seat[seat] = nxt
+                degraded = True
+                break
+            if not degraded:
+                break
+        if total > max_cost + COST_EPS:
+            legacy = [s for s in eff_by_seat if len(_effort_choices(assignment[s])) == 1]
+            return None, (
+                "--max-cost %.2f cannot be met even at the lowest supported effort%s; "
+                "raise --max-cost or request fewer seats"
+                % (max_cost, (" — legacy model(s) %s are locked to medium" % ", ".join(legacy)) if legacy else "")
+            ), 0
+
     # Diversity is measured over the seats that were actually FILLED — a budget that
     # leaves seats unfilled is now a hard error above, not a diversity problem.
     n_labs = len(set(x.get("lab") for x in assignment.values()))
     if n_labs < len(assignment):
         sys.stderr.write(f"⚠️ low model diversity — {len(assignment)} seats, {n_labs} distinct labs\n")
+
+    # Attach the derived effort/cost to the assignment for the output.
+    for seat, eff in eff_by_seat.items():
+        assignment[seat] = {**assignment[seat], "effective_effort": eff,
+                            "effective_cost": _effective_cost(assignment[seat], eff)}
     return assignment, None, n_labs
 
 def main():
@@ -207,7 +295,10 @@ def main():
     print(json.dumps({
         "seats": {seat: {"model": m["key"], "name": m.get("name"), "harness": m.get("harness"),
                          "provider": m.get("provider"), "model_id": m.get("model_id"),
-                         "effort": m.get("effort"), "cost_per_task": cost_of(m),
+                         "effort": m.get("effective_effort", m.get("effort")),
+                         "effective_effort": m.get("effective_effort"),
+                         "cost_per_task": cost_of(m),
+                         "effective_cost": m.get("effective_cost", cost_of(m)),
                          "repo_aware": m.get("repo_aware")} for seat, m in assignment.items()},
         "distinct_labs": nlabs,
     }, indent=2))

@@ -1,5 +1,5 @@
 # Backend — debate plugin
-_Updated: 2026-07-11_
+_Updated: 2026-08-03_
 
 ## Commands (`commands/`)
 
@@ -25,8 +25,8 @@ _Updated: 2026-07-11_
 | `create-opencode-agent.sh` | Adds an acpx seat for any models.dev provider via opencode; writes the wrapper AND registers it in `~/.acpx/config.json` |
 | `create-litellm-agent.sh` | Same, for providers models.dev does not list — routes through a LiteLLM proxy |
 | `seat-report.sh` | Per-seat contribution from a panel result: sole vs corroborated vs refuted, for deciding whether a lens earns its slot |
-| `invoke-acpx.sh` | Invokes any acpx agent: reads config, builds prompt, wraps with system `timeout`, captures output |
-| `run-parallel-acpx.sh` | Spawns `invoke-acpx.sh` per reviewer with nohup+disown, polls `*-exit.txt` until done |
+| `invoke-acpx.sh` | Invokes any acpx agent — plus the direct-CLI branches: `antigravity`/`agy`, `opus`/`claude --print`, and effort-scaled `codex` (`codex exec` when `EFFORT` is set). Reads config, builds prompt, wraps with system `timeout`, captures output |
+| `run-parallel-acpx.sh` | Spawns `invoke-acpx.sh` per reviewer with nohup+disown, polls `*-exit.txt` until done; reads `effective_effort` per seat and forwards it as `EFFORT` |
 
 ## Script I/O Contract
 
@@ -35,7 +35,8 @@ _Updated: 2026-07-11_
 ### Inputs
 - `plan.md` — plan to review (always required)
 - `<name>-prompt.txt` — debate/resume prompt (optional; falls back to config system_prompt + plan.md)
-- `MODEL` env (optional) — per-seat model override from the panel selector; passed to acpx as `--model <id>`. `run-parallel-acpx.sh` sets it per seat from `ACPX_SEAT_MODELS` (the select-panel.py output or a flat `{seat: model_id}` map) or the single-model `DEBATE_MODEL`.
+- `MODEL` env (optional) — per-seat model override from the panel selector; passed to acpx as `--model <id>` (or `codex -m <id>` on the direct branch). `run-parallel-acpx.sh` sets it per seat from `ACPX_SEAT_MODELS` (the select-panel.py output or a flat `{seat: model_id}` map) or the single-model `DEBATE_MODEL`.
+- `EFFORT` env (optional) — per-seat reasoning effort from the selector (`effective_effort`). Only a `codex` seat honors it, via the direct branch (`codex exec --ephemeral -c model_reasoning_effort=<level> -s read-only -o <outfile> -`). Every other transport logs `EFFORT=<level> not supported by transport <agent>` and runs at its default. The runner always sets it (empty = agent default), so a caller's `EFFORT` cannot leak into a seat.
 
 ### Outputs
 - `<name>-output.md` — review text
@@ -68,9 +69,9 @@ No exit file — a teammate has delivered iff its output file exists and is non-
 }
 ```
 
-Available acpx agents: codex, claude, cursor, copilot, kimi, kiro, qwen, opencode, kilocode. The `antigravity` (agy) and `opus` reviewers are invoked directly, not via acpx.
+Available acpx agents: codex, claude, cursor, copilot, kimi, kiro, qwen, opencode, kilocode. Three reviewers are invoked directly, not via acpx: `antigravity` (agy CLI), `opus` (`claude --print`), and an effort-scaled `codex` seat (`codex exec` when `EFFORT` is set — acpx has no `model_reasoning_effort` passthrough). This is flagged tech debt in the plan: future acpx middleware does not apply to direct seats.
 
-`effort` is unused since #35 (the codex-exec branch that read it is gone); `tests/test-references.sh` flags any `effort` in a reviewer config as a silent no-op. The luna-floor and 900s-timeout rules went with the seat. The timeout lint (positive integer) remains: both layers otherwise swallow a malformed value.
+The config `effort` key is still unused (no agent reads a static per-reviewer effort); `tests/test-references.sh` flags any `effort` in a reviewer config as a silent no-op. The per-seat reasoning effort now arrives at runtime via the `EFFORT` env var from the selector's `effective_effort`. The timeout lint (positive integer) remains: both layers otherwise swallow a malformed value.
 
 `mode` defaults to `session` (persistent acpx session, context kept across rounds).
 `mode: "exec"` sends one-shots and skips `sessions ensure` — needed for agents that

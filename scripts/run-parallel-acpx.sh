@@ -270,27 +270,34 @@ for NAME in "${REVIEWERS[@]}"; do
   # DEBATE_MODEL, then nothing (the agent's own default). model_id is the value
   # acpx `--model` wants; the selector outputs it under .seats[<seat>].model_id.
   CHILD_MODEL=""
+  CHILD_EFFORT=""
   if [ -n "$SEAT_MODELS" ] && [ -f "$SEAT_MODELS" ]; then
     CHILD_MODEL=$(jq -r --arg s "$NAME" '
       if type == "object" and has("seats") then .seats[$s].model_id
       else .[$s] end // empty' "$SEAT_MODELS" 2>/dev/null || true)
-    # A seat whose selected model runs on the subagent harness is not an acpx
-    # seat — forwarding its model_id to acpx would run the wrong transport. Leave
-    # it to its configured agent default (debate finding).
+    CHILD_EFFORT=$(jq -r --arg s "$NAME" '
+      if type == "object" and has("seats") then .seats[$s].effective_effort
+      else empty end // empty' "$SEAT_MODELS" 2>/dev/null || true)
+    # A seat whose selected model runs on the subagent harness is not this acpx
+    # runner's job — running it here would invoke the configured acpx agent for
+    # a subagent model. Filter it out; the caller dispatches it via the Hermes
+    # delegate_task route (round-4 finding).
     HARNESS=$(jq -r --arg s "$NAME" '
       if type == "object" and has("seats") then .seats[$s].harness
       else empty end // empty' "$SEAT_MODELS" 2>/dev/null || true)
     if [ "$HARNESS" = "subagent" ]; then
-      CHILD_MODEL=""
+      echo "[debate] Skipping $NAME — subagent harness is dispatched by the caller, not this runner" >&2
+      continue
     fi
   fi
   [ -z "$CHILD_MODEL" ] && CHILD_MODEL="$DEBATE_MODEL"
 
   INVOKE_ENV=("SKIP_SESSION_CHECK=${SKIP_SESSION_CHECK:-}")
-  # Always set MODEL — empty means "use the agent default" — so an inherited
-  # MODEL from the caller's environment cannot leak into a seat that should use
-  # its default (debate finding F9).
+  # Always set MODEL and EFFORT — empty means "use the agent default" — so an
+  # inherited MODEL/EFFORT from the caller's environment cannot leak into a seat
+  # that should use its default (debate findings F9 / effort plan).
   INVOKE_ENV+=("MODEL=${CHILD_MODEL:-}")
+  INVOKE_ENV+=("EFFORT=${CHILD_EFFORT:-}")
   nohup env "${INVOKE_ENV[@]}" \
     bash "$SCRIPT_DIR/invoke-acpx.sh" "$CONFIG_FILE" "$WORK_DIR" "$NAME" "$TIMEOUT" \
     > /dev/null 2>"$WORK_DIR/${NAME}-invoke.log" &

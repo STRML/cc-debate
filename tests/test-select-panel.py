@@ -86,6 +86,102 @@ check("malformed available entry skipped, panel survives",
 a11, err11, nl11 = select_panel.pick(FIX, SEATS, "pentester", [], "xhigh", max_cost=1.0)
 check("budget that fits builds full panel", a11 is not None and len(a11) == len(SEATS), str(a11))
 
+# --- effort auto-scaling (#31 Q2) ---
+
+# 12. sparse-range membership: a model whose effort_range does not contain the
+#     depth tier gets the highest supported effort AT OR BELOW it — never an
+#     unsupported value. glm has range ['medium','max'] (no high/xhigh), so
+#     tier high clamps down to medium, tier xhigh clamps down to medium too,
+#     and tier max reaches max.
+eff = select_panel._effort_for_model(FIX["glm"], "xhigh")
+check("sparse-range clamps to highest supported effort",
+      eff == "medium", f"got {eff}")
+eff2 = select_panel._effort_for_model(FIX["glm"], "max")
+check("sparse-range reaches the top at tier max",
+      eff2 == "max", f"got {eff2}")
+eff3 = select_panel._effort_for_model(FIX["glm"], "low")
+check("sparse-range floors at the lowest supported effort",
+      eff3 == "medium", f"got {eff3}")
+
+# 13. missing effort_range defaults to ['medium'] and can't be stepped below.
+miss = {"name":"M","harness":"acpx","provider":"p","model_id":"m","family":"f",
+        "lab":"openai","strengths":["reasoning"],"effort":"medium",
+        "price":{"in":1,"out":2,"cost_per_task":0.1},"cost":"cheap",
+        "repo_aware":False,"available":True}
+check("missing effort_range defaults to medium",
+      select_panel._effort_choices(miss) == ["medium"], str(select_panel._effort_choices(miss)))
+check("legacy model cannot step below medium",
+      select_panel._step_down(miss, "medium") == "medium")
+check("legacy model effort_for_model is medium at any tier",
+      select_panel._effort_for_model(miss, "low") == "medium"
+      and select_panel._effort_for_model(miss, "xhigh") == "medium")
+
+# 14. _effective_cost keeps the registry cost when the model runs at its declared
+#     effort, and scales by the multiplier otherwise (no double-count).
+check("declared-effort run keeps exact cost_per_task",
+      abs(select_panel._effective_cost(FIX["glm"], "max") - 0.69) < 1e-9,
+      f"got {select_panel._effective_cost(FIX['glm'], 'max')}")
+check("effort-scaled cost uses mult ratio",
+      abs(select_panel._effective_cost(FIX["glm"], "medium") - 0.69 / 8) < 1e-9,
+      f"got {select_panel._effective_cost(FIX['glm'], 'medium')}")
+
+# 15. depth tiers: deepest gets --min-effort, predecessor one below, earlier two below.
+check("depth tier step function",
+      select_panel._tier_for(2, 2, "xhigh") == "xhigh"
+      and select_panel._tier_for(1, 2, "xhigh") == "high"
+      and select_panel._tier_for(0, 2, "xhigh") == "medium",
+      f"{select_panel._tier_for(2,2,'xhigh')},{select_panel._tier_for(1,2,'xhigh')},{select_panel._tier_for(0,2,'xhigh')}")
+check("depth tier floors at low",
+      select_panel._tier_for(0, 2, "medium") == "low"
+      and select_panel._tier_for(1, 2, "medium") == "low"
+      and select_panel._tier_for(2, 2, "medium") == "medium")
+
+# 16. monotonic degradation protects the deepest seat: under a budget, the
+#     SHALLOWEST seats are downgraded first; the deepest seat keeps its effort
+#     until every other seat is already at its floor.
+#     cheap1/cheap2 declared medium (range low..high), lead declared xhigh.
+#     At tier: simplifier(i0)=medium -> low, operator(i1)=high -> high,
+#     pentester(i2)=xhigh -> xhigh. Initial total 0.30+0.60+1.86=2.76.
+GREEN = {
+  "cheap1": {"name":"C1","harness":"acpx","provider":"p","model_id":"c1","family":"f","lab":"l1","strengths":["speed"],"effort":"medium","effort_range":["low","high"],"price":{"in":1,"out":2,"cost_per_task":0.3},"cost":"cheap","repo_aware":False,"available":True},
+  "cheap2": {"name":"C2","harness":"acpx","provider":"p","model_id":"c2","family":"f","lab":"l2","strengths":["speed"],"effort":"medium","effort_range":["low","high"],"price":{"in":1,"out":2,"cost_per_task":0.3},"cost":"cheap","repo_aware":False,"available":True},
+  "lead":  {"name":"L","harness":"acpx","provider":"p","model_id":"l","family":"f","lab":"l3","strengths":["reasoning","tricky"],"effort":"xhigh","effort_range":["low","xhigh"],"price":{"in":5,"out":30,"cost_per_task":1.86},"cost":"premium","repo_aware":False,"available":True},
+}
+a16, err16, nl16 = select_panel.pick(GREEN, SEATS, "pentester", [], "xhigh", max_cost=2.5)
+check("budget degradation succeeds", a16 is not None, f"err={err16}")
+if a16:
+    check("deepest seat protected: keeps its effort",
+          a16["pentester"]["effective_effort"] == "xhigh",
+          f"{a16['pentester']['key']}@{a16['pentester']['effective_effort']}")
+    check("shallow seats degraded to their floor",
+          a16["simplifier"]["effective_effort"] == "low"
+          and a16["operator"]["effective_effort"] == "low",
+          f"simplifier@{a16['simplifier']['effective_effort']}, operator@{a16['operator']['effective_effort']}")
+    tot16 = sum(m["effective_cost"] for m in a16.values())
+    check("degraded panel fits the cap",
+          tot16 <= 2.5 + 1e-9, f"total={tot16:.3f}")
+
+# 17. a legacy model (no effort_range) is treated as medium effort end-to-end:
+#     it is clamped to medium on the deepest seat, cannot be stepped below
+#     medium, and keeps its exact cost_per_task (medium mult = 1).
+legacy_deep = {**miss, "key": "legacy", "strengths": ["reasoning", "tricky"]}
+LEGACY2 = {
+  "legacy": legacy_deep,                 # no effort_range, declared medium, cost 0.10
+  "cheapA": {**GREEN["cheap1"], "key": "cheapA"},
+  "cheapB": {**GREEN["cheap2"], "key": "cheapB"},
+}
+a17, err17, nl17 = select_panel.pick(LEGACY2, SEATS, "pentester", [], "xhigh", max_cost=None)
+check("legacy model on deepest seat stays medium",
+      a17 is not None and a17["pentester"]["effective_effort"] == "medium",
+      f"err={err17} pentester={a17.get('pentester',{}).get('effective_effort') if a17 else None}")
+if a17:
+    check("legacy seat keeps exact cost_per_task",
+          abs(a17["pentester"]["effective_cost"] - 0.10) < 1e-9,
+          f"got {a17['pentester']['effective_cost']}")
+    check("legacy seat is named in the assignment",
+          a17["pentester"]["key"] == "legacy",
+          f"got {a17['pentester']['key']}")
+
 print()
 print("PASS" if fails == 0 else f"FAIL ({fails})")
 sys.exit(0 if fails == 0 else 1)
