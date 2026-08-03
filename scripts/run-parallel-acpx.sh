@@ -39,6 +39,18 @@ fi
 # via nohup/disown outside the sandbox, so it's fine here.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Per-seat model selection (F1). The panel selector picks a model per seat;
+# the orchestrator hands it to us one of two ways:
+#   ACPX_SEAT_MODELS  — path to a JSON map. Either the full select-panel.py
+#                       output ({seats: {seat: {model_id: ...}}}) or a flat
+#                       {seat: model_id}. A seat with an entry gets that model.
+#   DEBATE_MODEL      — a single model id applied to every seat without a map
+#                       entry (run-acpx-review.sh --model sets this).
+# Each seat's resolved model is forwarded to its invoke-acpx.sh as MODEL=<id>,
+# which passes it to acpx as `--model <id>`.
+SEAT_MODELS="${ACPX_SEAT_MODELS:-}"
+DEBATE_MODEL="${DEBATE_MODEL:-}"
+
 mkdir -p "$WORK_DIR" || { echo "Failed to create $WORK_DIR" >&2; exit 1; }
 # The work dir holds the full changeset and every reviewer transcript. On a shared
 # machine the default 0755 lets any local account read a diff that may carry
@@ -239,7 +251,21 @@ for NAME in "${REVIEWERS[@]}"; do
 
   echo "[debate] Spawning $NAME ($AGENT, timeout: ${TIMEOUT}s)..." >&2
   rm -f "$WORK_DIR/${NAME}-exit.txt"
-  nohup env SKIP_SESSION_CHECK="${SKIP_SESSION_CHECK:-}" \
+
+  # Resolve this seat's model: the per-seat map entry wins, then the single-model
+  # DEBATE_MODEL, then nothing (the agent's own default). model_id is the value
+  # acpx `--model` wants; the selector outputs it under .seats[<seat>].model_id.
+  CHILD_MODEL=""
+  if [ -n "$SEAT_MODELS" ] && [ -f "$SEAT_MODELS" ]; then
+    CHILD_MODEL=$(jq -r --arg s "$NAME" '
+      if type == "object" and has("seats") then .seats[$s].model_id
+      else .[$s] end // empty' "$SEAT_MODELS" 2>/dev/null || true)
+  fi
+  [ -z "$CHILD_MODEL" ] && CHILD_MODEL="$DEBATE_MODEL"
+
+  INVOKE_ENV=("SKIP_SESSION_CHECK=${SKIP_SESSION_CHECK:-}")
+  [ -n "$CHILD_MODEL" ] && INVOKE_ENV+=("MODEL=$CHILD_MODEL")
+  nohup env "${INVOKE_ENV[@]}" \
     bash "$SCRIPT_DIR/invoke-acpx.sh" "$CONFIG_FILE" "$WORK_DIR" "$NAME" "$TIMEOUT" \
     > /dev/null 2>"$WORK_DIR/${NAME}-invoke.log" &
   PIDS+=("$!")

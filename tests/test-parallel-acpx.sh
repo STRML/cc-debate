@@ -634,6 +634,95 @@ test_invoke_logs_created() {
   rm -rf "$work_dir" "$tmp_dir"
 }
 
+# --- per-seat model selection (F1) ---
+#
+# The runner must forward the panel selector's per-seat model choice to each
+# invoke-acpx.sh child as MODEL=<id>, which passes it to acpx as --model <id>.
+# The map is the select-panel.py output (or a flat {seat: model_id}); a
+# DEBATE_MODEL fallback covers a single-model dispatch.
+
+test_seat_models_map_reaches_reviewers() {
+  local tmp_dir review_id work_dir log_file
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-models"
+  work_dir=".tmp/ai-review-${review_id}"
+  log_file="$tmp_dir/acpx-log.txt"
+
+  cat > "$tmp_dir/models.json" << 'EOF'
+{"alpha": "model-alpha-1", "beta": "model-beta-2"}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  PATH="$SCRIPT_DIR:$PATH" \
+  SKIP_SESSION_CHECK=1 \
+  ACPX_SEAT_MODELS="$tmp_dir/models.json" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null
+
+  [ -f "$work_dir/alpha-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ "$(cat "$work_dir/alpha-exit.txt")" = "0" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  # alpha (codex) and beta (antigravity) each got their mapped model.
+  grep -q -- "--model model-alpha-1" "$log_file" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  grep -q -- "--model model-beta-2" "$log_file" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  # gamma (opus) is not in the map and no DEBATE_MODEL is set, so it keeps the opus default.
+  grep -q -- "--model claude-opus-4-8" "$log_file" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
+test_seat_models_full_selector_output() {
+  # The map can be the select-panel.py output itself, not just a flat map.
+  local tmp_dir review_id work_dir log_file
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-selectormodel"
+  work_dir=".tmp/ai-review-${review_id}"
+  log_file="$tmp_dir/acpx-log.txt"
+
+  cat > "$tmp_dir/panel.json" << 'EOF'
+{"seats": {"alpha": {"model_id": "selector-alpha-model"}, "beta": {"model_id": "selector-beta-model"}}, "distinct_labs": 2}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  PATH="$SCRIPT_DIR:$PATH" \
+  SKIP_SESSION_CHECK=1 \
+  ACPX_SEAT_MODELS="$tmp_dir/panel.json" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null
+
+  grep -q -- "--model selector-alpha-model" "$log_file" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  grep -q -- "--model selector-beta-model" "$log_file" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
+test_single_model_env_forwarded() {
+  local tmp_dir review_id work_dir log_file
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-singlemodel"
+  work_dir=".tmp/ai-review-${review_id}"
+  log_file="$tmp_dir/acpx-log.txt"
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  PATH="$SCRIPT_DIR:$PATH" \
+  SKIP_SESSION_CHECK=1 \
+  DEBATE_MODEL="unified-model" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>/dev/null
+
+  grep -q -- "--model unified-model" "$log_file" || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
 test_one_failure_doesnt_block_others() {
   # If one reviewer fails, others should still complete
   local tmp_dir review_id work_dir
@@ -706,6 +795,9 @@ run_test "wait budget accounts for retries" test_wait_budget_accounts_for_retrie
 run_test "invalid timeout still counts toward budget" test_invalid_timeout_still_counts_toward_budget
 run_test "warm-up skips exec mode and direct CLI" test_warmup_skips_exec_mode_and_direct_cli
 run_test "invoke logs created" test_invoke_logs_created
+run_test "seat models map reaches reviewers" test_seat_models_map_reaches_reviewers
+run_test "seat models map accepts full selector output" test_seat_models_full_selector_output
+run_test "single DEBATE_MODEL forwarded to all" test_single_model_env_forwarded
 run_test "one failure doesnt block others" test_one_failure_doesnt_block_others
 
 echo ""

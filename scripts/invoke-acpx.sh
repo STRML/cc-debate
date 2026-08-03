@@ -56,6 +56,21 @@ publish_exit() {
     mv -f "$WORK_DIR/${REVIEWER}-exit.txt.tmp.$$" "$WORK_DIR/${REVIEWER}-exit.txt"
 }
 
+# Report a fatal guard error. The message goes to stderr AND to the seat's
+# -output.md, so someone reading the output file learns the actual cause instead
+# of the EXIT trap's generic "terminated unexpectedly" line (F15). The exit file
+# is left to the EXIT trap, which is always armed on guard exits; it sees a
+# non-empty -output.md and skips its fallback. Guard exits are deliberately not
+# `handle_invocation_result` paths — they fail before a review could exist.
+fatal_exit() {
+  local code="$1"; shift
+  echo "$*" >&2
+  if [ -n "$WORK_DIR" ] && [ -n "$REVIEWER" ] && [ -d "$WORK_DIR" ]; then
+    echo "$*" > "$WORK_DIR/${REVIEWER}-output.md"
+  fi
+  exit "$code"
+}
+
 # --- Resolve acpx binary (support npx fallback) ---
 
 ACPX_BIN=()
@@ -117,26 +132,22 @@ rm -f "$WORK_DIR/${REVIEWER}-output.md" \
 # A review target is either a plan or, when no plan was staged, the changeset
 # the runner captured. Exactly one has to be non-empty.
 if [ ! -f "$WORK_DIR/plan.md" ] && [ ! -s "$WORK_DIR/changeset.diff" ]; then
-  echo "invoke-acpx: plan.md not found in $WORK_DIR (and no changeset.diff)" >&2
-  exit 1
+  fatal_exit 1 "invoke-acpx: plan.md not found in $WORK_DIR (and no changeset.diff)"
 fi
 
 if [ ! -s "$WORK_DIR/plan.md" ] && [ ! -s "$WORK_DIR/changeset.diff" ]; then
-  echo "invoke-acpx: nothing to review in $WORK_DIR — plan.md is empty and there is no changeset.diff" >&2
-  exit 1
+  fatal_exit 1 "invoke-acpx: nothing to review in $WORK_DIR — plan.md is empty and there is no changeset.diff"
 fi
 
 # --- Config ---
 
 if [ ! -f "$CONFIG_FILE" ]; then
-  echo "invoke-acpx: config not found: $CONFIG_FILE" >&2
-  exit 1
+  fatal_exit 1 "invoke-acpx: config not found: $CONFIG_FILE"
 fi
 
 AGENT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].agent // empty' "$CONFIG_FILE")
 if [ -z "$AGENT" ]; then
-  echo "invoke-acpx: no agent for '$REVIEWER' in $CONFIG_FILE" >&2
-  exit 1
+  fatal_exit 1 "invoke-acpx: no agent for '$REVIEWER' in $CONFIG_FILE"
 fi
 
 # `codex-exec` was a direct-CLI agent removed in #35. Nothing migrates an existing
@@ -144,11 +155,10 @@ fi
 # otherwise die inside acpx as "Failed to spawn agent command: codex-exec" — an error
 # about a missing binary, for what is really a stale config key. Name the fix instead.
 if [ "$AGENT" = "codex-exec" ]; then
-  echo "invoke-acpx: reviewer '$REVIEWER' uses agent 'codex-exec', which was removed." >&2
-  echo "  Migrate $CONFIG_FILE: set \"agent\": \"codex\" and \"mode\": \"exec\" on every" >&2
-  echo "  codex-exec reviewer, and drop \"effort\" (acpx does not take it)." >&2
-  echo "  See 'Migrating off codex-exec' in commands/setup.md." >&2
-  exit 1
+  fatal_exit 1 "invoke-acpx: reviewer '$REVIEWER' uses agent 'codex-exec', which was removed.
+  Migrate $CONFIG_FILE: set \"agent\": \"codex\" and \"mode\": \"exec\" on every
+  codex-exec reviewer, and drop \"effort\" (acpx does not take it).
+  See 'Migrating off codex-exec' in commands/setup.md."
 fi
 
 CONFIG_TIMEOUT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].timeout // empty' "$CONFIG_FILE")
@@ -156,6 +166,12 @@ CONFIG_SYSTEM_PROMPT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].system_prom
 CONFIG_MODEL=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].model // empty' "$CONFIG_FILE")
 CONFIG_MODE=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].mode // empty' "$CONFIG_FILE")
 CONFIG_RETRIES=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].retries // empty' "$CONFIG_FILE")
+
+# Per-run model override (F1). The panel selector picks a model per seat; the
+# parallel runner forwards it as MODEL=<model_id> in this seat's env. An explicit
+# MODEL wins over the config's `.model` (the seat's default), and neither is
+# required — absent both, the agent runs its own default model.
+MODEL="${MODEL:-}"
 
 # --- Blank-output retries ---
 # An agent that ends its turn without a final message costs the panel a seat, and
@@ -490,8 +506,11 @@ this review."
   export AGY_BIN; AGY_BIN="$(command -v agy)"
   export AGY_PRINT_TIMEOUT="${TIMEOUT}s"     # Go duration for --print-timeout
   # --model is optional; its value is a display name from `agy models`
-  # (e.g. "Gemini 3.1 Pro (High)").
-  if [ -n "$CONFIG_MODEL" ]; then
+  # (e.g. "Gemini 3.1 Pro (High)"). A per-run MODEL override wins over the
+  # config's `.model`.
+  if [ -n "$MODEL" ]; then
+    export AGY_MODEL="$MODEL"
+  elif [ -n "$CONFIG_MODEL" ]; then
     export AGY_MODEL="$CONFIG_MODEL"
   else
     unset AGY_MODEL || true
@@ -585,7 +604,7 @@ if [ "$AGENT" = "opus" ]; then
     OPUS_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
   fi
   # --permission-mode plan: read-only mode — the reviewer cannot edit/write files.
-  OPUS_CMD+=(claude --print --permission-mode plan --model "${CONFIG_MODEL:-claude-opus-4-8}")
+  OPUS_CMD+=(claude --print --permission-mode plan --model "${MODEL:-${CONFIG_MODEL:-claude-opus-4-8}}")
 
   attempt_opus() {
     set +e
@@ -647,7 +666,15 @@ fi
 # requests (headless can't prompt, so it denies rather than hangs). This is the
 # hard guarantee that a reviewer (e.g. an over-eager external agent) cannot
 # modify the plan doc or any file in the repo while reviewing.
-ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-permissions deny "${AGENT_ARGS[@]}" --file "$PROMPT_FILE")
+ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-permissions deny)
+# --model is a global acpx flag, so it must sit before the agent subcommand.
+# When MODEL (the panel selector's per-seat choice) is set it overrides the
+# agent's default — before this the selector's choice never reached the acpx
+# call and every seat ran its agent's default model.
+if [ -n "$MODEL" ]; then
+  ACPX_CMD+=(--model "$MODEL")
+fi
+ACPX_CMD+=("${AGENT_ARGS[@]}" --file "$PROMPT_FILE")
 
 attempt_acpx() {
   set +e

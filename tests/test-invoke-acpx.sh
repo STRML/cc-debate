@@ -67,6 +67,17 @@ setup_config() {
       "timeout": 60,
       "mode": "sesion",
       "system_prompt": "You have a typo in your mode."
+    },
+    "model-reviewer": {
+      "agent": "codex",
+      "timeout": 30,
+      "model": "cfg-default-model",
+      "system_prompt": "You test model selection."
+    },
+    "codex-exec-reviewer": {
+      "agent": "codex-exec",
+      "timeout": 30,
+      "system_prompt": "Should never run."
     }
   }
 }
@@ -1130,6 +1141,129 @@ test_denied_permission_blank_forever_still_fails() {
   rm -rf "$work_dir"
 }
 
+# --- per-seat model selection (F1) ---
+#
+# The panel selector picks a model per seat; the parallel runner forwards it as
+# MODEL=<id> in this seat's env. Without this, invoke-acpx.sh had no way to
+# express it and every acpx seat ran its agent's default model — the selector's
+# "dynamic reviewer selection" was inert end-to-end.
+
+test_model_env_reaches_acpx() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MODEL="gpt-5.6-luna" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
+  grep -q -- "--model gpt-5.6-luna" "$log_file" || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+test_model_env_overrides_config_model() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MODEL="gpt-5.6-luna" \
+  MOCK_ACPX_LOG="$log_file" \
+    bash "$INVOKE" "$config" "$work_dir" "model-reviewer" 2>/dev/null
+
+  # The per-run MODEL wins over the config's `.model`, which must not appear.
+  grep -q -- "--model gpt-5.6-luna" "$log_file" || { rm -rf "$work_dir"; return 1; }
+  grep -q -- "--model cfg-default-model" "$log_file" && { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+test_model_env_used_for_opus() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/claude-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MODEL="claude-opus-5" \
+  MOCK_CLAUDE_LOG="$log_file" \
+    bash "$INVOKE" "$config" "$work_dir" "opus-reviewer" 2>/dev/null
+
+  grep -q -- "--model claude-opus-5" "$log_file" || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+test_model_env_used_for_antigravity() {
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/agy-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MODEL="gemini-3.1-pro" \
+  MOCK_AGY_LOG="$log_file" \
+    bash "$INVOKE" "$config" "$work_dir" "no-prompt" 2>/dev/null
+
+  grep -q -- "--model gemini-3.1-pro" "$log_file" || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+# --- guard-message preservation (F15) ---
+#
+# The EXIT trap used to overwrite an empty -output.md with the generic
+# "process terminated unexpectedly" line on every early guard exit, hiding the
+# guard's own diagnostic (e.g. the codex-exec migration instructions) from
+# anyone reading the output file. Guards now write their own message first.
+
+test_codex_exec_guard_message_preserved() {
+  local work_dir config exit_code
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  set +e
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+    bash "$INVOKE" "$config" "$work_dir" "codex-exec-reviewer" 2>/dev/null
+  exit_code=$?
+  set -e
+
+  [ "$exit_code" -ne 0 ] || { rm -rf "$work_dir"; return 1; }
+  # The guard's own migration message, not the generic trap line.
+  grep -q "codex-exec" "$work_dir/codex-exec-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
+  grep -q "Migrate" "$work_dir/codex-exec-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
+  grep -q "process terminated unexpectedly" "$work_dir/codex-exec-reviewer-output.md" && { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+test_missing_config_guard_message_preserved() {
+  local work_dir exit_code
+  work_dir=$(setup_work_dir)
+
+  set +e
+  bash "$INVOKE" "/nonexistent/config.json" "$work_dir" "test-reviewer" 2>/dev/null
+  exit_code=$?
+  set -e
+
+  [ "$exit_code" -ne 0 ] || { rm -rf "$work_dir"; return 1; }
+  grep -q "config not found" "$work_dir/test-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
+  grep -q "process terminated unexpectedly" "$work_dir/test-reviewer-output.md" && { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
 # --- Run ---
 
 echo ""
@@ -1195,6 +1329,12 @@ run_test "opus skips session ensure" test_opus_skips_session_ensure
 run_test "denied permission keeps the review" test_denied_permission_keeps_the_review
 run_test "denied permission blank is retried" test_denied_permission_blank_is_retried
 run_test "denied and blank forever still fails" test_denied_permission_blank_forever_still_fails
+run_test "MODEL env reaches acpx --model" test_model_env_reaches_acpx
+run_test "MODEL env overrides config model" test_model_env_overrides_config_model
+run_test "MODEL env used for opus direct CLI" test_model_env_used_for_opus
+run_test "MODEL env used for antigravity direct CLI" test_model_env_used_for_antigravity
+run_test "codex-exec guard message preserved in output" test_codex_exec_guard_message_preserved
+run_test "missing-config guard message preserved in output" test_missing_config_guard_message_preserved
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="

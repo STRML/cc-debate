@@ -197,6 +197,12 @@ def docker_cmd(repo, repo_sandbox, no_net, bind_pwd, image):
         if os.path.isdir(path):
             vol += ["--volume", "%s:%s:ro" % (path, path)]
         env += ["--env", kv]
+    # bwrap and Seatbelt inherit the parent environment, but docker only passes
+    # what --env names. Carry the model-selection vars (F1) explicitly so a
+    # sandboxed dispatch on the docker backend still reaches the per-seat model.
+    for var in ("DEBATE_MODEL", "ACPX_SEAT_MODELS"):
+        if os.environ.get(var):
+            env += ["--env", "%s=%s" % (var, os.environ[var])]
     # The wrapped runner reads its reviewer config (~/.claude/debate-acpx.json); without
     # ~/.claude mounted, every sandboxed docker review fails "Config not found" before a
     # single seat starts.
