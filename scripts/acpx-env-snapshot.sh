@@ -6,9 +6,18 @@
 # Output: key: value lines, then debate-acpx.json contents
 
 ACPX_PATH=$(command -v acpx 2>/dev/null || true)
+# Minimum version for effort auto-scaling: `acpx codex set reasoning_effort`
+# (used by invoke-acpx.sh for effort-scaled codex seats) requires acpx >= 0.13.0.
+# Earlier versions run codex at its default effort and say so.
+ACPX_MIN="0.13.0"
 if [ -n "$ACPX_PATH" ]; then
   ACPX_VER=$(acpx --version 2>/dev/null || echo "unknown")
   echo "acpx: $ACPX_PATH ($ACPX_VER)"
+  if [ "$ACPX_VER" != "unknown" ] && [ -n "$(printf '%s\n%s\n' "$ACPX_MIN" "$ACPX_VER" | sort -V | head -1)" ] \
+     && [ "$(printf '%s\n%s\n' "$ACPX_MIN" "$ACPX_VER" | sort -V | head -1)" != "$ACPX_MIN" ]; then
+    echo "  ⚠️ acpx < $ACPX_MIN — effort auto-scaling for codex seats needs acpx >= $ACPX_MIN."
+    echo "    Upgrade: npm install -g acpx@latest"
+  fi
 else
   echo "acpx: not found"
 fi
