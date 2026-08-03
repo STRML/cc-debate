@@ -5,6 +5,12 @@ _here = os.path.dirname(os.path.abspath(__file__))
 _src = os.path.join(_here, "..", "scripts", "refresh-models.py")
 _spec = importlib.util.spec_from_file_location("refresh_models", _src)
 rm = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(rm)
+# Import the real schema gate's constants so the auto-added entries are checked against
+# the same invariants tests/test-registry-schema.py enforces, not a copy.
+_ts = importlib.util.spec_from_file_location("reg_schema", os.path.join(_here, "test-registry-schema.py"))
+reg_schema = importlib.util.module_from_spec(_ts); _ts.loader.exec_module(reg_schema)
+
+NEW = rm.NEW
 
 def clone(o): return json.loads(json.dumps(o))
 
@@ -77,7 +83,7 @@ check("AA: cost bucket derived from price", UPD.get("gpt56_luna", {}).get("cost"
 check("AA: price mapped from per-M", UPD.get("gpt56_luna", {}).get("price")=={"in":1.0,"out":6.0}, UPD.get("gpt56_luna"))
 check("AA: base (max) row wins over -xhigh", UPD.get("gpt56_luna", {}).get("strengths")==["reasoning","code","cost"])
 check("AA: gemini matches via variant suffix (preview)", "gemini_31_pro" in UPD, UPD.keys())
-check("AA: unknown model ignored", "kimi_k3" not in UPD)
+check("AA: unknown model becomes a NEW candidate", any(c.get("model_id")=="kimi-k3" for c in UPD.get(NEW, [])), UPD.get(NEW))
 check("AA: cost_per_task untouched (no per-task source)", "cost_per_task" not in UPD.get("gpt56_luna", {}).get("price", {}))
 check("AA: empty payload -> {}", rm.best_effort_metrics({}, REG_AA)=={})
 check("AA: None payload -> {}", rm.best_effort_metrics(None, REG_AA)=={})
@@ -88,10 +94,13 @@ AA_STR = {"ok": True, "models": [
 UPD_STR = rm.best_effort_metrics(AA_STR, REG_AA)
 check("AA: string numerics coerced", UPD_STR.get("gpt56_luna", {}).get("price")=={"in":1.0,"out":6.0}, UPD_STR.get("gpt56_luna"))
 
-# unrelated slug must not hijack a registry entry (was: model_id 'opus' matched opus-4-6)
+# unrelated slug must not hijack a registry entry (was: model_id 'opus' matched opus-4-6);
+# it becomes a NEW candidate instead of landing on a wrong existing key
 UPD_NO = rm.best_effort_metrics({"ok": True, "models": [{"slug": "opus-4-6", "intelligenceIndex": 55.0,
   "priceInputPer1m": 3.0, "priceOutputPer1m": 15.0}]}, REG_AA)
-check("AA: unrelated slug not hijacked (opus-4-6)", UPD_NO=={}, UPD_NO)
+top = {k: v for k, v in UPD_NO.items() if k != NEW}
+check("AA: unrelated slug not hijacked (no existing key updated)", top=={}, top)
+check("AA: unrelated slug auto-added as NEW", any(c.get("model_id")=="opus-4-6" for c in UPD_NO.get(NEW, [])), UPD_NO)
 
 # merge the AA update into the registry: user-owned fields survive, strengths union
 o3 = rm.merge(clone(REG_AA), clone(UPD))["gpt56_luna"]
@@ -142,10 +151,77 @@ finally:
 check("lmarena: elo mapped", UPD_ELO.get("gpt56_luna", {}).get("elo")==1380.2, UPD_ELO)
 check("lmarena: gemini matches preview, not the key-colliding 'gemini-pro'",
       UPD_ELO.get("gemini_31_pro", {}).get("elo")==1479.5, UPD_ELO)
-check("lmarena: unknown model ignored", "random_model" not in UPD_ELO, UPD_ELO)
+check("lmarena: unknown model becomes a NEW candidate",
+      any(c.get("model_id")=="random-model" for c in UPD_ELO.get(NEW, [])), UPD_ELO.get(NEW))
 o4 = rm.merge(clone(REG_AA), clone(UPD_ELO))["gpt56_luna"]
 check("merge: elo stored", o4.get("elo")==1380.2, o4)
 check("merge: elo merge keeps AA fields when combined", o4["strengths"]==["speed","cost"], o4["strengths"])
+
+# --- auto-add: a datasource model the registry doesn't know becomes a NEW entry ---
+# Defaults per the epic line item: harness acpx, available False (must opt in),
+# repo_aware False, effort medium over the full effort_range, family/lab derived from
+# the creator when known else 'unknown', price fields numeric.
+KI = [c for c in UPD.get(NEW, []) if c.get("model_id") == "kimi-k3"]
+check("new: kimi-k3 is a NEW candidate", len(KI) == 1, UPD.get(NEW))
+KI = KI[0]
+check("new: harness defaults to acpx", KI["harness"] == "acpx", KI)
+check("new: available defaults to False (never silently selectable)", KI["available"] is False, KI)
+check("new: repo_aware defaults to False", KI["repo_aware"] is False)
+check("new: effort defaults to medium in the full standard range",
+      KI["effort"] == "medium" and KI["effort_range"] == list(rm.EFFORT_ORDER), (KI["effort"], KI["effort_range"]))
+check("new: family/lab generic when AA has no creator",
+      KI["family"] == "unknown" and KI["lab"] == "unknown", (KI["family"], KI["lab"]))
+check("new: price mapped from AA", KI["price"]["in"] == 2.0 and KI["price"]["out"] == 10.0, KI["price"])
+check("new: cost_per_task 0.0 placeholder (no per-task source)", KI["price"]["cost_per_task"] == 0.0, KI["price"])
+check("new: cost bucket derived from price", KI["cost"] == "mid", KI.get("cost"))
+check("new: strengths derived from AA index", set(KI["strengths"]) == {"reasoning", "code"}, KI["strengths"])
+check("new: source recorded", KI["source"] == "AA", KI.get("source"))
+
+# merge() ADDS the NEW candidate; the merged registry passes the real schema gate
+MERGED = rm.merge(clone(REG_AA), clone(UPD))
+check("new: kimi_k3 added to merged registry", "kimi_k3" in MERGED, list(MERGED))
+k = MERGED["kimi_k3"]
+check("new: schema-valid (no required field missing)", not (reg_schema.REQUIRED - set(k)), reg_schema.REQUIRED - set(k))
+check("new: schema-valid harness", k["harness"] in reg_schema.HARNESS, k["harness"])
+check("new: schema-valid cost", k["cost"] in reg_schema.COST, k["cost"])
+check("new: schema-valid effort in range", k["effort"] in set(k["effort_range"]), (k["effort"], k["effort_range"]))
+check("new: schema-valid strengths", set(k["strengths"]) <= reg_schema.STRENGTHS, k["strengths"])
+check("new: schema-valid price numerics",
+      all(isinstance(k["price"].get(f), (int, float)) and k["price"][f] >= 0
+          for f in ("in", "out", "cost_per_task")), k["price"])
+check("new: schema-valid bools", isinstance(k["repo_aware"], bool) and isinstance(k["available"], bool), k)
+check("new: merged entry as_of recorded", bool(k.get("as_of")), k.get("as_of"))
+
+# a NEW candidate whose model_id the registry already knows must NOT overwrite the
+# curated entry, and must not be added a second time
+dup_upd = {"__new__": [dict(KI, model_id="gpt-5.6-luna", name="Clone")]}
+MERGED_DUP = rm.merge(clone(REG_AA), dup_upd)
+check("new: existing model_id never overwritten by a NEW candidate",
+      MERGED_DUP["gpt56_luna"]["name"] == "GPT-5.6 Luna", MERGED_DUP["gpt56_luna"]["name"])
+check("new: duplicate candidate not added as an extra key", len(MERGED_DUP) == len(REG_AA), list(MERGED_DUP))
+
+# _merge_new: the same new model from AA + LMArena unions into ONE entry, filling elo
+# and the org-derived identity AA couldn't provide, while keeping AA's real price.
+lm_cand = rm._lmarena_to_new_entry({"model_name": "kimi-k3", "category": "overall",
+                                    "rating": 1410.0, "organization": "moonshot"})
+union = rm._merge_new([KI], [lm_cand])
+check("new: AA+LMArena candidates union to one entry", len(union) == 1, union)
+u = union[0]
+check("new: union keeps AA real price (LMArena 0.0 placeholder loses)",
+      u["price"]["in"] == 2.0 and u["price"]["out"] == 10.0, u["price"])
+check("new: union fills elo from LMArena", u.get("elo") == 1410.0, u.get("elo"))
+check("new: union fills family/lab from org", u["family"] == "kimi" and u["lab"] == "moonshot",
+      (u["family"], u["lab"]))
+check("new: union still available:false", u["available"] is False, u)
+
+# LMArena-only new candidate: price placeholders, elo recorded, org-derived identity
+RM = [c for c in UPD_ELO.get(NEW, []) if c.get("model_id") == "random-model"]
+check("new: lmarena random-model is a NEW candidate", len(RM) == 1, UPD_ELO.get(NEW))
+RM = RM[0]
+check("new: lmarena elo recorded", RM.get("elo") == 1300.0, RM.get("elo"))
+check("new: lmarena identity generic (org 'x' unknown)", RM["family"] == "unknown", RM.get("family"))
+check("new: lmarena price is numeric placeholder",
+      RM["price"]["in"] == 0.0 and RM["price"]["cost_per_task"] == 0.0, RM["price"])
 
 print()
 print("PASS" if fails==0 else f"FAIL ({fails})")

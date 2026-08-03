@@ -44,6 +44,11 @@ repo_aware + family/lab + available.
    `cost_per_task` from a real per-task figure, set `ARTIFICIAL_ANALYSIS_API_KEY` (AA's
    free tier; the keyless mirror has no per-task cost). Offline-safe: if every source
    fails, the last good copy is kept.
+   A model id a datasource returns that the registry doesn't know is **auto-added** as a
+   new schema-valid entry with safe defaults: `harness:"acpx"`, `effort:"medium"` over the
+   full effort_range, `repo_aware:false`, family/lab from the creator when known else
+   `unknown`. It arrives **`available:false`** — never selectable. Enable it and confirm
+   the harness/pricing before it can be picked.
 2. **Route the panel**: `python3 scripts/select-panel.py --registry $HERMES_HOME/debate-models.json
    --seats simplifier,operator,pentester --deepest pentester --installed-harnesses acpx,subagent`
    -> seat -> {model, harness, provider, model_id, effort, cost_per_task, repo_aware}.
@@ -55,7 +60,9 @@ repo_aware + family/lab + available.
    sandbox-exec / docker, read-only repo mount + isolated HOME for repo-aware seats).
 
 Seed `debate-models.json` (and refresh) marks `available:false` for harnesses you haven't
-configured; only `available:true` + an installed harness are selectable.
+configured; only `available:true` + an installed harness are selectable. Refresh
+auto-adds brand-new datasource models the same way — they arrive `available:false` and
+stay inert until you enable them.
 
 ## When to use
 

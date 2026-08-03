@@ -14,6 +14,14 @@ strengths (reasoning/code/cost/speed), updates price.in/price.out, re-derives th
 bucket, and records a `source` + `as_of` so a stale cache is visible. If every source
 fails the last good copy is kept untouched and we exit 1 (offline fallback).
 
+A model id a datasource returns that the registry doesn't know is AUTO-ADDED as a new
+schema-valid entry. The datasource supplies name, slug, price, strengths and/or elo;
+everything else is a safe default (harness `acpx`, effort `medium` over the full
+effort_range, repo_aware false, family/lab derived from the creator when known else
+'unknown'). Auto-added entries are `available: false` — never selectable until a user
+enables them and confirms the harness, so the refresh can grow the registry without
+silently changing what the selector may pick.
+
 Usage:
   refresh-models.py --registry <debate-models.json> [--out <path>] [--update-source AA|LMArena|all] [--ttl-hours N]
 """
@@ -35,6 +43,35 @@ FETCHERS = {
 AA_FREE_URL = "https://artificialanalysis.ai/api/v2/language/models/free"
 # The overall leaderboard is ~383 rows, contiguous at the top of the text/latest split.
 LMARENA_MAX_ROWS = 500
+
+# Reserved key in the updates dict a parser returns: a LIST of schema-complete entries
+# for model ids the datasource saw but the registry doesn't know yet. merge() ADDS these;
+# every other key in updates is an existing registry entry to update in place.
+NEW = "__new__"
+
+# Default effort_range for an auto-added model: the full standard set, so the default
+# effort ('medium') always satisfies the schema gate's effort-in-range invariant.
+EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
+
+# creator/organization -> (family, lab), matching the seed's conventions
+# (openai -> oai/openai, google -> gemini/google, zai -> glm/zai, ...). An unknown
+# creator gets a generic pair; the auto-added entry is available:false anyway, so a
+# slightly-off family/lab is a cosmetic stub until a human curates it.
+CREATOR_IDENTITY = {
+    "openai": ("oai", "openai"),
+    "anthropic": ("claude", "anthropic"),
+    "google": ("gemini", "google"),
+    "deepseek": ("deepseek", "deepseek"),
+    "zai": ("glm", "zai"),
+    "zhipu": ("glm", "zai"),
+    "moonshot": ("kimi", "moonshot"),
+    "qwen": ("qwen", "alibaba"),
+    "alibaba": ("qwen", "alibaba"),
+    "meta": ("llama", "meta"),
+    "mistral": ("mistral", "mistral"),
+    "xai": ("grok", "xai"),
+    "grok": ("grok", "xai"),
+}
 
 def fetch(url, timeout=15, headers=None):
     h = {"User-Agent": "cc-debate-refresh/1.0"}
@@ -77,6 +114,77 @@ def _split_variant(norm):
         if norm.endswith(suf) and len(norm) > len(suf):
             return norm[:-len(suf)], suf
     return norm, ""
+
+def _strip_variant_slug(slug):
+    """Strip an effort-variant suffix from a RAW slug, so a brand-new model is registered
+    by its base id ('gpt-5-6-luna-xhigh' -> 'gpt-5-6-luna'), not an effort variant.
+    Unlike _split_variant this works on the punctuated slug, preserving the dashes."""
+    low = (slug or "").lower()
+    for suf in VARIANT_SUFFIXES:
+        if low.endswith(suf) and len(slug) > len(suf):
+            return slug[:-len(suf)]
+    return slug
+
+def _identity(creator):
+    """(family, lab) for a datasource creator/organization string, else a generic pair.
+    Substring match (longest key first) so 'Zhipu AI' hits zai, 'Moonshot AI' hits kimi."""
+    key = _norm(creator)
+    if key:
+        for cand, pair in sorted(CREATOR_IDENTITY.items(), key=lambda kv: -len(kv[0])):
+            if cand in key:
+                return pair
+    return "unknown", "unknown"
+
+def _complete_price(price):
+    """Schema-valid price dict: in/out/cost_per_task all present and numeric, 0.0
+    placeholders for whatever the datasource didn't provide. The schema gate rejects a
+    missing or non-numeric price field, and an available:false stub is never selected,
+    so a 0.0 placeholder is safe until a human curates real pricing."""
+    out = {}
+    for f in ("in", "out", "cost_per_task"):
+        v = _num((price or {}).get(f))
+        out[f] = v if v is not None else 0.0
+    return out
+
+def _key_for_new(model_id, out):
+    """Deterministic registry key for an auto-added model, never colliding with an
+    existing key. 'kimi-k3' -> 'kimi_k3'; a clash gets a _2/_3... suffix."""
+    base = "".join(ch if ch.isalnum() else "_" for ch in (model_id or "").lower()).strip("_") or "model"
+    key, n = base, 2
+    while key in out:
+        key = "%s_%d" % (base, n)
+        n += 1
+    return key
+
+def _new_entry(*, name, model_id, creator=None, provider=None, strengths=None,
+               price=None, cost=None, elo=None, source):
+    """Schema-complete registry entry for a model a datasource returned that the registry
+    doesn't know yet. Everything the datasource can't provide is a SAFE default:
+    harness 'acpx' (the default transport), available False (auto-added models are NEVER
+    selectable until a user enables them and confirms the harness), repo_aware False,
+    effort 'medium' across the full effort_range, family/lab from the creator else
+    'unknown'. Returns an entry that satisfies tests/test-registry-schema.py."""
+    family, lab = _identity(creator)
+    price = _complete_price(price)
+    entry = {
+        "name": name or model_id,
+        "harness": "acpx",
+        "provider": provider or lab or "unknown",
+        "model_id": model_id,
+        "family": family,
+        "lab": lab,
+        "strengths": sorted(set(strengths or [])),
+        "effort": "medium",
+        "effort_range": list(EFFORT_ORDER),
+        "price": price,
+        "cost": cost or _cost_bucket(price.get("in")) or "cheap",
+        "repo_aware": False,
+        "available": False,
+        "source": source,
+    }
+    if elo is not None:
+        entry["elo"] = elo
+    return entry
 
 def _strengths_from(index, price_in, latency):
     """Capability tags from the AA row. Never fabricates a fallback tag — an empty
@@ -137,6 +245,7 @@ def best_effort_metrics(payload, registry):
         return {}
     reg_norm = _registry_norm(registry)
     by_base = {}
+    new_by_base = {}
     for m in models:
         norm = _norm(m.get("slug")) or _norm(m.get("name"))
         if not norm:
@@ -144,6 +253,10 @@ def best_effort_metrics(payload, registry):
         base, variant = _split_variant(norm)
         if base in reg_norm:
             by_base.setdefault(reg_norm[base], {}).setdefault(variant, m)
+        elif base not in new_by_base or variant == "":
+            # brand-new base slug: keep one row, preferring the unsuffixed (max-effort)
+            # one so the auto-added entry is registered at its base id.
+            new_by_base[base] = m
     updates = {}
     for key, m in registry.items():
         variants = by_base.get(key)
@@ -155,6 +268,9 @@ def best_effort_metrics(payload, registry):
                or next(iter(variants.values())))   # e.g. gemini-3-1-pro's 'preview'
         if row:
             updates[key] = _aa_to_update(row)
+    new_entries = [_aa_to_new_entry(new_by_base[b]) for b in sorted(new_by_base)]
+    if new_entries:
+        updates[NEW] = new_entries
     return updates
 
 def _aa_to_update(m):
@@ -180,6 +296,24 @@ def _aa_to_update(m):
     if price:
         u["price"] = price
     return u
+
+def _aa_to_new_entry(m):
+    """Schema-complete entry for an AA model the registry doesn't know. AA provides name,
+    slug, price (in/out, and cost_per_task from the free API) and derived strengths;
+    _new_entry fills the rest (harness, available:false, effort, identity)."""
+    idx = _num(m.get("intelligenceIndex"))
+    price_in = _num(m.get("priceInputPer1m"))
+    price_out = _num(m.get("priceOutputPer1m"))
+    cpt = _num(m.get("costPerTask"))
+    price = {"in": price_in, "out": price_out}
+    if cpt is not None:
+        price["cost_per_task"] = cpt
+    name = m.get("name") or m.get("slug")
+    slug = m.get("slug") or name or ""
+    return _new_entry(name=name, model_id=_strip_variant_slug(slug),
+                      creator=m.get("creator") or m.get("organization"),
+                      strengths=_strengths_from(idx, price_in, _num(m.get("latencySeconds"))) or [],
+                      price=price, cost=_cost_bucket(price_in), source="AA")
 
 def normalize_aa_free(payload):
     """Convert the AA free-API shape to the mirror shape best_effort_metrics parses.
@@ -219,17 +353,22 @@ def fetch_lmarena(timeout=20):
     return rows
 
 def lmarena_metrics(registry):
-    """Map LMArena overall Elo rows into {registry_key: {elo}} updates (secondary confidence)."""
+    """Map LMArena overall Elo rows into {registry_key: {elo}} updates (secondary confidence).
+    Unmatched rows (a model LMArena rates that the registry doesn't know) are returned as
+    auto-add candidates under NEW — elo + org-derived identity, price placeholders."""
     rows = fetch_lmarena()
     if not rows or not registry:
         return {}
     reg_norm = _registry_norm(registry)
     by_base = {}
+    new_by_base = {}
     for r in rows:
         norm = _norm(r.get("model_name")) or _norm(r.get("organization") or "")
         base, variant = _split_variant(norm)
         if base in reg_norm:
             by_base.setdefault(reg_norm[base], {}).setdefault(variant, r)
+        elif base not in new_by_base or variant == "":
+            new_by_base[base] = r
     updates = {}
     for key, m in registry.items():
         variants = by_base.get(key)
@@ -241,7 +380,25 @@ def lmarena_metrics(registry):
                or next(iter(variants.values())))
         if row and _num(row.get("rating")) is not None:
             updates[key] = {"elo": _num(row["rating"]), "source": "LMArena"}
+    new_entries = []
+    for b in sorted(new_by_base):
+        row = new_by_base[b]
+        if _num(row.get("rating")) is None:
+            continue   # no Elo — nothing worth stubbing a registry entry for
+        new_entries.append(_lmarena_to_new_entry(row))
+    if new_entries:
+        updates[NEW] = new_entries
     return updates
+
+def _lmarena_to_new_entry(r):
+    """Schema-complete entry for an LMArena row the registry doesn't know. LMArena
+    provides model_name, organization and Elo; price/strengths are 0.0/[] placeholders
+    (inert while available:false) until a human curates them."""
+    name = r.get("model_name") or ""
+    return _new_entry(name=name, model_id=_strip_variant_slug(name),
+                      creator=r.get("organization"),
+                      strengths=[], price=None, cost=None,
+                      elo=_num(r.get("rating")), source="LMArena")
 
 def write_registry(path, reg):
     """Atomic replace. Write to a temp then rename, so an interrupted refresh never
@@ -252,9 +409,51 @@ def write_registry(path, reg):
         f.write("\n")
     os.replace(tmp, path)
 
+def _merge_new(a, b):
+    """Union two sources' new-model candidate lists (both under the reserved NEW key),
+    keyed by model_id. The earlier source's fields win; the later one fills gaps it has
+    data for (LMArena's elo onto AA's stub, LMArena's org where AA had no creator)."""
+    by_id = {}
+    for cand in (a or []) + (b or []):
+        nid = _norm(cand.get("model_id"))
+        if not nid:
+            continue
+        if nid not in by_id:
+            by_id[nid] = dict(cand)
+            continue
+        old, new = by_id[nid], cand
+        for k, v in new.items():
+            if k == "price" and isinstance(v, dict):
+                # the earlier source's real price wins; a later 0.0 placeholder (a source
+                # with no pricing, e.g. LMArena) never clobbers it.
+                old.setdefault("price", {})
+                for f, fv in v.items():
+                    if _num(old["price"].get(f)) in (None, 0.0) and fv not in (None, 0.0):
+                        old["price"][f] = fv
+            elif k == "strengths" and v:
+                old["strengths"] = sorted(set((old.get("strengths") or []) + v))
+            elif k in ("provider", "family", "lab") and old.get(k) == "unknown" \
+                    and v not in (None, "", "unknown"):
+                old[k] = v   # LMArena's org beats AA's absence-of-creator 'unknown'
+            elif old.get(k) in (None, "", [], {}) and v not in (None, "", [], {}):
+                old[k] = v
+    return list(by_id.values())
+
 def merge(registry, updates):
     out = copy.deepcopy(registry)   # never mutate the caller's nested dicts (F9)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # New-model candidates (the reserved NEW key) are schema-complete entries to ADD.
+    # available:false keeps them inert — never selectable until a user opts in. A model
+    # id the registry already knows is skipped: the curated entry wins, always.
+    known = {_norm(m.get("model_id")) for m in out.values()}
+    for cand in updates.get(NEW) or []:
+        nid = _norm(cand.get("model_id"))
+        if not nid or nid in known:
+            continue
+        entry = dict(cand)
+        entry["as_of"] = now
+        out[_key_for_new(cand["model_id"], out)] = entry
+        known.add(nid)
     for key, m in out.items():
         u = updates.get(key)
         if not u:
@@ -333,13 +532,21 @@ def main():
                 # AA and LMArena update the same registry keys (AA: strengths/price,
                 # LMArena: elo), so union per key — {**updates, **u} would clobber AA's
                 # data the moment LMArena adds elo. The first source's `source` tag wins.
+                # New-model candidates (the NEW key) are a list, not a per-key dict:
+                # union the lists by model_id so AA's stub picks up LMArena's elo.
+                n_new = len(u.get(NEW) or [])
                 for k, v in u.items():
+                    if k == NEW:
+                        updates[NEW] = _merge_new(updates.get(NEW), v)
+                        continue
                     merged = dict(updates.get(k) or {})
                     if "source" in merged:
                         v = {kk: vv for kk, vv in v.items() if kk != "source"}
                     merged.update(v)
                     updates[k] = merged
-                print(f"{src}: merged {len(u)} model updates")
+                n_upd = len(u) - (1 if NEW in u else 0)
+                print(f"{src}: merged {n_upd} model updates"
+                      + (f", {n_new} new model(s)" if n_new else ""))
             else:
                 print(f"{src}: no matching models parsed — registry unchanged")
         except Exception as e:
@@ -358,17 +565,16 @@ def main():
         print("registry unchanged — no datasource merged")
         sys.exit(0)
 
-    new_ids = sorted(k for k in updates if k not in reg)
-    if new_ids:
-        # merge() only updates entries already in the registry; a datasource returning a
-        # brand-new model can't seed harness/provider/available, so say so rather than
-        # silently printing "merged N" while the registry never grows.
-        print("new model ids found but not added (need harness/available): " + ", ".join(new_ids),
-              file=sys.stderr)
     out = merge(reg, updates)
+    added = sorted(k for k in out if k not in reg)
     dst = a.out or a.registry
     write_registry(dst, out)
-    print(f"registry refreshed ({len(out)} entries) -> {dst}")
+    msg = f"registry refreshed ({len(out)} entries) -> {dst}"
+    if added:
+        # Auto-added models are available:false — inert until a user enables them and
+        # confirms the harness. Report the growth so it's visible, not silent.
+        msg += f"; new models added (available:false): {', '.join(added)}"
+    print(msg)
 
 if __name__ == "__main__":
     main()

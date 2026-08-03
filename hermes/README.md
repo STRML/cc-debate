@@ -16,7 +16,10 @@
   at the entry's configured effort, updates `price.in`/`price.out`, re-derives the
   `cost` bucket. Preserves user fields (harness/repo_aware/available/effort/
   cost_per_task). Set `ARTIFICIAL_ANALYSIS_API_KEY` to also refresh `cost_per_task`
-  from AA's own API (the mirror has no per-task cost). Offline-safe; TTL-guarded.
+  from AA's own API (the mirror has no per-task cost). A model id a datasource returns
+  that the registry doesn't know is auto-added as a schema-valid entry with safe
+  defaults and `available:false` — never selectable until you enable it. Offline-safe;
+  TTL-guarded.
 - `../scripts/sandbox.py` — platform-adaptive sandbox (bwrap / sandbox-exec / docker) for
   repo-aware or untrusted seats.
 - `../scripts/run-acpx-review.sh` — acpx dispatch wrapper (fan-out/timeout/retry in
