@@ -27,11 +27,11 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --sandbox) SANDBOX=1;;
     --repo-sandbox) SANDBOX=1; REPO_SANDBOX=1;;
-    --repo) shift; REPO="$1";;
+    --repo) [ "$#" -ge 2 ] || { echo "run-acpx-review: --repo needs ROOT" >&2; exit 2; }; shift; REPO="$1";;
     --no-net) NO_NET="--no-net";;
-    --image) shift; IMAGE="$1";;
-    --model) shift; MODEL="$1";;
-    --models) shift; MODELS_FILE="$1";;
+    --image) [ "$#" -ge 2 ] || { echo "run-acpx-review: --image needs IMAGE" >&2; exit 2; }; shift; IMAGE="$1";;
+    --model) [ "$#" -ge 2 ] || { echo "run-acpx-review: --model needs ID" >&2; exit 2; }; shift; MODEL="$1";;
+    --models) [ "$#" -ge 2 ] || { echo "run-acpx-review: --models needs FILE" >&2; exit 2; }; shift; MODELS_FILE="$1";;
     *)
       echo "run-acpx-review: unknown flag '$1' (supported: --sandbox --repo-sandbox --repo ROOT --no-net --image IMAGE --model ID --models FILE)" >&2
       exit 2
@@ -45,12 +45,12 @@ if [ "$REPO_SANDBOX" = "1" ] && [ -z "$REPO" ]; then
   exit 2
 fi
 
-# F4: isolation flags are a promise the caller thinks they bought. --repo and
-# --no-net only change anything under the sandbox; without --sandbox they used to
+# F4: isolation flags are a promise the caller thinks they bought. --repo, --no-net
+# and --image only change anything under the sandbox; without --sandbox they used to
 # run the review completely unsandboxed while reading as if isolation was applied.
 # That silent no-op is worse than an error, so reject it.
-if [ "$SANDBOX" = "0" ] && { [ -n "$REPO" ] || [ -n "$NO_NET" ]; }; then
-  echo "run-acpx-review: --repo ROOT and --no-net require --sandbox (isolation flags are no-ops without it)" >&2
+if [ "$SANDBOX" = "0" ] && { [ -n "$REPO" ] || [ -n "$NO_NET" ] || [ -n "$IMAGE" ]; }; then
+  echo "run-acpx-review: --repo, --no-net and --image require --sandbox (isolation flags are no-ops without it)" >&2
   exit 2
 fi
 

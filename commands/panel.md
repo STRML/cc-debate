@@ -128,12 +128,21 @@ report would describe the diff that picked the seats while the reviews described
 something else.
 
 **Pass the selector's model selection.** The seats were picked for their models in step 4;
-hand that to dispatch so each seat actually runs the model that earned it the slot. Save the
-selector output (`select-panel.py`) as `<WORK_DIR>/panel.json` and set `ACPX_SEAT_MODELS` to
-it — the runner reads `.seats[<seat>].model_id` per seat and forwards it as `--model` on the
-acpx call (a flat `{seat: model_id}` map works too, and `DEBATE_MODEL=<id>` sets one model for
-the whole panel). Without this the seats run their agents' default models and the panel
-selection is inert.
+hand that to dispatch so each seat actually runs the model that earned it the slot. Run the
+selector and save its output as `<WORK_DIR>/panel.json`, which `ACPX_SEAT_MODELS` points at:
+
+```bash
+python3 "<SCRIPT_DIR>/select-panel.py" \
+  --registry "<HOME>/.claude/debate-models.json" \
+  --seats "<seat1,seat2,...>" --deepest <deepest-seat> \
+  --installed-harnesses acpx,subagent > "<WORK_DIR>/panel.json"
+```
+
+The runner reads `.seats[<seat>].model_id` per seat and forwards it as `--model` on the acpx
+call (a flat `{seat: model_id}` map works too, and `DEBATE_MODEL=<id>` sets one model for the
+whole panel). Without this the seats run their agents' default models and the panel
+selection is inert. The registry path above is the standard `$HERMES_HOME/debate-models.json`;
+point `--registry` at wherever the registry actually lives.
 
 Run it with `run_in_background: true` and `dangerouslyDisableSandbox: true`, then wait
 for the completion notification.

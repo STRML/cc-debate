@@ -214,6 +214,20 @@ EXIT_FILES=()
 PIDS=()
 MAX_REVIEWER_BUDGET=0
 
+# The model map is load-bearing: a truncated or hand-edited file silently falling
+# back to defaults is how a panel loses its model selection without anyone
+# noticing (debate finding). Fail loudly when it is set but unusable.
+if [ -n "$SEAT_MODELS" ]; then
+  if [ ! -f "$SEAT_MODELS" ]; then
+    echo "[debate] FATAL: ACPX_SEAT_MODELS is set but the file is missing: $SEAT_MODELS" >&2
+    exit 1
+  fi
+  if ! jq -e . "$SEAT_MODELS" > /dev/null 2>&1; then
+    echo "[debate] FATAL: ACPX_SEAT_MODELS is not valid JSON: $SEAT_MODELS" >&2
+    exit 1
+  fi
+fi
+
 for NAME in "${REVIEWERS[@]}"; do
   # Sanitize reviewer name — must be alphanumeric/dash/underscore only
   if ! [[ "$NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
@@ -260,11 +274,23 @@ for NAME in "${REVIEWERS[@]}"; do
     CHILD_MODEL=$(jq -r --arg s "$NAME" '
       if type == "object" and has("seats") then .seats[$s].model_id
       else .[$s] end // empty' "$SEAT_MODELS" 2>/dev/null || true)
+    # A seat whose selected model runs on the subagent harness is not an acpx
+    # seat — forwarding its model_id to acpx would run the wrong transport. Leave
+    # it to its configured agent default (debate finding).
+    HARNESS=$(jq -r --arg s "$NAME" '
+      if type == "object" and has("seats") then .seats[$s].harness
+      else empty end // empty' "$SEAT_MODELS" 2>/dev/null || true)
+    if [ "$HARNESS" = "subagent" ]; then
+      CHILD_MODEL=""
+    fi
   fi
   [ -z "$CHILD_MODEL" ] && CHILD_MODEL="$DEBATE_MODEL"
 
   INVOKE_ENV=("SKIP_SESSION_CHECK=${SKIP_SESSION_CHECK:-}")
-  [ -n "$CHILD_MODEL" ] && INVOKE_ENV+=("MODEL=$CHILD_MODEL")
+  # Always set MODEL — empty means "use the agent default" — so an inherited
+  # MODEL from the caller's environment cannot leak into a seat that should use
+  # its default (debate finding F9).
+  INVOKE_ENV+=("MODEL=${CHILD_MODEL:-}")
   nohup env "${INVOKE_ENV[@]}" \
     bash "$SCRIPT_DIR/invoke-acpx.sh" "$CONFIG_FILE" "$WORK_DIR" "$NAME" "$TIMEOUT" \
     > /dev/null 2>"$WORK_DIR/${NAME}-invoke.log" &

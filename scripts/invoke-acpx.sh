@@ -506,12 +506,14 @@ this review."
   export AGY_BIN; AGY_BIN="$(command -v agy)"
   export AGY_PRINT_TIMEOUT="${TIMEOUT}s"     # Go duration for --print-timeout
   # --model is optional; its value is a display name from `agy models`
-  # (e.g. "Gemini 3.1 Pro (High)"). A per-run MODEL override wins over the
-  # config's `.model`.
-  if [ -n "$MODEL" ]; then
-    export AGY_MODEL="$MODEL"
-  elif [ -n "$CONFIG_MODEL" ]; then
+  # (e.g. "Gemini 3.1 Pro (High)"). The panel selector emits a registry
+  # model_id, which is NOT a display name, so for this direct-CLI seat the
+  # config's display-name `.model` must win over a selector-provided model_id
+  # (debate finding F4).
+  if [ -n "$CONFIG_MODEL" ]; then
     export AGY_MODEL="$CONFIG_MODEL"
+  elif [ -n "$MODEL" ]; then
+    export AGY_MODEL="$MODEL"
   else
     unset AGY_MODEL || true
   fi
@@ -668,11 +670,13 @@ fi
 # modify the plan doc or any file in the repo while reviewing.
 ACPX_CMD+=("${ACPX_BIN[@]}" --format quiet --approve-reads --non-interactive-permissions deny)
 # --model is a global acpx flag, so it must sit before the agent subcommand.
-# When MODEL (the panel selector's per-seat choice) is set it overrides the
-# agent's default — before this the selector's choice never reached the acpx
-# call and every seat ran its agent's default model.
-if [ -n "$MODEL" ]; then
-  ACPX_CMD+=(--model "$MODEL")
+# MODEL (the panel selector's per-seat choice) overrides the config's `.model`,
+# which in turn overrides the agent's default — before F1 the selector's choice
+# never reached the acpx call and every seat ran its agent's default model. An
+# empty MODEL falls back to CONFIG_MODEL so an unmapped seat still honours its
+# configured model (debate finding F2).
+if [ -n "$MODEL" ] || [ -n "$CONFIG_MODEL" ]; then
+  ACPX_CMD+=(--model "${MODEL:-$CONFIG_MODEL}")
 fi
 ACPX_CMD+=("${AGENT_ARGS[@]}" --file "$PROMPT_FILE")
 
