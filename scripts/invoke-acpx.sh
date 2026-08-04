@@ -166,6 +166,7 @@ CONFIG_SYSTEM_PROMPT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].system_prom
 CONFIG_MODEL=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].model // empty' "$CONFIG_FILE")
 CONFIG_MODE=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].mode // empty' "$CONFIG_FILE")
 CONFIG_RETRIES=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].retries // empty' "$CONFIG_FILE")
+CONFIG_EFFORT=$(jq -r --arg rev "$REVIEWER" '.reviewers[$rev].effort // empty' "$CONFIG_FILE")
 
 # Per-run model override (F1). The panel selector picks a model per seat; the
 # parallel runner forwards it as MODEL=<model_id> in this seat's env. An explicit
@@ -176,7 +177,14 @@ MODEL="${MODEL:-}"
 # per-seat effective effort and the runner forwards it as EFFORT=<level>. Only a
 # codex seat honors it (via a direct codex call); every other transport logs the
 # fallback. Empty means the agent's default.
-EFFORT="${EFFORT:-}"
+#
+# Resolution matches `.model` and `.mode`: the per-run env value wins, the
+# config's `.effort` is the seat's default, and absent both the agent runs at its
+# own default. Without the config fallback a codex seat is effort-scaled only on
+# runs that invoke the panel selector; any other entry point (a preset run, a
+# direct invoke-acpx.sh call, a caller that pins models itself) silently took the
+# acpx transport instead of the direct CLI.
+EFFORT="${EFFORT:-$CONFIG_EFFORT}"
 
 # Effort on a non-codex transport is a no-op (acpx has no effort passthrough, and
 # the agy/opus direct CLIs take no effort flag). Say so rather than silently

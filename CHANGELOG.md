@@ -1,5 +1,33 @@
 # Changelog
 
+## [3.1.3] — 2026-08-04 (a reviewer's configured `effort` is honored again)
+
+- **`effort` in a reviewer config is load-bearing again, and now decides transport.**
+  Since #35 the key was documented as a no-op and linted as one, because only the
+  selector-supplied `EFFORT` env var reached the codex branch. That is fine while the
+  selector runs — but any other entry point (a preset run, a caller that pins its own
+  models, a direct `invoke-acpx.sh` call) left `EFFORT` empty, and an empty effort is
+  exactly what routes a codex seat away from the direct CLI and onto acpx. So a config
+  that looked fully specified silently ran on a different transport than the one it
+  asked for. `effort` now resolves like `model` and `mode`: the per-run env value wins,
+  the config is the seat's default, absent both the agent runs at its own default.
+
+  The failure this surfaces on is not subtle. acpx does not drive the local codex CLI —
+  it spawns the pinned bridge `@zed-industries/codex-acp@^0.12.0`, whose model support
+  trails the CLI's. A seat configured for a current model gets either
+  `did not advertise that model` before dispatch, or a bare `Internal error` that is
+  really an HTTP 400 (`The '<model>' model requires a newer version of Codex`) — while
+  the same model runs fine through `codex exec` on the same machine. Honoring the
+  configured effort keeps those seats on the local binary, which is where they worked
+  all along.
+
+- **The `effort` lint now checks the value instead of banning the key.** `effort` on a
+  non-codex agent is still rejected — every other transport logs the fallback and runs
+  at its default, so it reads like configuration while doing nothing. New alongside it:
+  the level must be one of `none|minimal|low|medium|high|xhigh|max`. It is passed to
+  `codex exec -c model_reasoning_effort=<level>` verbatim, so a typo previously surfaced
+  as a codex error mid-run rather than a config error before it.
+
 ## [3.1.2] — 2026-08-03 (revert codex effort to the direct CLI; changeset fixes)
 
 - **Codex effort routes back through the direct CLI.** 3.1.1 moved codex effort to
