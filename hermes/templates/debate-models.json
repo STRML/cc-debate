@@ -225,5 +225,37 @@
     "source": "AA",
     "as_of": "2026-08-03T02:10:58Z",
     "elo": 1450.0776443762425
+  },
+  "deepseek_v4flash": {
+    "name": "DeepSeek V4 Flash 0731",
+    "harness": "subagent",
+    "provider": "deepseek",
+    "model_id": "deepseek-v4-flash-0731",
+    "family": "deepseek",
+    "lab": "deepseek",
+    "strengths": [
+      "code",
+      "cost",
+      "general",
+      "reasoning",
+      "speed"
+    ],
+    "effort": "high",
+    "effort_range": [
+      "low",
+      "high",
+      "max"
+    ],
+    "price": {
+      "in": 0.22,
+      "out": 0.44,
+      "cost_per_task": 0.03
+    },
+    "cost": "cheap",
+    "repo_aware": true,
+    "available": true,
+    "source": "user",
+    "as_of": "2026-08-03T00:00:00Z",
+    "elo": 1455.0
   }
 }

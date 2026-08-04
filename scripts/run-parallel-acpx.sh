@@ -11,6 +11,12 @@ CONFIG_FILE="${1:-}"
 REVIEW_ID="${2:-}"
 REVIEWER_LIST="${3:-}"
 
+# Expand a leading ~ — callers pass "~/.claude/debate-acpx.json" through the
+# orchestrator, and tilde does not expand inside quotes or variable values.
+if [ -n "$CONFIG_FILE" ] && [ "$CONFIG_FILE" != "${CONFIG_FILE#\~}" ]; then
+  CONFIG_FILE="${HOME}${CONFIG_FILE#\~}"
+fi
+
 if [ -z "$CONFIG_FILE" ] || [ -z "$REVIEW_ID" ]; then
   echo "Usage: $0 <config_file> <REVIEW_ID> [reviewer1,reviewer2,...]" >&2
   exit 1
@@ -280,8 +286,8 @@ for NAME in "${REVIEWERS[@]}"; do
       else empty end // empty' "$SEAT_MODELS" 2>/dev/null || true)
     # A seat whose selected model runs on the subagent harness is not this acpx
     # runner's job — running it here would invoke the configured acpx agent for
-    # a subagent model. Filter it out; the caller dispatches it via the Hermes
-    # delegate_task route (round-4 finding).
+    # a subagent model. Filter it out; the caller spawns it as a background Agent
+    # teammate (run.md Step 2a-prime).
     HARNESS=$(jq -r --arg s "$NAME" '
       if type == "object" and has("seats") then .seats[$s].harness
       else empty end // empty' "$SEAT_MODELS" 2>/dev/null || true)

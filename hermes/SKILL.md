@@ -68,8 +68,9 @@ repo_aware + family/lab + available.
    cost_per_task elsewhere -> no duplicate model -> low-diversity warning. Under `--max-cost`
    the effort pass degrades monotonically, shallowest seats first, protecting the deepest
    seat's reasoning.
-3. **Dispatch** each seat via its harness (`subagent` -> delegate_task; else acpx), optionally
-   sandboxed (`run-acpx-review.sh ... --sandbox --repo-sandbox --repo ROOT` wraps bwrap /
+3. **Dispatch** each seat via its harness (`subagent` -> a background Agent teammate
+   in `commands/run.md` Step 2a-prime; else acpx), optionally sandboxed
+   (`run-acpx-review.sh ... --sandbox --repo-sandbox --repo ROOT` wraps bwrap /
    sandbox-exec / docker, read-only repo mount + isolated HOME for repo-aware seats).
    **The selector's per-seat model reaches the dispatch**: pass the panel output to
    `run-acpx-review.sh --models <panel.json>` (or a flat `{seat: model_id}` file). It forwards
@@ -78,9 +79,9 @@ repo_aware + family/lab + available.
    (`codex exec --ephemeral -m <model> -c model_reasoning_effort=<level> -s read-only
    -o <outfile> -`); every other transport logs `EFFORT=<level> not supported by transport
    <agent>` and runs at its default. `subagent`-harness seats are filtered out before the
-   runner spawns anything — they dispatch via Hermes `delegate_task` and never receive
-   `EFFORT` or the fallback log. `--model ID` applies one model to every seat in the
-   dispatch.
+   runner spawns anything — they dispatch as a background Agent teammate (run.md Step
+   2a-prime) and never receive `EFFORT` or the fallback log. `--model ID` applies one
+   model to every seat in the dispatch.
 
 Seed `debate-models.json` (and refresh) marks `available:false` for harnesses you haven't
 configured; only `available:true` + an installed harness are selectable. Refresh
@@ -118,9 +119,9 @@ The registry's `strengths` + `effort` govern which model lands on which seat (se
    Write it to a scratch file (`$HERMES_HOME/debate/<id>/plan.md`) so reviewers read the same
    bytes. **Empty diff -> stop** (nothing to review; reviewers would approve a vacuum).
 2. **Route the panel** (above): read registry, run the selector, get seat -> model/harness/effort.
-3. **Dispatch in parallel.** One `delegate_task` with a `tasks` array per `subagent` seat; run
-   acpx seats via `run-acpx-review.sh` in the background (fan-out/timeout/retry owned by
-   `run-parallel-acpx.sh`). Each reviewer returns:
+3. **Dispatch in parallel.** Spawn one background Agent teammate per `subagent` seat
+   (run.md Step 2a-prime); run acpx seats via `run-acpx-review.sh` in the background
+   (fan-out/timeout/retry owned by `run-parallel-acpx.sh`). Each reviewer returns:
    ```
    ## Findings
    - <CRITICAL|HIGH|MED|LOW> <finding>
