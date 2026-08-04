@@ -7,6 +7,7 @@
 #   MOCK_CLAUDE_DELAY    — seconds to sleep (default: 0)
 #   MOCK_CLAUDE_STDERR   — text to write to stderr (default: "")
 #   MOCK_CLAUDE_LOG      — file to append invocation args to (default: "")
+#   MOCK_CLAUDE_ENV_OUT   — file to write proxy env vars to (default: "")
 #
 # Invoked as: claude --print --model claude-opus-4-6 < prompt_file
 # Reads stdin (ignores it) and outputs the mock response.
@@ -34,6 +35,13 @@ if [ -n "$STDERR" ]; then
   echo "$STDERR" >&2
 fi
 
+if [ -n "${MOCK_CLAUDE_ENV_OUT:-}" ]; then
+  {
+    printf 'ANTHROPIC_BASE_URL=%s\n' "${ANTHROPIC_BASE_URL:-}"
+    printf 'DS4_ZDR=%s\n' "${DS4_ZDR:-}"
+    printf 'MODEL_ARG=%s\n' "$*"
+  } > "$MOCK_CLAUDE_ENV_OUT"
+fi
 if [ -n "$RESPONSE" ]; then
   echo "$RESPONSE"
 fi

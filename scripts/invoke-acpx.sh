@@ -647,6 +647,27 @@ if [ "$AGENT" = "opus" ]; then
     exit 1
   fi
 
+  # Proxy transport (#52/#53): the runner forwards PROXY_ROUTE for a
+  # transport:proxy seat. Route determines the base URL and effort mapping —
+  # only 31501 (openrouter) and 31502 (nous) rewrite ds4-* sentinels.
+  PROXY_ROUTE="${PROXY_ROUTE:-}"
+  PROXY_SENTINEL=""
+  if [ -n "$PROXY_ROUTE" ]; then
+    case "$PROXY_ROUTE" in
+      31501|31502) ;;
+      *) fatal_exit 1 "invoke-acpx: invalid PROXY_ROUTE '$PROXY_ROUTE' — must be 31501 or 31502" ;;
+    esac
+    # Map EFFORT to a ds4-* sentinel; a proxy seat with no effort is a config
+    # error (fail closed rather than send an undefined model).
+    case "$EFFORT" in
+      low)   PROXY_SENTINEL="ds4-low" ;;
+      high)  PROXY_SENTINEL="ds4-high" ;;
+      xhigh) PROXY_SENTINEL="ds4-xhigh" ;;
+      max)   PROXY_SENTINEL="ds4-max" ;;
+      *) fatal_exit 1 "invoke-acpx: proxy seat '$REVIEWER' needs EFFORT (low|high|xhigh|max), got '${EFFORT:-<empty>}'" ;;
+    esac
+  fi
+
   echo "[$REVIEWER] Submitting plan to Claude Opus directly (timeout: ${TIMEOUT}s)..." >&2
 
   OPUS_CMD=()
@@ -654,7 +675,18 @@ if [ "$AGENT" = "opus" ]; then
     OPUS_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
   fi
   # --permission-mode plan: read-only mode — the reviewer cannot edit/write files.
-  OPUS_CMD+=(claude --print --permission-mode plan --model "${MODEL:-${CONFIG_MODEL:-claude-opus-4-8}}")
+  if [ -n "$PROXY_ROUTE" ]; then
+    # Proxy route: set the base URL via env on the child and send the sentinel.
+    # Force DS4_ZDR=1 on 31501 (openrouter) so ZDR is not silently disabled by an
+    # inherited env (cc-ds4#14); cleared inherited ANTHROPIC_* credentials.
+    PROXY_BASE_URL="http://127.0.0.1:${PROXY_ROUTE}"
+    OPUS_CMD+=(env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY \
+      ANTHROPIC_BASE_URL="$PROXY_BASE_URL" \
+      DS4_ZDR=1 \
+      claude --print --permission-mode plan --model "$PROXY_SENTINEL")
+  else
+    OPUS_CMD+=(claude --print --permission-mode plan --model "${MODEL:-${CONFIG_MODEL:-claude-opus-4-8}}")
+  fi
 
   attempt_opus() {
     set +e

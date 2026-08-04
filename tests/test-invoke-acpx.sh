@@ -656,6 +656,99 @@ test_opus_skips_session_ensure() {
   rm -rf "$work_dir"
 }
 
+test_opus_proxy_branch_command_shape() {
+  # A proxy-transport opus seat dispatches to claude --print with the ds4-*
+  # sentinel and the validated ANTHROPIC_BASE_URL, and forces DS4_ZDR=1.
+  local work_dir config claude_log env_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  claude_log="$work_dir/claude-log.txt"
+  env_out="$work_dir/claude-env.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  EFFORT="high" \
+  PROXY_ROUTE="31501" \
+  MOCK_CLAUDE_LOG="$claude_log" \
+  MOCK_CLAUDE_ENV_OUT="$env_out" \
+    bash "$INVOKE" "$config" "$work_dir" "opus-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/opus-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
+  grep -q "ds4-high" "$claude_log" || { rm -rf "$work_dir"; return 1; }
+  grep -q "127.0.0.1:31501" "$env_out" || { rm -rf "$work_dir"; return 1; }
+  # DS4_ZDR is forced so an inherited 0 cannot suppress ZDR on the openrouter route.
+  grep -q "DS4_ZDR=1" "$env_out" || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+test_opus_proxy_requires_effort() {
+  # A proxy seat with no effort fails closed.
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  set +e
+  SKIP_SESSION_CHECK=1 PATH="$SCRIPT_DIR:$PATH" \
+  PROXY_ROUTE="31501" \
+    bash "$INVOKE" "$config" "$work_dir" "opus-reviewer" 2>/dev/null
+  local code=$?
+  set -e
+
+  [ "$code" -ne 0 ] || { rm -rf "$work_dir"; return 1; }
+  grep -q "needs EFFORT" "$work_dir/opus-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+test_opus_proxy_rejects_invalid_route() {
+  local work_dir config code
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  set +e
+  SKIP_SESSION_CHECK=1 PATH="$SCRIPT_DIR:$PATH" \
+  EFFORT="high" \
+  PROXY_ROUTE="31501@attacker.example" \
+    bash "$INVOKE" "$config" "$work_dir" "opus-reviewer" 2>/dev/null
+  code=$?
+  set -e
+
+  [ "$code" -ne 0 ] || { rm -rf "$work_dir"; return 1; }
+  grep -q "invalid PROXY_ROUTE" "$work_dir/opus-reviewer-output.md" || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+test_opus_proxy_does_not_overwrite_non_proxy() {
+  # A non-proxy opus seat (no PROXY_ROUTE) still runs the ordinary claude-opus-*
+  # path with no sentinel and no env.
+  local work_dir config claude_log env_out
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  claude_log="$work_dir/claude-log.txt"
+  env_out="$work_dir/claude-env.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CLAUDE_LOG="$claude_log" \
+  MOCK_CLAUDE_ENV_OUT="$env_out" \
+    bash "$INVOKE" "$config" "$work_dir" "opus-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/opus-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
+  grep -q "claude-opus-4-8" "$claude_log" || { rm -rf "$work_dir"; return 1; }
+  # The non-proxy path must NOT send a ds4-* sentinel; the model is claude-opus-4-8.
+  grep -q "ds4-high" "$claude_log" && { rm -rf "$work_dir"; return 1; }
+  # The non-proxy path must NOT clear/override ANTHROPIC_* via the proxy branch's
+  # `env -u` wrapper. (The parent session may already carry ANTHROPIC_BASE_URL from
+  # running through the proxy — that ambient value is not something this branch set.)
+  if [ -f "$env_out" ] && [ -s "$env_out" ]; then
+    grep -q "ANTHROPIC_BASE_URL=" "$env_out" && grep -q "DS4_ZDR=1" "$env_out" && { rm -rf "$work_dir"; return 1; }
+  fi
+
+  rm -rf "$work_dir"
+}
+
 # An agent that ends its turn with no final message still gets a trailing newline
 # from acpx, so the output file is 1 byte and `[ -s ]` calls it non-empty. Before
 # this was caught, the round logged "Review received", wrote exit 0, and handed the
@@ -1597,6 +1690,10 @@ run_test "antigravity uses direct CLI" test_antigravity_uses_direct_cli
 run_test "antigravity skips session ensure" test_antigravity_skips_session_ensure
 run_test "opus uses direct CLI" test_opus_uses_direct_cli
 run_test "opus skips session ensure" test_opus_skips_session_ensure
+run_test "opus proxy branch command shape" test_opus_proxy_branch_command_shape
+run_test "opus proxy requires effort" test_opus_proxy_requires_effort
+run_test "opus proxy rejects invalid route" test_opus_proxy_rejects_invalid_route
+run_test "opus proxy does not overwrite non-proxy" test_opus_proxy_does_not_overwrite_non_proxy
 run_test "denied permission keeps the review" test_denied_permission_keeps_the_review
 run_test "denied permission blank is retried" test_denied_permission_blank_is_retried
 run_test "denied and blank forever still fails" test_denied_permission_blank_forever_still_fails

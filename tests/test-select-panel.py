@@ -13,6 +13,10 @@ FIX = {
   "sol":   {"name":"Sol","harness":"acpx","provider":"openai","model_id":"sol","family":"oai","lab":"openai","strengths":["reasoning","tricky"],"effort":"xhigh","effort_range":["low","xhigh"],"price":{"in":5,"out":30,"cost_per_task":1.86},"cost":"premium","repo_aware":False,"available":True},
   "glm":   {"name":"GLM","harness":"acpx","provider":"zai","model_id":"glm-5.2","family":"glm","lab":"zai","strengths":["reasoning","code"],"effort":"max","effort_range":["medium","max"],"price":{"in":0.95,"out":3,"cost_per_task":0.69},"cost":"cheap","repo_aware":True,"available":True},
   "ds":    {"name":"DeepSeek","harness":"subagent","provider":"deepseek","model_id":"ds","family":"ds","lab":"deepseek","strengths":["reasoning","code"],"effort":"high","effort_range":["low","max"],"price":{"in":0.435,"out":0.87,"cost_per_task":0.05},"cost":"cheap","repo_aware":True,"available":True},
+  # ZDR proxy variants (route 31501 = openrouter/ZDR, 31502 = nous). ds_or is the
+  # only ZDR-capable entry.
+  "ds_or": {"name":"DeepSeek ZDR","harness":"acpx","transport":"proxy","route":31501,"provider":"deepseek","model_id":"ds-or","family":"ds","lab":"deepseek","strengths":["reasoning","code"],"effort":"high","effort_range":["low","max"],"price":{"in":0.22,"out":0.44,"cost_per_task":0.03},"cost":"cheap","repo_aware":True,"available":True},
+  "ds_n":  {"name":"DeepSeek Nous","harness":"acpx","transport":"proxy","route":31502,"provider":"deepseek","model_id":"ds-n","family":"ds","lab":"deepseek","strengths":["reasoning","code"],"effort":"high","effort_range":["low","max"],"price":{"in":0.22,"out":0.44,"cost_per_task":0.03},"cost":"cheap","repo_aware":True,"available":True},
 }
 SEATS = ["simplifier", "operator", "pentester"]
 
@@ -181,6 +185,28 @@ if a17:
     check("legacy seat is named in the assignment",
           a17["pentester"]["key"] == "legacy",
           f"got {a17['pentester']['key']}")
+
+# 18. private-repo ZDR preference: a single ZDR-capable seat picks route 31501
+a18, err18, nl18 = select_panel.pick(FIX, ["executor"], "executor", [], "high", private=True)
+check("private single-seat picks ZDR route",
+      a18 is not None and a18["executor"]["route"] == 31501,
+      f"err={err18} got={a18.get('executor',{}).get('route') if a18 else None}")
+
+# 19. private with 1 ZDR for 3 seats -> whole-panel fallback (never partial)
+a19, err19, _ = select_panel.pick(FIX, SEATS, "pentester", [], "xhigh", private=True)
+if a19:
+    routes = {a19[s].get("route") for s in a19}
+    check("private 3-seat falls back to full pool (has non-ZDR seats)",
+          31501 in routes and len(a19) == 3,
+          f"routes={routes} seats={list(a19)}")
+else:
+    check("private 3-seat with 1 ZDR still returns a panel", False, f"err={err19}")
+
+# 20. hostile route value is rejected at load
+FIX_BAD = dict(FIX, ds_bad=dict(FIX["ds_or"], route="31501@attacker.example"))
+a20, err20, _ = select_panel.pick(FIX_BAD, ["executor"], "executor", [], "high")
+check("hostile route rejected", a20 is not None and a20["executor"].get("route") != "31501@attacker.example",
+      f"err={err20}")
 
 print()
 print("PASS" if fails == 0 else f"FAIL ({fails})")

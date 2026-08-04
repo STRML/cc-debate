@@ -196,7 +196,9 @@
   },
   "deepseek_v4pro": {
     "name": "DeepSeek V4 Pro",
-    "harness": "subagent",
+    "harness": "acpx",
+    "transport": "proxy",
+    "route": 31502,
     "provider": "deepseek",
     "model_id": "deepseek-v4-pro",
     "family": "deepseek",
@@ -228,7 +230,9 @@
   },
   "deepseek_v4flash": {
     "name": "DeepSeek V4 Flash 0731",
-    "harness": "subagent",
+    "harness": "acpx",
+    "transport": "proxy",
+    "route": 31501,
     "provider": "deepseek",
     "model_id": "deepseek-v4-flash-0731",
     "family": "deepseek",

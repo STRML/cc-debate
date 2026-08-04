@@ -122,9 +122,28 @@ def load(data):
         out.append({**m, "key": key})
     return out
 
-def pick(registry, seats, deepest, installed, min_effort, max_cost=None):
+def pick(registry, seats, deepest, installed, min_effort, max_cost=None, private=False):
+    route_ok = {None, 31501, 31502}
     pool = [m for m in load(registry)
             if not installed or (m.get("harness") in installed)]
+    # Validate route: must be null or an allowed integer; never trust raw
+    # registry text in a URL context (#52).
+    for m in pool:
+        r = m.get("route")
+        if r not in route_ok:
+            sys.stderr.write("⚠️ registry entry '%s' route %r invalid or untrusted; skipping\n" % (_safe_key(m.get("key", "?")), r))
+            pool = [x for x in pool if x is not m]
+    if pool and private:
+        # ZDR = route 31501 (openrouter). Filter to zdr-capable entries after
+        # harness/budget feasibility. If the zdr pool cannot fill all seats,
+        # whole-panel fallback with a warning — never cross zdr→non-zdr on
+        # ordinary missing-assignment fallback (#52 / #53).
+        zdr_pool = [m for m in pool if m.get("route") == 31501]
+        if zdr_pool and len(zdr_pool) < len(seats):
+            sys.stderr.write("⚠️ only %d ZDR model(s) available for %d seats — falling back to full pool\n" % (len(zdr_pool), len(seats)))
+            zdr_pool = []
+        if zdr_pool:
+            pool = zdr_pool
     if max_cost is not None:
         # --max-cost is a HARD panel budget, not a ceiling a caller can shrug off.
         # If even the cheapest available model cannot fit under the cap, fail loudly
@@ -280,6 +299,7 @@ def main():
     ap.add_argument("--installed-harnesses", default="") # comma list
     ap.add_argument("--min-effort", default="xhigh")
     ap.add_argument("--max-cost", type=float, default=None)
+    ap.add_argument("--private-repo", action="store_true", default=False)
     a = ap.parse_args()
     seats = [s.strip() for s in a.seats.split(",") if s.strip()]
     deepest = a.deepest or seats[-1] if seats else "pentester"
@@ -289,11 +309,13 @@ def main():
         seats = seats + [deepest]
     installed = [s.strip() for s in a.installed_harnesses.split(",") if s.strip()]
     reg = json.load(open(a.registry))
-    assignment, err, nlabs = pick(reg, seats, deepest, installed, a.min_effort, a.max_cost)
+    assignment, err, nlabs = pick(reg, seats, deepest, installed, a.min_effort, a.max_cost, private=a.private_repo)
     if assignment is None:
         print(json.dumps({"error": err})); sys.exit(1)
     print(json.dumps({
         "seats": {seat: {"model": m["key"], "name": m.get("name"), "harness": m.get("harness"),
+                         "transport": m.get("transport"),
+                         "route": m.get("route"),
                          "provider": m.get("provider"), "model_id": m.get("model_id"),
                          "effort": m.get("effective_effort", m.get("effort")),
                          "effective_effort": m.get("effective_effort"),
