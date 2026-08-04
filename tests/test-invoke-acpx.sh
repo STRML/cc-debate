@@ -68,6 +68,12 @@ setup_config() {
       "mode": "sesion",
       "system_prompt": "You have a typo in your mode."
     },
+    "effort-reviewer": {
+      "agent": "codex",
+      "timeout": 30,
+      "effort": "xhigh",
+      "system_prompt": "You have a configured effort."
+    },
     "model-reviewer": {
       "agent": "codex",
       "timeout": 30,
@@ -1385,6 +1391,70 @@ test_codex_effort_uses_config_model_when_no_env() {
   rm -rf "$work_dir"
 }
 
+test_codex_config_effort_uses_direct_cli() {
+  # No EFFORT env, but the config sets `.effort`: the seat must still take the
+  # direct-CLI branch and pass the configured level. Before the config fallback
+  # this fell through to the acpx transport, which cannot scale effort at all.
+  local work_dir config codex_log
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  codex_log="$work_dir/codex-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_CODEX_LOG="$codex_log" \
+  MOCK_CODEX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "effort-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/effort-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
+  grep -q -- "-c model_reasoning_effort=xhigh" "$codex_log" || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+test_codex_env_effort_beats_config_effort() {
+  # The per-run value is an override, so a selector-derived EFFORT must win over
+  # the seat's configured default rather than the other way round.
+  local work_dir config codex_log
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  codex_log="$work_dir/codex-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  EFFORT="low" \
+  MOCK_CODEX_LOG="$codex_log" \
+  MOCK_CODEX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "effort-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/effort-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
+  grep -q -- "-c model_reasoning_effort=low" "$codex_log" || { rm -rf "$work_dir"; return 1; }
+  ! grep -q -- "model_reasoning_effort=xhigh" "$codex_log" || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
+test_codex_without_any_effort_uses_acpx() {
+  # The fallback must not turn every codex seat into a direct-CLI seat. With
+  # neither env nor config effort, the seat keeps the acpx transport.
+  local work_dir config log_file
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  log_file="$work_dir/acpx-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_LOG="$log_file" \
+  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || { rm -rf "$work_dir"; return 1; }
+  [ -f "$log_file" ] || { rm -rf "$work_dir"; return 1; }
+  ! grep -q -- "model_reasoning_effort" "$log_file" 2>/dev/null || { rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
 test_non_codex_effort_logs_fallback() {
   # An EFFORT on a non-codex transport is a no-op and must say so. The seat
   # still runs, at the agent's default effort.
@@ -1501,6 +1571,9 @@ run_test "MODEL env used for antigravity direct CLI" test_model_env_used_for_ant
 run_test "codex EFFORT uses direct CLI" test_codex_effort_uses_direct_cli
 run_test "codex EFFORT skips session ensure" test_codex_effort_skips_session_ensure
 run_test "codex EFFORT uses config model when no env MODEL" test_codex_effort_uses_config_model_when_no_env
+run_test "codex config effort uses direct CLI" test_codex_config_effort_uses_direct_cli
+run_test "codex env effort beats config effort" test_codex_env_effort_beats_config_effort
+run_test "codex without any effort uses acpx" test_codex_without_any_effort_uses_acpx
 run_test "non-codex EFFORT logs fallback" test_non_codex_effort_logs_fallback
 run_test "codex-exec guard message preserved in output" test_codex_exec_guard_message_preserved
 run_test "missing-config guard message preserved in output" test_missing_config_guard_message_preserved

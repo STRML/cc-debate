@@ -194,14 +194,27 @@ test_sample_config_is_coherent() {
   # comes back empty, and the check quietly passes forever. Hence the `|| return 1`
   # on every one of these — a broken lint must fail, not abstain.
 
-  # effort was read only by the codex-exec branch, which is gone (#35). No agent
-  # reads it now, so any `effort` in a reviewer config is a silent no-op that reads
-  # like configuration — worse than leaving it out.
+  # `effort` is the seat's default reasoning level, used when the selector does not
+  # supply one. Only the codex direct branch reads it; every other transport logs
+  # the fallback and runs at its default, so an `effort` there reads like
+  # configuration while doing nothing.
+  bad=$(jq -r '.reviewers | to_entries[]
+    | select(.value.effort != null and .value.agent != "codex")
+    | .key' "$f") || { echo "  effort-transport lint failed to run"; return 1; }
+  if [ -n "$bad" ]; then
+    echo "  effort is only honored by a codex seat; it is a no-op here: $bad"
+    return 1
+  fi
+
+  # A malformed level is not rejected anywhere downstream — it is handed to
+  # `codex exec -c model_reasoning_effort=<level>` verbatim, so a typo surfaces as
+  # a codex error mid-run rather than a config error before it.
   bad=$(jq -r '.reviewers | to_entries[]
     | select(.value.effort != null)
-    | .key' "$f") || { echo "  effort-unused lint failed to run"; return 1; }
+    | select([.value.effort] | inside(["none","minimal","low","medium","high","xhigh","max"]) | not)
+    | .key' "$f") || { echo "  effort-value lint failed to run"; return 1; }
   if [ -n "$bad" ]; then
-    echo "  effort is unused since codex-exec removal (#35): $bad"
+    echo "  effort must be one of none|minimal|low|medium|high|xhigh|max: $bad"
     return 1
   fi
 

@@ -36,7 +36,7 @@ _Updated: 2026-08-03_
 - `plan.md` — plan to review (always required)
 - `<name>-prompt.txt` — debate/resume prompt (optional; falls back to config system_prompt + plan.md)
 - `MODEL` env (optional) — per-seat model override from the panel selector; passed to acpx as `--model <id>` (or `codex -m <id>` on the direct branch). `run-parallel-acpx.sh` sets it per seat from `ACPX_SEAT_MODELS` (the select-panel.py output or a flat `{seat: model_id}` map) or the single-model `DEBATE_MODEL`.
-- `EFFORT` env (optional) — per-seat reasoning effort from the selector (`effective_effort`). Only a `codex` seat honors it, via the direct branch (`codex exec -c model_reasoning_effort=<level>`). Every other transport handled by `invoke-acpx.sh` logs `EFFORT=<level> not supported by transport <agent>` and runs at its default. A `subagent`-harness seat never reaches `invoke-acpx.sh` (filtered in `run-parallel-acpx.sh` pre-spawn; dispatched via Hermes `delegate_task` instead), so it receives neither `EFFORT` nor the fallback log. The runner always sets `EFFORT` (empty = agent default), so a caller's `EFFORT` cannot leak into a seat.
+- `EFFORT` env (optional) — per-seat reasoning effort from the selector (`effective_effort`), falling back to the reviewer's configured `effort`. Only a `codex` seat honors it, via the direct branch (`codex exec -c model_reasoning_effort=<level>`). Every other transport handled by `invoke-acpx.sh` logs `EFFORT=<level> not supported by transport <agent>` and runs at its default. A `subagent`-harness seat never reaches `invoke-acpx.sh` (filtered in `run-parallel-acpx.sh` pre-spawn; dispatched via Hermes `delegate_task` instead), so it receives neither `EFFORT` nor the fallback log. The runner always sets `EFFORT` (empty = agent default), so a caller's `EFFORT` cannot leak into a seat.
 
 ### Outputs
 - `<name>-output.md` — review text
@@ -60,7 +60,7 @@ No exit file — a teammate has delivered iff its output file exists and is non-
       "agent": "<acpx-agent-name>",
       "timeout": 120,
       "model": "optional model id",
-      "effort": "unused since #35 — no agent reads it; remove from configs",
+      "effort": "none|minimal|low|medium|high|xhigh|max — codex seats only",
       "mode": "session | exec",
       "retries": 1,
       "system_prompt": "optional persona prompt"
@@ -71,7 +71,7 @@ No exit file — a teammate has delivered iff its output file exists and is non-
 
 Available acpx agents: codex, claude, cursor, copilot, kimi, kiro, qwen, opencode, kilocode. Three reviewers are invoked directly, not via acpx: `antigravity` (agy CLI), `opus` (`claude --print`), and an effort-scaled `codex` seat (`codex exec` when `EFFORT` is set — acpx cannot pass `model_reasoning_effort`). This is flagged tech debt: acpx middleware does not apply to direct seats.
 
-The config `effort` key is still unused (no agent reads a static per-reviewer effort); `tests/test-references.sh` flags any `effort` in a reviewer config as a silent no-op. The per-seat reasoning effort now arrives at runtime via the `EFFORT` env var from the selector's `effective_effort`. The timeout lint (positive integer) remains: both layers otherwise swallow a malformed value.
+The config `effort` key is the seat's default reasoning level, resolved like `model` and `mode`: the runtime `EFFORT` env var (the selector's `effective_effort`) wins, the config is the fallback, and absent both the agent runs at its own default. It matters because effort is also what routes a codex seat to the direct CLI — a codex seat with no effort from either source takes the acpx transport instead. `tests/test-references.sh` lints it two ways: `effort` on a non-codex agent is a no-op, and the value must be one of `none|minimal|low|medium|high|xhigh|max` (it is passed to `codex exec` verbatim, so a typo would otherwise surface as a codex error mid-run). The timeout lint (positive integer) remains: both layers otherwise swallow a malformed value.
 
 `mode` defaults to `session` (persistent acpx session, context kept across rounds).
 `mode: "exec"` sends one-shots and skips `sessions ensure` — needed for agents that
@@ -89,4 +89,4 @@ said nothing, so a contentless run is 1 byte, not 0.
 - `plugin.json` — name, version, description, author, license
 - `marketplace.json` — marketplace listing with install instructions
 
-Current version: **3.1.2**
+Current version: **3.1.3**

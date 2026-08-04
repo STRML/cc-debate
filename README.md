@@ -411,7 +411,7 @@ one Gemini seat for a non-OpenAI opinion and a `fallback` preset for when the Co
 | `timeout` | No | Seconds before the review is killed. Default: 120. Use 240-300 for large/slow prompt-only agents, and 900 for a repo-aware `codex` seat, which reads files and costs far more. |
 | `system_prompt` | No | Persona sent as the prompt prefix. Omit for generic reviewer behavior. |
 | `model` | No | For the `codex` agent — the model id (e.g. `gpt-5.6-luna`), mapped onto the agent by acpx/opencode. For the `antigravity` agent — model display name from `agy models` (e.g. `Gemini 3.1 Pro (High)`). For the `opus` agent — the Claude model id. Omit to use the agent's default. |
-| `effort` | No | **Unused since #35** — no agent reads it any more. Left in old configs it is a silent no-op; remove it. |
+| `effort` | No | Reasoning depth for a `codex` seat: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. The panel selector's per-run value wins; this is the seat's default when no selector runs. It also decides transport — a codex seat with an effort runs the codex CLI directly, since acpx cannot pass `model_reasoning_effort`. A no-op on any other agent. |
 | `model_id` | No | For OpenRouter agents — the underlying model ID (e.g. `inception/mercury-2`). Shown in the summary. |
 | `mode` | No | `session` (default) prompts a persistent acpx session, so the reviewer keeps its context across debate rounds. `exec` sends every prompt as a one-shot instead. See below. |
 | `retries` | No | Extra attempts when the agent ends its turn with no review. Default: 1. Set 0 to disable, or 2-3 for a notably flaky agent. A non-zero exit or a timeout is never retried. |
