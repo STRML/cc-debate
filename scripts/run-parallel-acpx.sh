@@ -295,6 +295,14 @@ for NAME in "${REVIEWERS[@]}"; do
       echo "[debate] Skipping $NAME — subagent harness is dispatched by the caller, not this runner" >&2
       continue
     fi
+    # Proxy transport (#52/#53): the registry names a cc-ds4 route. Forward the
+    # route (validated to {31501,31502}) so the proxy branch can set the base URL.
+    CHILD_TRANSPORT=$(jq -r --arg s "$NAME" '
+      if type == "object" and has("seats") then .seats[$s].transport
+      else empty end // empty' "$SEAT_MODELS" 2>/dev/null || true)
+    CHILD_ROUTE=$(jq -r --arg s "$NAME" '
+      if type == "object" and has("seats") then .seats[$s].route
+      else empty end // empty' "$SEAT_MODELS" 2>/dev/null || true)
   fi
   [ -z "$CHILD_MODEL" ] && CHILD_MODEL="$DEBATE_MODEL"
 
@@ -304,6 +312,15 @@ for NAME in "${REVIEWERS[@]}"; do
   # that should use its default (debate findings F9 / effort plan).
   INVOKE_ENV+=("MODEL=${CHILD_MODEL:-}")
   INVOKE_ENV+=("EFFORT=${CHILD_EFFORT:-}")
+  # A proxy-transport seat dispatches to the claude --print branch (agent opus)
+  # with the validated route; reject a route on a non-proxy seat.
+  if [ "${CHILD_TRANSPORT:-}" = "proxy" ]; then
+    case "${CHILD_ROUTE:-}" in
+      31501|31502) ;;
+      *) echo "[debate] $NAME: proxy transport with invalid route '${CHILD_ROUTE:-}' — skipping" >&2; continue ;;
+    esac
+    INVOKE_ENV+=("PROXY_ROUTE=${CHILD_ROUTE}")
+  fi
   nohup env "${INVOKE_ENV[@]}" \
     bash "$SCRIPT_DIR/invoke-acpx.sh" "$CONFIG_FILE" "$WORK_DIR" "$NAME" "$TIMEOUT" \
     > /dev/null 2>"$WORK_DIR/${NAME}-invoke.log" &

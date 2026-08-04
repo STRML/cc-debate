@@ -13,6 +13,8 @@ REQUIRED = {"name", "harness", "provider", "model_id", "family", "lab",
             "repo_aware", "available"}
 
 HARNESS = {"acpx", "subagent"}
+TRANSPORT = {"acpx", "proxy", "subagent"}
+ROUTES = {None, 31501, 31502}
 COST = {"cheap", "mid", "premium"}
 EFFORT = {"low", "medium", "high", "xhigh", "max"}
 STRENGTHS = {"reasoning", "code", "speed", "cost", "general", "math", "tricky"}
@@ -29,6 +31,17 @@ def main():
         missing = REQUIRED - set(m)
         if missing: errs.append(f"{k}: missing {sorted(missing)}")
         if m.get("harness") not in HARNESS: errs.append(f"{k}: bad harness {m.get('harness')}")
+        t = m.get("transport")
+        if t is not None and t not in TRANSPORT: errs.append(f"{k}: bad transport {t}")
+        r = m.get("route")
+        if r not in ROUTES: errs.append(f"{k}: bad route {r}")
+        # Invariants from the proxy-transport design (#52/#53): proxy seats must
+        # be acpx-harness (the subagent skip would drop them), a proxy seat needs
+        # a valid route, and a route implies proxy transport.
+        if t == "proxy":
+            if m.get("harness") != "acpx": errs.append(f"{k}: transport=proxy but harness={m.get('harness')}")
+            if r not in (31501, 31502): errs.append(f"{k}: transport=proxy needs route 31501/31502, got {r}")
+        if r is not None and t != "proxy": errs.append(f"{k}: route set but transport={t}")
         if m.get("cost") not in COST: errs.append(f"{k}: bad cost {m.get('cost')}")
         if m.get("effort") not in EFFORT: errs.append(f"{k}: bad effort {m.get('effort')}")
         er = set(m.get("effort_range", []))
