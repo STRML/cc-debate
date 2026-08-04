@@ -302,18 +302,24 @@ teammate but on the subagent harness's own model:
 - **Persona body:** these are repo-grounded seats. Review them with the **Grounder**
   prompt (`reviewer-prompts.md` § Grounder) — check every claim the plan makes against
   the actual repository, CONFIRMED / WRONG / UNVERIFIABLE with `file:line` evidence.
-- **Model:** the seat's `.model_id` from `panel.json` (e.g. `deepseek_v4pro`).
+- **Model:** the seat's `.model_id` from `panel.json` (e.g. `deepseek-v4-pro`).
 - **Delivery:** the shared reviewer footer, `[CURRENT_PLAN]` = the plan text,
-  `[OUTPUT_PATH]` = `<WORK_DIR>/<seat>-output.md`. The runner expects a
-  `<seat>-output.md` at that exact name — the file-based contract every reviewer uses.
-- **Tools:** read repo source at `REPO_ROOT` and run read-only commands
-  (`allow_tools: "Read", "Bash"`); keep the seat from editing anything.
+  `[OUTPUT_PATH]` = `<WORK_DIR>/<seat>-r<N>-output.md` — the same `-r<N>` (and
+  `-verify-`) convention the Claude teammates use, so each round's review lands in its
+  own file and Step 3 can never read a stale prior-round review. The runner's
+  `<seat>-exit.txt` convention does not apply (an Agent teammate has no runner); the
+  file's existence + non-empty is the delivery signal, exactly like a Claude teammate.
+- **Sandbox:** the reviewer runs as a background Agent teammate, not through
+  `run-acpx-review.sh` — so the same boundary does not apply automatically. Restrict it
+  the way the Claude teammates are: `allow_tools: "Read, Bash"` keeps it from writing;
+  it reads repo source at `REPO_ROOT` and runs read-only commands only. It must not edit
+  `plan.md` or any repo file — its one permitted write is its own output file.
 - **Concurrency:** run these `run_in_background: true`, in the same message as 2a and
   2b — a subagent seat skipped by 2a is a seat the panel silently lost otherwise.
 
 Spawn block (repeat per subagent-harness seat):
 
-```
+```yaml
 Agent:
   name: "<seat>-r<N>"
   model: "<model_id>"
@@ -324,10 +330,11 @@ Agent:
   prompt: |
     [reviewer-prompts.md § Grounder body]
 
-    [shared reviewer footer — [OUTPUT_PATH] = <WORK_DIR>/<seat>-output.md]
+    [shared reviewer footer — [OUTPUT_PATH] = <WORK_DIR>/<seat>-r<N>-output.md]
 ```
 
-Step 2c waits on these like every reviewer; Step 3 reads `<seat>-output.md` uniformly.
+Step 2c waits on these like every reviewer; Step 3 reads `<seat>-r<N>-output.md`
+uniformly.
 
 ### 2b. Claude skeptic subagents (Agent)
 
