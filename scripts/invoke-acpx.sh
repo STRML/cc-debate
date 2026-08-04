@@ -36,6 +36,13 @@ WORK_DIR="${2:-}"
 REVIEWER="${3:-}"
 TIMEOUT_ARG="${4:-}"
 
+# Expand a leading ~ — callers pass "~/.claude/debate-acpx.json" through the
+# orchestrator, and tilde does not expand inside quotes or variable values, so
+# an un-normalized path fails the [ ! -f ] guard below with a literal ~.
+if [ -n "$CONFIG_FILE" ] && [ "$CONFIG_FILE" != "${CONFIG_FILE#\~}" ]; then
+  CONFIG_FILE="${HOME}${CONFIG_FILE#\~}"
+fi
+
 if [ -z "$CONFIG_FILE" ] || [ -z "$WORK_DIR" ] || [ -z "$REVIEWER" ]; then
   echo "Usage: $0 <config_file> <work_dir> <reviewer_name> [timeout]" >&2
   exit 1
@@ -719,6 +726,12 @@ if [ "$AGENT" = "codex" ] && [ -n "$EFFORT" ]; then
     CODEX_CMD+=(-m "${MODEL:-$CONFIG_MODEL}")
   fi
   CODEX_CMD+=(-c "model_reasoning_effort=$EFFORT" -s read-only -o "$WORK_DIR/${REVIEWER}-output.md")
+  # The work dir is not always inside a git repo (a plan review with no staged
+  # changes, or a scratch dir), and `codex exec` refuses to run outside one —
+  # it is the same trusted-directory check that fails under a plain harness.
+  # The debate work dir is deliberately transient and read-only; reviewers
+  # never need repo trust. Skip the check rather than leave the seat dead.
+  CODEX_CMD+=(--skip-git-repo-check)
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
     CODEX_CMD=("$TIMEOUT_BIN" "$TIMEOUT" "${CODEX_CMD[@]}")
   fi

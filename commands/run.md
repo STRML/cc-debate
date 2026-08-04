@@ -289,6 +289,46 @@ behind it.
 
 **Run this Bash call with `dangerouslyDisableSandbox: true`.** The external reviewers need to escape the Claude Code sandbox: the `antigravity` reviewer writes its project config to `~/.gemini/config/projects/` before it can open a conversation (a sandboxed write there fails with `operation not permitted`, and `agy` then reports `failed to send message: no active conversation` — surfacing as an empty/garbage review), and codex/gemini need outbound network the seatbelt policy otherwise blocks. `nohup`/`disown` inside the runner dodge permission prompts but do **not** lift the seatbelt sandbox — only launching the call unsandboxed does. (Alternative if you prefer not to disable the sandbox per-call: add `~/.gemini` to the write allowlist in `settings.json`.)
 
+### 2a-prime. Subagent-harness seats (Agent)
+
+The selector (2a) may assign a seat to a model whose `harness` is `"subagent"` (e.g.
+`executor` → `deepseek_v4pro`, a repo-aware DeepSeek V4 Pro). `run-parallel-acpx.sh`
+**skips** those seats — it cannot run a subagent model — and defers them to the caller.
+This step is that caller: read `<WORK_DIR>/panel.json`, and for every seat whose
+`.seats[<name>].harness` is `"subagent"`, spawn one background Agent teammate that
+reviews the plan against the actual repo (repo-aware), just like a `claude_reviewers`
+teammate but on the subagent harness's own model:
+
+- **Persona body:** these are repo-grounded seats. Review them with the **Grounder**
+  prompt (`reviewer-prompts.md` § Grounder) — check every claim the plan makes against
+  the actual repository, CONFIRMED / WRONG / UNVERIFIABLE with `file:line` evidence.
+- **Model:** the seat's `.model_id` from `panel.json` (e.g. `deepseek_v4pro`).
+- **Delivery:** the shared reviewer footer, `[CURRENT_PLAN]` = the plan text,
+  `[OUTPUT_PATH]` = `<WORK_DIR>/<seat>-output.md`. The runner expects a
+  `<seat>-output.md` at that exact name — the file-based contract every reviewer uses.
+- **Tools:** read repo source at `REPO_ROOT` and run read-only commands
+  (`allow_tools: "Read", "Bash"`); keep the seat from editing anything.
+- **Concurrency:** run these `run_in_background: true`, in the same message as 2a and
+  2b — a subagent seat skipped by 2a is a seat the panel silently lost otherwise.
+
+Spawn block (repeat per subagent-harness seat):
+
+```
+Agent:
+  name: "<seat>-r<N>"
+  model: "<model_id>"
+  subagent_type: "general-purpose"
+  allow_tools: "Read, Bash"
+  description: "<seat> reviewer (subagent harness)"
+  run_in_background: true
+  prompt: |
+    [reviewer-prompts.md § Grounder body]
+
+    [shared reviewer footer — [OUTPUT_PATH] = <WORK_DIR>/<seat>-output.md]
+```
+
+Step 2c waits on these like every reviewer; Step 3 reads `<seat>-output.md` uniformly.
+
 ### 2b. Claude skeptic subagents (Agent)
 
 The Claude side of the panel — the skeptic(s) and any persona reviewers — is driven

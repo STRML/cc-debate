@@ -344,6 +344,33 @@ test_missing_config_fails() {
   rm -rf "$work_dir"
 }
 
+test_accepts_tilde_config() {
+  # The orchestrator passes a quoted literal "~/.claude/debate-acpx.json",
+  # which never expands inside quotes — the runner must normalize the leading ~
+  # itself or the config guard fails (seen in the wild). Point ~/config.json at
+  # a real config via a temp HOME and expect a successful review.
+  local tmp_dir review_id work_dir fake_home code
+  tmp_dir=$(setup_env)
+  fake_home=$(mktemp -d)
+  review_id="test-$(date +%s)-tilde"
+  work_dir=".tmp/ai-review-${review_id}"
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+  cp "$tmp_dir/config.json" "$fake_home/config.json"
+
+  set +e
+  HOME="$fake_home" PATH="$SCRIPT_DIR:$PATH" \
+    bash "$PARALLEL" "~/config.json" "$review_id" "alpha" 2>/dev/null
+  code=$?
+  set -e
+
+  [ "$code" -eq 0 ] || { rm -rf "$tmp_dir" "$fake_home" "$work_dir"; return 1; }
+  [ -s "$work_dir/alpha-output.md" ] || { rm -rf "$tmp_dir" "$fake_home" "$work_dir"; return 1; }
+
+  rm -rf "$tmp_dir" "$fake_home" "$work_dir"
+}
+
 test_prompt_files_cleaned_up() {
   local tmp_dir review_id work_dir
   tmp_dir=$(setup_env)
@@ -885,6 +912,7 @@ run_test "round SHA covers the changeset" test_round_sha_covers_the_changeset
 run_test "review-target marker written" test_review_target_marker_written
 run_test "plan beats changeset" test_plan_beats_changeset
 run_test "missing config fails" test_missing_config_fails
+run_test "tilde config path is expanded" test_accepts_tilde_config
 run_test "prompt files cleaned up" test_prompt_files_cleaned_up
 run_test "invalid review ID rejected" test_invalid_review_id_rejected
 run_test "reviewer name sanitization" test_reviewer_name_sanitization

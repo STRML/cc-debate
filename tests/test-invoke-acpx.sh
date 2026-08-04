@@ -253,6 +253,38 @@ test_missing_config_fails() {
   rm -rf "$work_dir"
 }
 
+test_accepts_tilde_config() {
+  # The orchestrator passes a quoted literal "~/.claude/debate-acpx.json",
+  # which never expands inside quotes — the script must normalize the leading
+  # ~ itself or the config guard fails on a real config (seen in the wild on a
+  # plan review: "config not found: ~/.claude/debate-acpx.json"). Simulate by
+  # pointing ~/debate-acpx.json at a real config via a temp HOME.
+  local dir fake_home plan
+  dir=$(mktemp -d)
+  fake_home=$(mktemp -d)
+  cat > "$dir/config.json" << 'EOF'
+{
+  "reviewers": {
+    "test-reviewer": { "agent": "mock-acpx", "timeout": 30 }
+  }
+}
+EOF
+  cp "$dir/config.json" "$fake_home/debate-acpx.json"
+  plan=$(mktemp -d)
+  echo "Test plan content" > "$plan/plan.md"
+
+  set +e
+  HOME="$fake_home" SKIP_SESSION_CHECK=1 PATH="$SCRIPT_DIR:$PATH" \
+    bash "$INVOKE" "~/debate-acpx.json" "$plan" "test-reviewer" 2>/dev/null
+  local code=$?
+  set -e
+
+  [ "$code" -eq 0 ] || { rm -rf "$dir" "$fake_home" "$plan"; return 1; }
+  [ -s "$plan/test-reviewer-output.md" ] || { rm -rf "$dir" "$fake_home" "$plan"; return 1; }
+
+  rm -rf "$dir" "$fake_home" "$plan"
+}
+
 test_missing_plan_fails() {
   local work_dir config
   work_dir=$(mktemp -d)
@@ -1340,6 +1372,9 @@ test_codex_effort_uses_direct_cli() {
   grep -q -- "-m gpt-5.6-luna" "$codex_log" || { rm -rf "$work_dir"; return 1; }
   grep -q -- "-c model_reasoning_effort=high" "$codex_log" || { rm -rf "$work_dir"; return 1; }
   grep -q -- "-s read-only" "$codex_log" || { rm -rf "$work_dir"; return 1; }
+  # The work dir may sit outside a git repo; `codex exec` refuses to run there
+  # without this flag.
+  grep -q -- "--skip-git-repo-check" "$codex_log" || { rm -rf "$work_dir"; return 1; }
   grep -q -- "-o $work_dir/test-reviewer-output.md" "$codex_log" || { rm -rf "$work_dir"; return 1; }
   # Prompt reaches codex on stdin via a trailing `-`, not an acpx --file.
   grep -q -- " -$" "$codex_log" || { rm -rf "$work_dir"; return 1; }
@@ -1546,6 +1581,7 @@ run_test "fallback system prompt" test_fallback_system_prompt
 run_test "acpx failure populates output" test_acpx_failure_populates_output
 run_test "empty response detected" test_empty_response_detected
 run_test "missing config fails" test_missing_config_fails
+run_test "tilde config path is expanded" test_accepts_tilde_config
 run_test "missing plan fails" test_missing_plan_fails
 run_test "empty plan rejected" test_empty_plan_rejected
 run_test "npx fallback" test_npx_fallback
