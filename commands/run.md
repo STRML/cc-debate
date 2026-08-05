@@ -285,10 +285,13 @@ if [ -z "$PRIVATE_FLAG" ] && [ "${DEBATE_PRIVATE:-0}" = "1" ]; then
   PRIVATE_FLAG="--private-repo"
 fi
 if [ -z "$PRIVATE_FLAG" ] && [ -f "$HOME/.claude/debate-acpx.json" ]; then
+  # Read paths one per line (jq -r emits one line per element) so spaces in
+  # paths don't split on IFS.
   _matched=""
-  for p in $(jq -r '.private_repos[]?' "$HOME/.claude/debate-acpx.json" 2>/dev/null); do
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
     case "<REPO_ROOT>" in "$p"*) _matched=1; break;; esac
-  done
+  done < <(jq -r '.private_repos[]?' "$HOME/.claude/debate-acpx.json" 2>/dev/null)
   [ -n "$_matched" ] && PRIVATE_FLAG="--private-repo"
 fi
 if [ -z "$PRIVATE_FLAG" ] && command -v gh >/dev/null 2>&1; then
