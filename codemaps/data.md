@@ -5,7 +5,7 @@ _Updated: 2026-08-05_
 
 `<REPO_ROOT>/.tmp/ai-review-<REVIEW_ID>/` (8-char hex ID). `chmod 700`. Deleted by `safe-cleanup.sh` (SHA-gated — refuses if plan drifted post-APPROVED or the plan wasn't durably saved).
 
-```
+```text
 ai-review-<ID>/
 ├── plan.md                     # Review target (plan mode). Overwritten on revision.
 ├── changeset.diff              # Review target (changeset mode, frozen by changeset-diff.sh)
