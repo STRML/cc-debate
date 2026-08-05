@@ -1,5 +1,5 @@
 # Frontend — debate plugin
-_Updated: 2026-08-03_
+_Updated: 2026-08-05_
 
 ## Note
 
@@ -20,7 +20,11 @@ This is a Claude Code CLI plugin — there is no web frontend. "Frontend" here m
 /debate:opus                Single Opus Skeptic
 ```
 `/debate:run` with no staged plan sizes its own panel from the diff and merges/verifies
-the findings in code (this replaced `/debate:panel` in 3.1.0).
+the findings in code (this replaced `/debate:panel` in 3.1.0). Arguments: an optional preset
+name, a reviewer subset, and/or `skip-debate`. Auto-detects:
+- **Panel size** — diff shape (files/lines/security/abstraction) → lens seat table
+- **Sensitivity** — private repo (config `private_repos`, `DEBATE_PRIVATE=1`, or `gh`) → ZDR
+- **Difficulty** — linesAdded/addsAbstraction → min-effort tier → selector effort scaling
 
 ## Output Format
 

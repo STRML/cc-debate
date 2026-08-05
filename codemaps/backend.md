@@ -1,5 +1,5 @@
 # Backend — debate plugin
-_Updated: 2026-08-03_
+_Updated: 2026-08-05_
 
 ## Commands (`commands/`)
 
@@ -25,8 +25,10 @@ _Updated: 2026-08-03_
 | `create-opencode-agent.sh` | Adds an acpx seat for any models.dev provider via opencode; writes the wrapper AND registers it in `~/.acpx/config.json` |
 | `create-litellm-agent.sh` | Same, for providers models.dev does not list — routes through a LiteLLM proxy |
 | `seat-report.sh` | Per-seat contribution from a panel result: sole vs corroborated vs refuted, for deciding whether a lens earns its slot |
-| `invoke-acpx.sh` | Invokes any acpx agent — plus the direct-CLI branches: `antigravity`/`agy`, `opus`/`claude --print`, and effort-scaled `codex` (`codex exec -c model_reasoning_effort`). Reads config, builds prompt, wraps with system `timeout`, captures output |
-| `run-parallel-acpx.sh` | Spawns `invoke-acpx.sh` per reviewer with nohup+disown, polls `*-exit.txt` until done; reads `effective_effort` per seat and forwards it as `EFFORT` |
+| `select-panel.py` | Picks one model per seat from the registry maximizing distinct labs, strongest-reasoning on the deepest seat, cheapest for the rest; per-seat effort auto-scaling by depth tier. Accepts `--private-repo` (ZDR preference, route 31501 pool) and `--min-effort` (floor for deepest seat). Hard `--max-cost` budget was removed — effort-tiering is the sole cost lever. |
+| `refresh-models.py` | Syncs the local registry from upstream datasources; auto-adds new model IDs, preserves user keys. |
+| `invoke-acpx.sh` | Invokes any acpx agent — plus the direct-CLI branches: `antigravity`/`agy`, `opus`/`claude --print` (now proxy-aware via `transport:proxy` + `route`), and effort-scaled `codex` (`codex exec -c model_reasoning_effort`). Reads config, builds prompt, wraps with system `timeout`, captures output |
+| `run-parallel-acpx.sh` | Spawns `invoke-acpx.sh` per reviewer with nohup+disown, polls `*-exit.txt` until done; reads `effective_effort`, `harness`, `transport`, and `route` per seat from `panel.json` and forwards them. Skips `subagent`-harness seats (delegated to the caller). |
 
 ## Script I/O Contract
 
@@ -65,7 +67,9 @@ No exit file — a teammate has delivered iff its output file exists and is non-
       "retries": 1,
       "system_prompt": "optional persona prompt"
     }
-  }
+  },
+  "private_repos": ["/path/to/private/repo", "..."] ,
+  "presets": { "<name>": { "reviewers": [...], "claude_reviewers": {...} } }
 }
 ```
 

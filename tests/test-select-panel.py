@@ -62,33 +62,16 @@ a6, err6, nl6 = select_panel.pick(ONELAB, ["a", "b", "c"], "c", [], "xhigh")
 u = [m["key"] for m in a6.values()]
 check("no duplicate model even with one lab", len(u) == len(set(u)), str(u))
 
-# 8. F5: --max-cost below every available model is a hard error, never a silent
-#    unbudgeted panel. The error must name the cheapest available cost.
-a8, err8, nl8 = select_panel.pick(FIX, SEATS, "pentester", [], "xhigh", max_cost=0.001)
-check("budget below cheapest model is a hard error",
-      a8 is None and err8 is not None and "cheapest" in err8, err8)
-
-# 9. F10: --max-cost that cannot fill every requested seat is a hard error; a
-#    3-seat request must not silently collapse to 1 seat.
-a9, err9, nl9 = select_panel.pick(FIX, SEATS, "pentester", [], "xhigh", max_cost=0.10)
-check("budget shortfall for requested seats is a hard error",
-      a9 is None and err9 is not None and "cannot fill" in err9,
-      f"keys={list(a9.keys()) if a9 else None} err={err9}")
-
-# 10. F13: an available entry missing price/strengths/lab is skipped with a warning,
+# 8. F13: an available entry missing price/strengths/lab is skipped with a warning,
 #     not a crash; the rest of the panel still builds.
 MAL = {k: v for k, v in FIX.items()}
 MAL["broken"] = {"name": "Broken", "harness": "acpx", "provider": "x", "model_id": "b",
                  "family": "b", "effort": "high", "effort_range": ["high"], "cost": "cheap",
                  "repo_aware": False, "available": True}
-a10, err10, nl10 = select_panel.pick(MAL, SEATS, "pentester", [], "xhigh", max_cost=1.0)
-picked = [m["key"] for m in a10.values()] if a10 else []
+a8, err8, nl8 = select_panel.pick(MAL, SEATS, "pentester", [], "xhigh")
+picked = [m["key"] for m in a8.values()] if a8 else []
 check("malformed available entry skipped, panel survives",
-      a10 is not None and "broken" not in picked, f"picked={picked} err={err10}")
-
-# 11. a budget that fits builds the full panel (control for 8-10)
-a11, err11, nl11 = select_panel.pick(FIX, SEATS, "pentester", [], "xhigh", max_cost=1.0)
-check("budget that fits builds full panel", a11 is not None and len(a11) == len(SEATS), str(a11))
+      a8 is not None and "broken" not in picked, f"picked={picked} err={err8}")
 
 # --- effort auto-scaling (#31 Q2) ---
 
@@ -114,8 +97,6 @@ miss = {"name":"M","harness":"acpx","provider":"p","model_id":"m","family":"f",
         "repo_aware":False,"available":True}
 check("missing effort_range defaults to medium",
       select_panel._effort_choices(miss) == ["medium"], str(select_panel._effort_choices(miss)))
-check("legacy model cannot step below medium",
-      select_panel._step_down(miss, "medium") == "medium")
 check("legacy model effort_for_model is medium at any tier",
       select_panel._effort_for_model(miss, "low") == "medium"
       and select_panel._effort_for_model(miss, "xhigh") == "medium")
@@ -140,41 +121,21 @@ check("depth tier floors at low",
       and select_panel._tier_for(1, 2, "medium") == "low"
       and select_panel._tier_for(2, 2, "medium") == "medium")
 
-# 16. monotonic degradation protects the deepest seat: under a budget, the
-#     SHALLOWEST seats are downgraded first; the deepest seat keeps its effort
-#     until every other seat is already at its floor.
-#     cheap1/cheap2 declared medium (range low..high), lead declared xhigh.
-#     At tier: simplifier(i0)=medium -> low, operator(i1)=high -> high,
-#     pentester(i2)=xhigh -> xhigh. Initial total 0.30+0.60+1.86=2.76.
-GREEN = {
-  "cheap1": {"name":"C1","harness":"acpx","provider":"p","model_id":"c1","family":"f","lab":"l1","strengths":["speed"],"effort":"medium","effort_range":["low","high"],"price":{"in":1,"out":2,"cost_per_task":0.3},"cost":"cheap","repo_aware":False,"available":True},
-  "cheap2": {"name":"C2","harness":"acpx","provider":"p","model_id":"c2","family":"f","lab":"l2","strengths":["speed"],"effort":"medium","effort_range":["low","high"],"price":{"in":1,"out":2,"cost_per_task":0.3},"cost":"cheap","repo_aware":False,"available":True},
-  "lead":  {"name":"L","harness":"acpx","provider":"p","model_id":"l","family":"f","lab":"l3","strengths":["reasoning","tricky"],"effort":"xhigh","effort_range":["low","xhigh"],"price":{"in":5,"out":30,"cost_per_task":1.86},"cost":"premium","repo_aware":False,"available":True},
-}
-a16, err16, nl16 = select_panel.pick(GREEN, SEATS, "pentester", [], "xhigh", max_cost=2.5)
-check("budget degradation succeeds", a16 is not None, f"err={err16}")
-if a16:
-    check("deepest seat protected: keeps its effort",
-          a16["pentester"]["effective_effort"] == "xhigh",
-          f"{a16['pentester']['key']}@{a16['pentester']['effective_effort']}")
-    check("shallow seats degraded to their floor",
-          a16["simplifier"]["effective_effort"] == "low"
-          and a16["operator"]["effective_effort"] == "low",
-          f"simplifier@{a16['simplifier']['effective_effort']}, operator@{a16['operator']['effective_effort']}")
-    tot16 = sum(m["effective_cost"] for m in a16.values())
-    check("degraded panel fits the cap",
-          tot16 <= 2.5 + 1e-9, f"total={tot16:.3f}")
-
-# 17. a legacy model (no effort_range) is treated as medium effort end-to-end:
+# 16. a legacy model (no effort_range) is treated as medium effort end-to-end:
 #     it is clamped to medium on the deepest seat, cannot be stepped below
 #     medium, and keeps its exact cost_per_task (medium mult = 1).
 legacy_deep = {**miss, "key": "legacy", "strengths": ["reasoning", "tricky"]}
+def _cheap(name, lab):
+    return {"name": name, "harness": "acpx", "provider": "p", "model_id": name.lower(),
+            "family": "f", "lab": lab, "strengths": ["speed"], "effort": "medium",
+            "effort_range": ["low", "high"], "price": {"in": 1, "out": 2, "cost_per_task": 0.3},
+            "cost": "cheap", "repo_aware": False, "available": True}
 LEGACY2 = {
   "legacy": legacy_deep,                 # no effort_range, declared medium, cost 0.10
-  "cheapA": {**GREEN["cheap1"], "key": "cheapA"},
-  "cheapB": {**GREEN["cheap2"], "key": "cheapB"},
+  "cheapA": _cheap("CheapA", "l2"),
+  "cheapB": _cheap("CheapB", "l3"),
 }
-a17, err17, nl17 = select_panel.pick(LEGACY2, SEATS, "pentester", [], "xhigh", max_cost=None)
+a17, err17, nl17 = select_panel.pick(LEGACY2, SEATS, "pentester", [], "xhigh")
 check("legacy model on deepest seat stays medium",
       a17 is not None and a17["pentester"]["effective_effort"] == "medium",
       f"err={err17} pentester={a17.get('pentester',{}).get('effective_effort') if a17 else None}")

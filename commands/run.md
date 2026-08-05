@@ -93,7 +93,7 @@ half of 3.0.0. Resolve the registry in this order, first existing wins:
 
 Run the selector (Step 2a below) and write its output to `<WORK_DIR>/panel.json`.
 If the selector errors, or returns no assignment for a seat (no
-available model for an installed harness, infeasible `--max-cost`, empty registry),
+available model for an installed harness, empty registry),
 the seat falls back to its configured agent default when it has one, with a `⚠️`
 warning naming the seat — the panel is never smaller than it would be without the
 selector. (Changeset-mode fallback rules: see Step 1f.)
@@ -251,6 +251,26 @@ Launch the acpx reviewers AND the Claude skeptic subagent(s) **in parallel**. Is
 First, run the panel selector for the resolved seats and capture its output. This picks a
 model + reasoning effort per seat (Step 1a's model/effort selection):
 
+**Sensitivity (ZDR).** Auto-detect whether the repo is private — if so, the selector
+prefers ZDR-capable models (route 31501). Signals, highest priority first:
+
+1. `DEBATE_PRIVATE=1` env var
+2. a `private_repos` key in `~/.claude/debate-acpx.json` — if REPO_ROOT is a prefix match for any path in that list
+3. `gh repo view --json isPrivate` (fail → not private)
+
+Set `PRIVATE_FLAG="--private-repo"` when any yields true.
+
+**Difficulty → effort.** In changeset mode, the classify stage (Step 1f) returns
+`linesAdded` and `addsAbstraction`. Map these to a min-effort tier for the selector
+(stored in `<WORK_DIR>/panel-state.json`):
+
+- `securitySensitive` or `linesAdded >= 300` → `xhigh` (default, so no override)
+- `addsAbstraction` or `linesAdded >= 150` → `high`
+- `linesAdded >= 50` → `medium`
+- else `low`
+
+Pass this as MIN_EFFORT_OVERRIDE below.
+
 ```bash
 # Resolve registry (first existing wins): user-seeded, else bundled seed.
 if [ -f "$HOME/.claude/debate-models.json" ]; then
@@ -259,12 +279,39 @@ else
   REGISTRY="<SCRIPT_DIR>/../hermes/templates/debate-models.json"
 fi
 
+# ZDR: detect private repo — env, config list, or gh API.
+PRIVATE_FLAG=""
+if [ "${DEBATE_PRIVATE:-0}" = "1" ]; then
+  PRIVATE_FLAG="--private-repo"
+elif PRIVATE_REPOS=$(jq -r '.private_repos // empty' "$HOME/.claude/debate-acpx.json" 2>/dev/null) && [ -n "$PRIVATE_REPOS" ]; then
+  for p in $(jq -r '.private_repos[]' "$HOME/.claude/debate-acpx.json" 2>/dev/null); do
+    case "<REPO_ROOT>" in "$p"*) PRIVATE_FLAG="--private-repo"; break;; esac
+  done
+elif command -v gh >/dev/null 2>&1; then
+  if gh repo view --json isPrivate --jq .isPrivate 2>/dev/null | grep -qx true; then
+    PRIVATE_FLAG="--private-repo"
+  fi
+fi
+
+# Difficulty: map the classify shape to a min-effort tier. In plan mode, default xhigh.
+MIN_EFFORT="xhigh"
+if [ -f "<WORK_DIR>/panel-state.json" ]; then
+  _added=$(jq -r '.diff.linesAdded // 0' "<WORK_DIR>/panel-state.json" 2>/dev/null || echo 0)
+  _security=$(jq -r '.diff.securitySensitive // false' "<WORK_DIR>/panel-state.json" 2>/dev/null || echo false)
+  _abs=$(jq -r '.diff.addsAbstraction // false' "<WORK_DIR>/panel-state.json" 2>/dev/null || echo false)
+  if [ "$_security" = "true" ] || [ "$_added" -ge 300 ]; then MIN_EFFORT="xhigh"
+  elif [ "$_abs" = "true" ] || [ "$_added" -ge 150 ]; then MIN_EFFORT="high"
+  elif [ "$_added" -ge 50 ]; then MIN_EFFORT="medium"
+  else MIN_EFFORT="low"; fi
+fi
+
 # Run the selector for the resolved seats. --deepest is the arbiter: the last
 # resolved seat in plan mode, the pentester (or last lens seat) in changeset mode.
 python3 "<SCRIPT_DIR>/select-panel.py" \
   --registry "$REGISTRY" \
   --seats "<resolved-seat-list>" --deepest "<deepest-seat>" \
-  --installed-harnesses acpx,subagent > "<WORK_DIR>/panel.json" \
+  --min-effort "$MIN_EFFORT" $PRIVATE_FLAG \
+  --installed-harnesses acpx > "<WORK_DIR>/panel.json" \
   || { echo "⚠️ selector failed for this panel" >&2; rm -f "<WORK_DIR>/panel.json"; }
 ```
 
