@@ -279,15 +279,19 @@ else
   REGISTRY="<SCRIPT_DIR>/../hermes/templates/debate-models.json"
 fi
 
-# ZDR: detect private repo — env, config list, or gh API.
+# ZDR: detect private repo — env, config list, or gh API. First positive signal wins.
 PRIVATE_FLAG=""
-if [ "${DEBATE_PRIVATE:-0}" = "1" ]; then
+if [ -z "$PRIVATE_FLAG" ] && [ "${DEBATE_PRIVATE:-0}" = "1" ]; then
   PRIVATE_FLAG="--private-repo"
-elif PRIVATE_REPOS=$(jq -r '.private_repos // empty' "$HOME/.claude/debate-acpx.json" 2>/dev/null) && [ -n "$PRIVATE_REPOS" ]; then
-  for p in $(jq -r '.private_repos[]' "$HOME/.claude/debate-acpx.json" 2>/dev/null); do
-    case "<REPO_ROOT>" in "$p"*) PRIVATE_FLAG="--private-repo"; break;; esac
+fi
+if [ -z "$PRIVATE_FLAG" ] && [ -f "$HOME/.claude/debate-acpx.json" ]; then
+  _matched=""
+  for p in $(jq -r '.private_repos[]?' "$HOME/.claude/debate-acpx.json" 2>/dev/null); do
+    case "<REPO_ROOT>" in "$p"*) _matched=1; break;; esac
   done
-elif command -v gh >/dev/null 2>&1; then
+  [ -n "$_matched" ] && PRIVATE_FLAG="--private-repo"
+fi
+if [ -z "$PRIVATE_FLAG" ] && command -v gh >/dev/null 2>&1; then
   if gh repo view --json isPrivate --jq .isPrivate 2>/dev/null | grep -qx true; then
     PRIVATE_FLAG="--private-repo"
   fi

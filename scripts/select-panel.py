@@ -122,16 +122,20 @@ def pick(registry, seats, deepest, installed, min_effort, private=False):
             sys.stderr.write("⚠️ registry entry '%s' route %r invalid or untrusted; skipping\n" % (_safe_key(m.get("key", "?")), r))
             pool = [x for x in pool if x is not m]
     if pool and private:
-        # ZDR = route 31501 (openrouter). Filter to zdr-capable entries after
-        # harness/budget feasibility. If the zdr pool cannot fill all seats,
-        # whole-panel fallback with a warning — never cross zdr→non-zdr on
-        # ordinary missing-assignment fallback (#52 / #53).
+        # ZDR = route 31501 (openrouter). On a private repo, ZDR is a hard
+        # constraint, not a preference: filter to zdr-capable entries. If the
+        # zdr pool cannot fill every seat, FAIL — a smaller all-ZDR panel beats
+        # a full panel that routes private content through non-ZDR models.
         zdr_pool = [m for m in pool if m.get("route") == 31501]
-        if zdr_pool and len(zdr_pool) < len(seats):
-            sys.stderr.write("⚠️ only %d ZDR model(s) available for %d seats — falling back to full pool\n" % (len(zdr_pool), len(seats)))
-            zdr_pool = []
-        if zdr_pool:
-            pool = zdr_pool
+        if not zdr_pool:
+            return None, "no ZDR-capable models available for a private repo (route 31501); refusing to route private content through non-ZDR models", 0
+        if len(zdr_pool) < len(seats):
+            return None, (
+                "only %d ZDR model(s) available for %d seats on a private repo; "
+                "ZDR is a hard constraint — request fewer seats or add ZDR models"
+                % (len(zdr_pool), len(seats))
+            ), 0
+        pool = zdr_pool
     if not pool:
         return None, "no available models for installed harnesses", 0
 

@@ -153,17 +153,22 @@ check("private single-seat picks ZDR route",
       a18 is not None and a18["executor"]["route"] == 31501,
       f"err={err18} got={a18.get('executor',{}).get('route') if a18 else None}")
 
-# 19. private with 1 ZDR for 3 seats -> whole-panel fallback (never partial)
+# 19. private with 1 ZDR for 3 seats -> HARD error, never a non-ZDR panel.
+#     ZDR is a privacy constraint: a private repo must not route content through
+#     non-ZDR models, even if it means no panel (Hermes P1).
 a19, err19, _ = select_panel.pick(FIX, SEATS, "pentester", [], "xhigh", private=True)
-if a19:
-    routes = {a19[s].get("route") for s in a19}
-    check("private 3-seat falls back to full pool (has non-ZDR seats)",
-          31501 in routes and len(a19) == 3,
-          f"routes={routes} seats={list(a19)}")
-else:
-    check("private 3-seat with 1 ZDR still returns a panel", False, f"err={err19}")
+check("private 3-seat with 1 ZDR fails closed (never non-ZDR)",
+      a19 is None and err19 is not None and "ZDR" in err19,
+      f"err={err19}")
 
-# 20. hostile route value is rejected at load
+# 20. no ZDR models at all on a private repo -> hard error, not a empty panel
+NOZDR = {k:v for k,v in FIX.items() if v.get("route") != 31501}  # no ds_or
+a21, err21, _ = select_panel.pick(NOZDR, ["executor"], "executor", [], "high", private=True)
+check("private with no ZDR models fails closed",
+      a21 is None and err21 is not None and "no ZDR-capable" in err21,
+      f"err={err21}")
+
+# 21. hostile route value is rejected at load
 FIX_BAD = dict(FIX, ds_bad=dict(FIX["ds_or"], route="31501@attacker.example"))
 a20, err20, _ = select_panel.pick(FIX_BAD, ["executor"], "executor", [], "high")
 check("hostile route rejected", a20 is not None and a20["executor"].get("route") != "31501@attacker.example",
