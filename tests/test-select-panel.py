@@ -17,6 +17,8 @@ FIX = {
   # only ZDR-capable entry.
   "ds_or": {"name":"DeepSeek ZDR","harness":"acpx","transport":"proxy","route":31501,"provider":"deepseek","model_id":"ds-or","family":"ds","lab":"deepseek","strengths":["reasoning","code"],"effort":"high","effort_range":["low","max"],"price":{"in":0.22,"out":0.44,"cost_per_task":0.03},"cost":"cheap","repo_aware":True,"available":True},
   "ds_n":  {"name":"DeepSeek Nous","harness":"acpx","transport":"proxy","route":31502,"provider":"deepseek","model_id":"ds-n","family":"ds","lab":"deepseek","strengths":["reasoning","code"],"effort":"high","effort_range":["low","max"],"price":{"in":0.22,"out":0.44,"cost_per_task":0.03},"cost":"cheap","repo_aware":True,"available":True},
+  "gem1":  {"name":"Gemini Pro","harness":"acpx","provider":"google","model_id":"gem1","family":"gemini","lab":"google","strengths":["reasoning"],"effort":"high","effort_range":["low","high"],"price":{"in":2,"out":12,"cost_per_task":0.34},"cost":"mid","repo_aware":True,"available":True},
+  "op1":   {"name":"Opus","harness":"acpx","provider":"anthropic","model_id":"op1","family":"claude","lab":"anthropic","strengths":["reasoning","tricky"],"effort":"xhigh","effort_range":["low","max"],"price":{"in":5,"out":25,"cost_per_task":2.34},"cost":"premium","repo_aware":False,"available":True},
 }
 SEATS = ["simplifier", "operator", "pentester"]
 
@@ -173,6 +175,72 @@ FIX_BAD = dict(FIX, ds_bad=dict(FIX["ds_or"], route="31501@attacker.example"))
 a20, err20, _ = select_panel.pick(FIX_BAD, ["executor"], "executor", [], "high")
 check("hostile route rejected", a20 is not None and a20["executor"].get("route") != "31501@attacker.example",
       f"err={err20}")
+
+# --- per-seat agent feasibility (2026-08-06, 4-of-6 dead panel) ---
+# `harness` names a dispatch class, not an agent. Each agent is provider-locked:
+# codex runs openai only, antigravity runs google only, opus/claude run
+# anthropic only, and the cc-ds4 proxy transport only works through an opus
+# seat. Without the agents map the selector hands claude-opus-5 / gemini / glm
+# to a codex seat, which refuses them at spawn. `agents={seat: agent}` must
+# constrain each seat to models its agent can actually run. The direct assertion
+# is `_runnable(assigned_model, seat_agent)` — the contract the dispatch chain
+# enforces.
+
+# 22. a codex seat is never assigned a model codex cannot run (subagent models
+#     are fine — the caller dispatches those as Agent teammates)
+a22, err22, nl22 = select_panel.pick(FIX, ["executor", "auditor"], "auditor", [], "xhigh",
+                                     agents={"executor": "codex", "auditor": "codex"})
+check("codex seats only get runnable models",
+      a22 is not None and all(select_panel._runnable(m, "codex") for m in a22.values()),
+      f"providers={[m['provider'] for m in (a22 or {}).values()]} err={err22}")
+
+# 23. an antigravity seat gets only models agy can run (google, or subagent)
+a23, err23, _ = select_panel.pick(FIX, ["antigravity"], "antigravity", [], "xhigh",
+                                  agents={"antigravity": "antigravity"})
+check("antigravity seat only gets runnable models",
+      a23 is not None and all(select_panel._runnable(m, "antigravity") for m in a23.values()),
+      f"got={[(m.get('key'), m.get('provider')) for m in (a23 or {}).values()]}")
+
+# 24. proxy-transport models land on the opus seat, never a codex seat — with
+#     only a proxy model + a google model, the opus seat takes the proxy one and
+#     the codex seat stays unfilled (both must hold).
+a24, err24, _ = select_panel.pick({"ds_or": FIX["ds_or"], "gem1": FIX["gem1"]},
+                                  ["a", "b"], "b", [], "xhigh",
+                                  agents={"a": "codex", "b": "opus"})
+check("proxy model only lands on an opus seat",
+      a24 is not None and a24.get("b", {}).get("transport") == "proxy" and "a" not in a24,
+      f"got={[(s, m.get('key'), m.get('transport')) for s, m in (a24 or {}).items()]}")
+
+# 24b. a proxy-only registry cannot fill a codex seat (fails to a default, not a
+#      wrong-provider model)
+a24b, err24b, _ = select_panel.pick({"ds_or": FIX["ds_or"]}, ["c"], "c", [], "xhigh",
+                                    agents={"c": "codex"})
+check("proxy model never assigned to a codex seat",
+      a24b is not None and "c" not in a24b, f"got={a24b}")
+
+# 25. a codex seat with no runnable model goes unfilled (falls back to its
+#     configured default downstream), and does NOT kill the panel
+a25, err25, _ = select_panel.pick({"g": FIX["gem1"], "op": FIX["op1"]}, ["c"], "c", [], "xhigh",
+                                  agents={"c": "codex"})
+check("codex seat with only non-openai models goes unfilled",
+      a25 is not None and "c" not in a25, f"got={a25}")
+
+# 26. subagent-harness models are assignable to any seat — including one with no
+#     configured agent (an empty agent runs nothing acpx-runnable)
+a26, err26, _ = select_panel.pick({"ds": FIX["ds"]}, ["lens"], "lens", [], "xhigh",
+                                  agents={"lens": ""})
+check("subagent model fills an empty-agent seat",
+      a26 is not None and a26["lens"]["harness"] == "subagent", f"got={a26}")
+
+# 27. a flexible agent (not provider-locked — opencode/OpenRouter passthrough)
+#     keeps today's permissive behavior
+a27, err27, _ = select_panel.pick(FIX, ["deepseek", "auditor"], "auditor", [], "xhigh",
+                                  agents={"deepseek": "deepseek", "auditor": "codex"})
+check("flexible agent keeps permissive selection",
+      a27 is not None and all(select_panel._runnable(m, agents) for s, agents in
+                              ({"deepseek": "deepseek", "auditor": "codex"}).items()
+                              if (m := a27.get(s))),
+      f"got={[(s, m.get('key')) for s, m in (a27 or {}).items()]}")
 
 print()
 print("PASS" if fails == 0 else f"FAIL ({fails})")

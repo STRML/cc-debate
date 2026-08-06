@@ -232,7 +232,8 @@ last lens seat.
 **Changeset seats fall back to their configured default when they have one.** A lens seat
 that IS a key in the config's `reviewers` object (e.g. `executor-b`, `cartographer`,
 `deepseek`) has a configured agent default — if the selector returns no assignment for it
-(no available model for its harness, or the registry has nothing for it), it runs at that
+(no available model for its harness, the registry has nothing for it, or no registry model
+its agent can run — a codex seat with only non-OpenAI models available), it runs at that
 configured default, like plan mode. A lens seat with **no** `reviewers` config entry (a
 lens that names a seat this config never defined) is skipped and reported as failed with
 the selector's reason — it has no default to fall back to. The panel is never smaller than
@@ -312,13 +313,25 @@ if [ -f "<WORK_DIR>/panel-state.json" ]; then
   else MIN_EFFORT="low"; fi
 fi
 
+# Per-seat agent feasibility. Each registry model's `harness` names a dispatch
+# class (acpx/subagent), not an executing agent — and each agent is provider-
+# locked (codex=OpenAI, agy=Google, claude --print=Anthropic; the cc-ds4 proxy
+# transport only works through an `opus` seat). Without the seat→agent map, the
+# selector fills for lab diversity and hands claude-opus-5 / gemini-3.1-pro /
+# glm-5.2 to a codex seat, which refuses them at spawn (a 4-of-6 dead panel,
+# observed 2026-08-06). Derive the map from the config so a seat is only ever
+# assigned a model its configured agent can actually run; a seat it cannot fill
+# falls back to its configured default.
+AGENT_MAP=$(jq -r '[.reviewers | to_entries[] | "\(.key)=\(.value.agent // "")"] | join(",")' "$HOME/.claude/debate-acpx.json")
+
 # Run the selector for the resolved seats. --deepest is the arbiter: the last
 # resolved seat in plan mode, the pentester (or last lens seat) in changeset mode.
 python3 "<SCRIPT_DIR>/select-panel.py" \
   --registry "$REGISTRY" \
   --seats "<resolved-seat-list>" --deepest "<deepest-seat>" \
   --min-effort "$MIN_EFFORT" $PRIVATE_FLAG \
-  --installed-harnesses acpx > "<WORK_DIR>/panel.json" \
+  --installed-harnesses acpx,subagent \
+  --agents "$AGENT_MAP" > "<WORK_DIR>/panel.json" \
   || { echo "⚠️ selector failed for this panel" >&2; rm -f "<WORK_DIR>/panel.json"; }
 ```
 

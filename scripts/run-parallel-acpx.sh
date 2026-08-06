@@ -319,7 +319,45 @@ for NAME in "${REVIEWERS[@]}"; do
       31501|31502) ;;
       *) echo "[debate] $NAME: proxy transport with invalid route '${CHILD_ROUTE:-}' — skipping" >&2; continue ;;
     esac
+    # The proxy branch in invoke-acpx.sh lives inside `if [ "$AGENT" = "opus" ]`,
+    # so a proxy model on any other agent would have PROXY_ROUTE ignored and the
+    # model_id forwarded to the wrong CLI. Fail loud here rather than let a
+    # drifted panel.json or config send a deepseek model to codex.
+    if [ "$AGENT" != "opus" ]; then
+      echo "[debate] $NAME: model on proxy transport (route ${CHILD_ROUTE}) needs an 'opus' seat, agent is '$AGENT' — skipping" >&2
+      continue
+    fi
     INVOKE_ENV+=("PROXY_ROUTE=${CHILD_ROUTE}")
+  fi
+
+  # Provider-feasibility backstop (mirrors the selector's --agents constraint).
+  # The registry's harness names a dispatch class, not an agent, so this checks
+  # the model's provider against the agent's lock. Normally the selector already
+  # prevented an infeasible assignment; this catches a hand-edited panel.json or
+  # a config change between selection and spawn so it degrades to the seat's
+  # default with a message instead of a 4-of-6 dead panel.
+  # Provider-feasibility only applies to a map that carries provider — the full
+  # select-panel.py output always does. A flat {seat: model_id} map has none:
+  # the caller pinned the model explicitly, so the runner has nothing to verify
+  # against and must pass it through rather than invent a provider.
+  CHILD_PROVIDER=$(jq -r --arg s "$NAME" '
+    if type == "object" and has("seats") then .seats[$s].provider
+    else empty end // empty' "$SEAT_MODELS" 2>/dev/null || true)
+  if [ -n "${CHILD_MODEL:-}" ] && [ -n "$CHILD_PROVIDER" ]; then
+    # Reset per seat: a locked agent whose provider check PASSES never reassigns
+    # SKIP_PROVIDER (the `||` short-circuits), so a stale value from an earlier
+    # skipped seat would otherwise skip a runnable one.
+    SKIP_PROVIDER=""
+    case "$AGENT" in
+      codex)        [ "$CHILD_PROVIDER" = "openai" ] || SKIP_PROVIDER="codex only runs openai models (got $CHILD_PROVIDER)" ;;
+      antigravity)  [ "$CHILD_PROVIDER" = "google" ] || SKIP_PROVIDER="antigravity only runs google models (got $CHILD_PROVIDER)" ;;
+      opus|claude)  [ "$CHILD_PROVIDER" = "anthropic" ] || SKIP_PROVIDER="$AGENT only runs anthropic models (got $CHILD_PROVIDER)" ;;
+      *) SKIP_PROVIDER="" ;;   # flexible agent (opencode, custom wrappers) — no lock
+    esac
+    if [ -n "${SKIP_PROVIDER:-}" ]; then
+      echo "[debate] $NAME: model ${CHILD_MODEL:-<none>} is not runnable by agent $AGENT — $SKIP_PROVIDER — skipping (seat will run at its default)" >&2
+      continue
+    fi
   fi
   nohup env "${INVOKE_ENV[@]}" \
     bash "$SCRIPT_DIR/invoke-acpx.sh" "$CONFIG_FILE" "$WORK_DIR" "$NAME" "$TIMEOUT" \

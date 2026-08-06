@@ -59,7 +59,8 @@ repo_aware + family/lab + available.
    `unknown`. It arrives **`available:false`** — never selectable. Enable it and confirm
    the harness/pricing before it can be picked.
 2. **Route the panel**: `python3 scripts/select-panel.py --registry $HERMES_HOME/debate-models.json
-   --seats simplifier,operator,pentester --deepest pentester --installed-harnesses acpx,subagent`
+   --seats simplifier,operator,pentester --deepest pentester --installed-harnesses acpx,subagent
+   --agents simplifier=codex,operator=codex,pentester=codex`
    -> seat -> {model, harness, provider, model_id, effective_effort, cost_per_task,
    effective_cost, repo_aware}. The selector derives a per-seat reasoning effort
    (`effective_effort`, depth-tiered from the deepest seat down, capped to the model's
@@ -67,7 +68,13 @@ repo_aware + family/lab + available.
    lab diversity -> strong-reasoning model on the deepest seat at effort>=xhigh -> cheapest
    cost_per_task elsewhere -> no duplicate model -> low-diversity warning. Under `--max-cost`
    the effort pass degrades monotonically, shallowest seats first, protecting the deepest
-   seat's reasoning.
+   seat's reasoning. **Pass `--agents <seat=agent,...>`** (derive it from your config's
+   `.reviewers[].agent`) so each seat is constrained to models its agent can actually run —
+   a codex seat gets OpenAI models only, an antigravity seat Google only, and the cc-ds4
+   proxy transport only lands on an `opus` seat. Without it the selector fills for lab
+   diversity and hands claude-opus-5 / gemini / glm to the local Codex CLI, which refuses
+   them at spawn (2026-08-06: 4 of 6 panel seats dead). A seat no agent can fill is left
+   unfilled — it degrades to its configured default downstream.
 3. **Dispatch** each seat via its harness (`subagent` -> a background Agent teammate
    in `commands/run.md` Step 2a-prime; else acpx), optionally sandboxed
    (`run-acpx-review.sh ... --sandbox --repo-sandbox --repo ROOT` wraps bwrap /
