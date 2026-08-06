@@ -883,6 +883,39 @@ EOF
   rm -rf "$work_dir" "$tmp_dir"
 }
 
+test_proxy_opus_provider_not_locked() {
+  # An opus seat with a proxy-transport model whose provider is NOT anthropic
+  # (e.g. deepseek via cc-ds4) must pass the provider-feasibility guard — the
+  # proxy transport already validated the agent (opus), and a proxy model's
+  # provider must not be run against the opus anthropic lock (CR finding,
+  # PR #60). Without this the opus+deepseek proxy seat dies at spawn.
+  local tmp_dir review_id work_dir acpx_log
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-proxyopus"
+  work_dir=".tmp/ai-review-${review_id}"
+  acpx_log="$tmp_dir/acpx-log.txt"
+
+  cat > "$tmp_dir/panel.json" << 'EOF'
+{"seats": {"gamma": {"model_id": "deepseek-v4-pro", "provider": "deepseek", "harness": "acpx", "transport": "proxy", "route": 31502, "effective_effort": "high"}}, "distinct_labs": 1}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  PATH="$SCRIPT_DIR:$PATH" \
+  SKIP_SESSION_CHECK=1 \
+  ACPX_SEAT_MODELS="$tmp_dir/panel.json" \
+  MOCK_ACPX_LOG="$acpx_log" \
+  MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" "gamma" 2>&1 | grep -q "not runnable" \
+    && { rm -rf "$work_dir" "$tmp_dir"; return 1; }   # guard must NOT skip it
+
+  [ -f "$work_dir/gamma-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ "$(cat "$work_dir/gamma-exit.txt")" = "0" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
 # --- Run ---
 
 echo ""
@@ -931,6 +964,7 @@ run_test "one failure doesnt block others" test_one_failure_doesnt_block_others
 run_test "effective_effort forwarded from selector output" test_effort_forwarded_from_selector_output
 run_test "EFFORT cleared when no effective_effort entry" test_effort_cleared_when_no_entry
 run_test "subagent harness seat skipped by this runner" test_subagent_seat_skipped
+run_test "proxy opus seat not provider-locked" test_proxy_opus_provider_not_locked
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="

@@ -266,6 +266,23 @@ def pick(registry, seats, deepest, installed, min_effort, private=False, agents=
     for seat, eff in eff_by_seat.items():
         assignment[seat] = {**assignment[seat], "effective_effort": eff,
                             "effective_cost": _effective_cost(assignment[seat], eff)}
+
+    # ZDR is a hard constraint on a private repo, not a degrade-to-default: a
+    # seat left unfilled by agent feasibility would fall back to its configured
+    # default, which is NOT proven to route through ZDR (route 31501) — silently
+    # shipping private content over a non-ZDR model. The ZDR pool above only
+    # checks count; agent filtering can still empty a seat's candidates. Fail
+    # closed instead (CR finding, PR #60).
+    if private:
+        unfilled = [s for s in seats if s not in assignment]
+        if unfilled:
+            return None, (
+                "private repo: %d seat(s) could not be assigned a ZDR-capable model "
+                "their agent can run: %s — refusing to route private content through "
+                "non-ZDR defaults; add a ZDR-capable model for these seats or drop them"
+                % (len(unfilled), ", ".join(_safe_key(s) for s in unfilled))
+            ), 0
+
     return assignment, None, n_labs
 
 def main():

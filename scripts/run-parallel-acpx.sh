@@ -343,7 +343,11 @@ for NAME in "${REVIEWERS[@]}"; do
   CHILD_PROVIDER=$(jq -r --arg s "$NAME" '
     if type == "object" and has("seats") then .seats[$s].provider
     else empty end // empty' "$SEAT_MODELS" 2>/dev/null || true)
-  if [ -n "${CHILD_MODEL:-}" ] && [ -n "$CHILD_PROVIDER" ]; then
+  # Proxy transport already validated the agent (opus) above — a proxy model's
+  # provider (deepseek/zai/...) must NOT be run against the agent's provider
+  # lock, or every non-Anthropic cc-ds4 model on an opus seat would be rejected.
+  if [ -n "${CHILD_MODEL:-}" ] && [ -n "$CHILD_PROVIDER" ] && \
+     [ "${CHILD_TRANSPORT:-}" != "proxy" ]; then
     # Reset per seat: a locked agent whose provider check PASSES never reassigns
     # SKIP_PROVIDER (the `||` short-circuits), so a stale value from an earlier
     # skipped seat would otherwise skip a runnable one.

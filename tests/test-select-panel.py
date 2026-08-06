@@ -242,6 +242,37 @@ check("flexible agent keeps permissive selection",
                               if (m := a27.get(s))),
       f"got={[(s, m.get('key')) for s, m in (a27 or {}).items()]}")
 
+# 28. ZDR hard constraint holds when agent feasibility leaves a seat unfilled:
+#     on a private repo, a codex seat with no ZDR-capable (route 31501) model
+#     its agent can run must FAIL the panel, not degrade to a non-ZDR default
+#     (CR finding, PR #60). ds_or is route 31501 (ZDR); ds_n is route 31502.
+a28, err28, _ = select_panel.pick(
+    {"ds_or": FIX["ds_or"], "ds_n": FIX["ds_n"]},
+    ["codexseat"], "codexseat", [], "xhigh", private=True,
+    agents={"codexseat": "codex"})
+check("private + codex-only-no-ZDR fails closed (not a non-ZDR default)",
+      a28 is None and err28 is not None and "ZDR" in err28 and "codexseat" in err28,
+      f"err={err28}")
+
+# 28b. the same panel WITHOUT private (public repo) degrades the codex seat to
+#      unfilled rather than failing the whole panel
+a28b, err28b, _ = select_panel.pick(
+    {"ds_or": FIX["ds_or"], "ds_n": FIX["ds_n"]},
+    ["codexseat"], "codexseat", [], "xhigh", private=False,
+    agents={"codexseat": "codex"})
+check("public repo with no runnable model just leaves the seat unfilled",
+      a28b is not None and "codexseat" not in a28b, f"got={a28b} err={err28b}")
+
+# 28c. a private panel where every seat CAN be filled with a ZDR model still
+#      works: an opus seat takes ds_or (route 31501, the one ZDR model).
+a28c, err28c, _ = select_panel.pick(
+    {"ds_or": FIX["ds_or"], "op1": FIX["op1"]},
+    ["op"], "op", [], "xhigh", private=True,
+    agents={"op": "opus"})
+check("private panel with a ZDR model for the seat still fills",
+      a28c is not None and a28c["op"]["key"] == "ds_or" and a28c["op"]["route"] == 31501,
+      f"got={[(s, m.get('key'), m.get('route')) for s, m in (a28c or {}).items()]} err={err28c}")
+
 print()
 print("PASS" if fails == 0 else f"FAIL ({fails})")
 sys.exit(0 if fails == 0 else 1)
