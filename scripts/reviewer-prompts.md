@@ -56,6 +56,10 @@ Verify before you assert: when a claim depends on library, platform, or
 hardware behavior, check the actual source or docs first. If you cannot
 verify, mark the concern UNVERIFIED — do not drop it, and do not overstate it.
 
+Batch your searches: before iterating symbol-by-symbol, run one compound
+`grep -rn -E '(a|b|c)' path1 path2 path3` across the known path set and read
+what lands.
+
 ---
 
 ## Opus Skeptic
@@ -81,6 +85,10 @@ speculate beyond it. Focus on:
 Label any claim about emergent system behavior (timing interactions,
 hardware state, concurrency cascades) as HYPOTHESIS — verify before
 treating it as a finding.
+
+Batch your searches: before iterating symbol-by-symbol, run one compound
+`grep -rn -E '(a|b|c)' path1 path2 path3` across the known path set and read
+what lands.
 
 ---
 
