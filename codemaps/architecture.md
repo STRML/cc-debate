@@ -59,13 +59,17 @@ cc-debate/
 Changeset mode sizes seats from the diff; plan mode uses the config's personas.
 Explicit selectors (preset name / reviewer subset) override lens seat-picking but
 classify still runs to measure. The selector assigns model+effort per seat; a seat
-with no assignment falls back to its configured agent default. The selector is
-**agent-aware**: `--agents <seat=agent,...>` (derived from the config) constrains
-each seat to models its agent can actually run — a codex seat gets OpenAI models
-only, an antigravity seat Google only, an `opus` seat Anthropic only, and the
-cc-ds4 proxy transport only lands on an `opus` seat. Without it the selector fills
-for lab diversity and hands claude-opus-5 / gemini / glm to the local Codex CLI,
-which refuses them at spawn (2026-08-06: 4 of 6 panel seats dead).
+with no assignment falls back to its configured agent default (non-private runs
+only — on a private repo a seat no agent can fill fails the panel closed rather
+than degrade to a non-ZDR default). The selector is **agent-aware**:
+`--agents <seat=agent,...>` (derived from the config) constrains each direct
+seat to models its agent can actually run — a codex seat gets OpenAI models
+only, an antigravity seat Google only, an `opus` seat Anthropic models only.
+Proxy transport is the exception: it only lands on an `opus` seat and carries its
+own provider (deepseek/zai/...), bypassing the anthropic lock. Without the map
+the selector fills for lab diversity and hands claude-opus-5 / gemini / glm to
+the local Codex CLI, which refuses them at spawn (2026-08-06: 4 of 6 panel seats
+dead).
 
 ## Two Execution Modes
 

@@ -324,10 +324,16 @@ for NAME in "${REVIEWERS[@]}"; do
     # model_id forwarded to the wrong CLI. Fail loud here rather than let a
     # drifted panel.json or config send a deepseek model to codex.
     if [ "$AGENT" != "opus" ]; then
-      echo "[debate] $NAME: model on proxy transport (route ${CHILD_ROUTE}) needs an 'opus' seat, agent is '$AGENT' — skipping" >&2
-      continue
+      # Degrade to the seat's configured default (same policy as the provider
+      # mismatch below): a drifted panel must not silently lose a seat.
+      echo "[debate] $NAME: model on proxy transport (route ${CHILD_ROUTE}) needs an 'opus' seat, agent is '$AGENT' — clearing selected model; seat will run at its configured default" >&2
+      CHILD_MODEL=""
+      CHILD_EFFORT=""
+      CHILD_TRANSPORT=""
+      INVOKE_ENV+=("MODEL=" "EFFORT=")
+    else
+      INVOKE_ENV+=("PROXY_ROUTE=${CHILD_ROUTE}")
     fi
-    INVOKE_ENV+=("PROXY_ROUTE=${CHILD_ROUTE}")
   fi
 
   # Provider-feasibility backstop (mirrors the selector's --agents constraint).
@@ -359,8 +365,17 @@ for NAME in "${REVIEWERS[@]}"; do
       *) SKIP_PROVIDER="" ;;   # flexible agent (opencode, custom wrappers) — no lock
     esac
     if [ -n "${SKIP_PROVIDER:-}" ]; then
-      echo "[debate] $NAME: model ${CHILD_MODEL:-<none>} is not runnable by agent $AGENT — $SKIP_PROVIDER — skipping (seat will run at its default)" >&2
-      continue
+      # Degrade to the seat's configured default, don't skip: the message below
+      # promises the seat still runs, and `continue` would silently lose it
+      # (CR finding, PR #60). Clear the selected model/effort so invoke-acpx.sh
+      # falls back to the config's .model/.effort, and the PROXY_ROUTE from a
+      # non-proxy check must not survive either.
+      echo "[debate] $NAME: model ${CHILD_MODEL:-<none>} is not runnable by agent $AGENT — $SKIP_PROVIDER — clearing selected model; seat will run at its configured default" >&2
+      CHILD_MODEL=""
+      CHILD_EFFORT=""
+      unset PROXY_ROUTE
+      INVOKE_ENV+=("MODEL=" "EFFORT=")
+      INVOKE_ENV+=("PROXY_ROUTE=")
     fi
   fi
   nohup env "${INVOKE_ENV[@]}" \

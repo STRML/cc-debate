@@ -916,6 +916,47 @@ EOF
   rm -rf "$work_dir" "$tmp_dir"
 }
 
+test_provider_mismatch_runs_config_default() {
+  # A provider-lock mismatch must NOT skip the seat: it clears the selected
+  # model and runs the agent at its configured default (CR finding, PR #60).
+  # The mock acpx invocation log must record NO --model for the seat.
+  local tmp_dir review_id work_dir acpx_log out
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-provmismatch"
+  work_dir=".tmp/ai-review-${review_id}"
+  acpx_log="$tmp_dir/acpx-log.txt"
+
+  # alpha is a codex seat; the panel hands it a zai (non-openai) model — the
+  # guard must clear it, not skip the seat.
+  cat > "$tmp_dir/panel.json" << 'EOF'
+{"seats": {"alpha": {"model_id": "glm-5.2", "provider": "zai", "harness": "acpx", "transport": null, "route": null, "effective_effort": "high"}}, "distinct_labs": 1}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  # Capture the runner's output to a FILE, then grep it. Piping straight into
+  # `grep -q` races the runner: grep closes the pipe on match, the still-running
+  # parent takes SIGPIPE (exit 141), and `set -o pipefail` turns the pipeline
+  # into a failure even though the message was emitted.
+  out=$(PATH="$SCRIPT_DIR:$PATH" \
+    SKIP_SESSION_CHECK=1 \
+    ACPX_SEAT_MODELS="$tmp_dir/panel.json" \
+    MOCK_ACPX_LOG="$acpx_log" \
+    MOCK_ACPX_RESPONSE="Reviewed. VERDICT: APPROVED" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" "alpha" 2>&1) || true
+  echo "$out" | grep -q "will run at its configured default" \
+    || { rm -rf "$work_dir" "$tmp_dir"; return 1; }   # guard must emit the degrade message
+
+  # Seat must still spawn (exit file present, code 0) and reach acpx WITHOUT --model.
+  [ -f "$work_dir/alpha-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ "$(cat "$work_dir/alpha-exit.txt")" = "0" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  grep -q -- "--model" "$acpx_log" && { rm -rf "$work_dir" "$tmp_dir"; return 1; }   # no model forwarded
+  [ -s "$acpx_log" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }                 # acpx was invoked
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
 # --- Run ---
 
 echo ""
@@ -965,6 +1006,7 @@ run_test "effective_effort forwarded from selector output" test_effort_forwarded
 run_test "EFFORT cleared when no effective_effort entry" test_effort_cleared_when_no_entry
 run_test "subagent harness seat skipped by this runner" test_subagent_seat_skipped
 run_test "proxy opus seat not provider-locked" test_proxy_opus_provider_not_locked
+run_test "provider mismatch runs config default" test_provider_mismatch_runs_config_default
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="
