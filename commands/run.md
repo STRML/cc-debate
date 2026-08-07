@@ -326,27 +326,55 @@ AGENT_MAP=$(jq -r '[.reviewers | to_entries[] | "\(.key)=\(.value.agent // "")"]
 
 # Run the selector for the resolved seats. --deepest is the arbiter: the last
 # resolved seat in plan mode, the pentester (or last lens seat) in changeset mode.
-python3 "<SCRIPT_DIR>/select-panel.py" \
-  --registry "$REGISTRY" \
-  --seats "<resolved-seat-list>" --deepest "<deepest-seat>" \
-  --min-effort "$MIN_EFFORT" $PRIVATE_FLAG \
-  --installed-harnesses acpx,subagent \
-  --agents "$AGENT_MAP" > "<WORK_DIR>/panel.json" \
-  || { echo "⚠️ selector failed for this panel" >&2; rm -f "<WORK_DIR>/panel.json"; }
+# On a PRIVATE repo a selector failure is a HARD stop, not a degrade-to-default:
+# falling back would run seats at their configured (non-ZDR) defaults and ship
+# private content over non-ZDR models — exactly what --private-repo exists to
+# prevent (2026-08-07 finding, PR #60). The selector's error message already says
+# why, so surface it and stop. On a public repo a failed selector still degrades
+# to configured defaults (the seats have runnable defaults, so a review can land).
+if [ -n "$PRIVATE_FLAG" ]; then
+  python3 "<SCRIPT_DIR>/select-panel.py" \
+    --registry "$REGISTRY" \
+    --seats "<resolved-seat-list>" --deepest "<deepest-seat>" \
+    --min-effort "$MIN_EFFORT" --private-repo \
+    --installed-harnesses acpx,subagent \
+    --agents "$AGENT_MAP" > "<WORK_DIR>/panel.json" \
+    || { echo "❌ private repo: panel could not be filled with ZDR-capable models — stopping instead of routing private content over non-ZDR defaults" >&2; \
+         rm -f "<WORK_DIR>/panel.json"; \
+         echo "NO-SEATS-ZDR" > "<WORK_DIR>/no-seats.txt"; }
+else
+  python3 "<SCRIPT_DIR>/select-panel.py" \
+    --registry "$REGISTRY" \
+    --seats "<resolved-seat-list>" --deepest "<deepest-seat>" \
+    --min-effort "$MIN_EFFORT" \
+    --installed-harnesses acpx,subagent \
+    --agents "$AGENT_MAP" > "<WORK_DIR>/panel.json" \
+    || { echo "⚠️ selector failed for this panel" >&2; rm -f "<WORK_DIR>/panel.json"; }
+fi
 ```
 
-Then dispatch, passing the per-seat model/effort map when the selector wrote one:
+Then dispatch, passing the per-seat model/effort map when the selector wrote one.
+**Guard the private-repo stop:** if the selector wrote `<WORK_DIR>/no-seats.txt`, do NOT
+spawn anything — record the run as a no-seats result and stop (the selector already
+refused to route private content through non-ZDR defaults):
 
 ```bash
-ACPX_SEAT_MODELS="<WORK_DIR>/panel.json" \
-  bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
+if [ -f "<WORK_DIR>/no-seats.txt" ]; then
+  echo "❌ private repo: no ZDR-capable panel — no reviewers were dispatched (see selector error above)" >&2
+  # stop here; do not reach the dispatch below
+elif [ -f "<WORK_DIR>/panel.json" ]; then
+  ACPX_SEAT_MODELS="<WORK_DIR>/panel.json" \
+    bash "<SCRIPT_DIR>/run-parallel-acpx.sh" "~/.claude/debate-acpx.json" "<REVIEW_ID>" [reviewer1,reviewer2,...]
+fi
 ```
 
 `ACPX_SEAT_MODELS` is only set when `panel.json` was written. On selector failure a seat
 falls back to its configured agent default when it has one (Step 1a / Step 1f), and a
-`⚠️` warning names it. A changeset lens seat with **no** `reviewers` config entry has no
-default — it is skipped and reported as failed with the selector's reason, and if no
-seats remain, stop with an explicit no-seats result rather than spawning anything.
+`⚠️` warning names it — **except on a private repo, where a selector failure stops the
+run with a `NO-SEATS-ZDR` marker rather than falling back** (the fallback would route
+private content over non-ZDR models). A changeset lens seat with **no** `reviewers` config
+entry has no default — it is skipped and reported as failed with the selector's reason,
+and if no seats remain, stop with an explicit no-seats result rather than spawning anything.
 
 If a reviewer subset was specified, pass the comma-separated list as the third argument.
 Run this Bash call with `run_in_background: true` (do **not** block on it) — the runner

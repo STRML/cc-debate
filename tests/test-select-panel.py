@@ -273,6 +273,22 @@ check("private panel with a ZDR model for the seat still fills",
       a28c is not None and a28c["op"]["key"] == "ds_or" and a28c["op"]["route"] == 31501,
       f"got={[(s, m.get('key'), m.get('route')) for s, m in (a28c or {}).items()]} err={err28c}")
 
+# 29. proxy-transport models must never be assigned effective_effort=medium:
+#     invoke-acpx.sh's proxy branch maps only low/high/xhigh/max and fatals on
+#     medium (2026-08-07 finding, PR #60). medium clamps down to low.
+a29 = select_panel._effort_for_model({"effort_range": ["medium", "high", "max"],
+                                      "effort": "high", "transport": "proxy"}, "medium")
+check("proxy model medium effort clamps to low (invoke-acpx fatal)",
+      a29 == "low", f"got {a29}")
+a29b = select_panel._effort_for_model({"effort_range": ["low", "medium", "high"],
+                                       "effort": "medium", "transport": "proxy"}, "low")
+check("proxy model low effort stays low",
+      a29b == "low", f"got {a29b}")
+a29c = select_panel._effort_for_model({"effort_range": ["low", "medium", "high", "xhigh", "max"],
+                                       "effort": "high", "transport": "proxy"}, "high")
+check("proxy model high effort stays high",
+      a29c == "high", f"got {a29c}")
+
 print()
 print("PASS" if fails == 0 else f"FAIL ({fails})")
 sys.exit(0 if fails == 0 else 1)

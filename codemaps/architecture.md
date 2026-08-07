@@ -53,7 +53,7 @@ cc-debate/
 | Axis | Signal source | Consumed by |
 |------|--------------|-------------|
 | **Size** | `review-panel.js` classify: filesChanged/linesAdded, securityGrep, addsAbstraction, docsOnly | LENSES table buys/seats seats (`pickSeats()`) in changeset mode |
-| **Sensitivity (ZDR)** | `DEBATE_PRIVATE=1` env, `private_repos` config list, or `gh repo view --json isPrivate` → `--private-repo` on the selector | `select-panel.py` fail-closed on private repos: ZDR-only pool (route 31501 = openrouter); insufficient ZDR models → hard error, never a non-ZDR panel. Proxy branch forces `DS4_ZDR=1`. |
+| **Sensitivity (ZDR)** | `DEBATE_PRIVATE=1` env, `private_repos` config list, or `gh repo view --json isPrivate` → `--private-repo` on the selector | `select-panel.py` fail-closed on private repos: ZDR-only pool (route 31501 = openrouter); insufficient ZDR models, or a seat no ZDR model can fill → hard error, never a non-ZDR panel. `run.md` honors that by **stopping the dispatch** (`NO-SEATS-ZDR` marker) rather than falling back to config defaults — the fallback would route private content over non-ZDR models. Private also requires the `--agents` map (it is load-bearing for ZDR correctness). Proxy branch forces `DS4_ZDR=1`. |
 | **Difficulty** | classify shape → `--min-effort` tier (linesAdded≥300 or securitySensitive→xhigh, ≥150/addsAbstraction→high, ≥50→medium, else low) | selector's `_tier_for` per-seat effort scaling |
 
 Changeset mode sizes seats from the diff; plan mode uses the config's personas.

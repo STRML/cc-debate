@@ -75,7 +75,15 @@ def _effort_for_model(m, tier):
     choices = _effort_choices(m)
     tier_rank = RANK.get(tier, RANK["medium"])
     at_or_below = [e for e in choices if RANK[e] <= tier_rank]
-    return max(at_or_below, key=lambda e: RANK[e]) if at_or_below else choices[0]
+    eff = max(at_or_below, key=lambda e: RANK[e]) if at_or_below else choices[0]
+    # Proxy transport (cc-ds4 routes) maps effort to a ds4-* sentinel that only
+    # supports low/high/xhigh/max — invoke-acpx.sh fatals on 'medium'. Clamp
+    # 'medium' down to 'low' (the highest supported value at or below it) so a
+    # proxy seat on a shallow depth tier does not die at spawn (2026-08-07
+    # finding, PR #60).
+    if m.get("transport") == "proxy" and eff == "medium":
+        return "low"
+    return eff
 
 def _effective_cost(m, eff):
     """cost_per_task scaled by effort WITHOUT double-counting: the registry's
@@ -317,6 +325,17 @@ def main():
         # caller that dropped --agents hears it.
         sys.stderr.write("⚠️ no --agents map — per-seat provider feasibility is not enforced; "
                          "a seat may be assigned a model its agent cannot run\n")
+    if a.private_repo and not agents:
+        # On a private repo the agents map is load-bearing for ZDR correctness:
+        # it is what guarantees a seat only gets a ZDR-capable model its agent can
+        # actually run. Without it the selector may hand a seat a ZDR model the
+        # agent cannot execute (or none at all), and the run falls back to a
+        # non-ZDR default. Hard-fail rather than silently weaken the constraint
+        # (2026-08-07 finding, PR #60).
+        print(json.dumps({"error": "private repo requires --agents <seat=agent,...>: without the "
+                          "per-seat agent map the ZDR hard constraint cannot be enforced — "
+                          "rejecting to avoid routing private content through non-ZDR defaults"}))
+        sys.exit(1)
     reg = json.load(open(a.registry))
     assignment, err, nlabs = pick(reg, seats, deepest, installed, a.min_effort,
                                   private=a.private_repo, agents=agents)
