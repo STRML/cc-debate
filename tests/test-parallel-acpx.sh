@@ -948,10 +948,12 @@ EOF
   echo "$out" | grep -q "will run at its configured default" \
     || { rm -rf "$work_dir" "$tmp_dir"; return 1; }   # guard must emit the degrade message
 
-  # Seat must still spawn (exit file present, code 0) and reach acpx WITHOUT --model.
+  # Seat must still spawn (exit file present, code 0) and reach acpx WITHOUT --model
+  # or the selected effort (both are cleared so the config default governs).
   [ -f "$work_dir/alpha-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
   [ "$(cat "$work_dir/alpha-exit.txt")" = "0" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
   grep -q -- "--model" "$acpx_log" && { rm -rf "$work_dir" "$tmp_dir"; return 1; }   # no model forwarded
+  grep -q -- "reasoning_effort" "$acpx_log" && { rm -rf "$work_dir" "$tmp_dir"; return 1; }   # no selected effort either
   [ -s "$acpx_log" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }                 # acpx was invoked
 
   rm -rf "$work_dir" "$tmp_dir"

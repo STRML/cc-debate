@@ -332,24 +332,34 @@ AGENT_MAP=$(jq -r '[.reviewers | to_entries[] | "\(.key)=\(.value.agent // "")"]
 # prevent (2026-08-07 finding, PR #60). The selector's error message already says
 # why, so surface it and stop. On a public repo a failed selector still degrades
 # to configured defaults (the seats have runnable defaults, so a review can land).
+# The selector writes its JSON result (or, on failure, its error) to stdout. Capturing
+# straight into panel.json then deleting it on failure would discard the detailed reason
+# (missing seat / ZDR), so capture to a temp file, and on failure echo the error to stderr
+# before removing panel.json.
+_SELECTOR_OUT="<WORK_DIR>/selector-out.json"
 if [ -n "$PRIVATE_FLAG" ]; then
   python3 "<SCRIPT_DIR>/select-panel.py" \
     --registry "$REGISTRY" \
     --seats "<resolved-seat-list>" --deepest "<deepest-seat>" \
     --min-effort "$MIN_EFFORT" --private-repo \
     --installed-harnesses acpx,subagent \
-    --agents "$AGENT_MAP" > "<WORK_DIR>/panel.json" \
+    --agents "$AGENT_MAP" > "$_SELECTOR_OUT" \
     || { echo "❌ private repo: panel could not be filled with ZDR-capable models — stopping instead of routing private content over non-ZDR defaults" >&2; \
-         rm -f "<WORK_DIR>/panel.json"; \
+         echo "  selector error: $(cat "$_SELECTOR_OUT")" >&2; \
+         rm -f "$_SELECTOR_OUT" "<WORK_DIR>/panel.json"; \
          echo "NO-SEATS-ZDR" > "<WORK_DIR>/no-seats.txt"; }
+  [ -f "$_SELECTOR_OUT" ] && mv "$_SELECTOR_OUT" "<WORK_DIR>/panel.json"
 else
   python3 "<SCRIPT_DIR>/select-panel.py" \
     --registry "$REGISTRY" \
     --seats "<resolved-seat-list>" --deepest "<deepest-seat>" \
     --min-effort "$MIN_EFFORT" \
     --installed-harnesses acpx,subagent \
-    --agents "$AGENT_MAP" > "<WORK_DIR>/panel.json" \
-    || { echo "⚠️ selector failed for this panel" >&2; rm -f "<WORK_DIR>/panel.json"; }
+    --agents "$AGENT_MAP" > "$_SELECTOR_OUT" \
+    || { echo "⚠️ selector failed for this panel" >&2; \
+         echo "  selector error: $(cat "$_SELECTOR_OUT")" >&2; \
+         rm -f "$_SELECTOR_OUT" "<WORK_DIR>/panel.json"; }
+  [ -f "$_SELECTOR_OUT" ] && mv "$_SELECTOR_OUT" "<WORK_DIR>/panel.json"
 fi
 ```
 
