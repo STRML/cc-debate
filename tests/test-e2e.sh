@@ -51,8 +51,14 @@ test_dispatch_writes_reviews(){
 test_dispatch_passes_selected_model(){
   local wd out seats seats_csv review_id work_dir acpx_log
   wd=$(mktemp -d); trap 'rm -rf "$wd"' EXIT
+  # Constrain the panel to what a codex seat can run (2026-08-06: the selector
+  # otherwise hands pentester glm-5.2 — a zai model — which the runner's
+  # feasibility guard now correctly refuses to send to codex, and the test's
+  # "did it reach codex with -m" assertion fails).
   out=$(python3 scripts/select-panel.py --registry hermes/templates/debate-models.json \
-    --seats simplifier,operator,pentester --deepest pentester --installed-harnesses acpx 2>/dev/null)
+    --seats simplifier,operator,pentester --deepest pentester \
+    --installed-harnesses acpx \
+    --agents simplifier=codex,operator=codex,pentester=codex 2>/dev/null)
   echo "$out" > "$wd/panel.json"
   seats_csv=$(echo "$out" | python3 -c "import sys,json;print(','.join(sorted(json.load(sys.stdin)['seats'])))")
   seats=$(echo "$seats_csv" | tr ',' ' ')
@@ -79,7 +85,35 @@ PY
   trap - EXIT; rm -rf "$wd"
 }
 
-# 5. isolation flags without --sandbox fail loudly instead of silently running
+# 5. selector with --agents: each seat's assigned model must be runnable by the
+#    seat's configured agent (2026-08-06 4-of-6 dead panel regression — the
+#    selector used to hand claude-opus-5 / gemini / glm to a codex seat).
+test_selector_agents_feasibility(){
+  local out
+  out=$(python3 scripts/select-panel.py \
+    --registry hermes/templates/debate-models.json \
+    --seats executor,antigravity --deepest executor \
+    --min-effort xhigh \
+    --installed-harnesses acpx,subagent \
+    --agents executor=codex,antigravity=antigravity 2>/dev/null)
+  echo "$out" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for seat, m in d['seats'].items():
+    agent = 'codex' if seat == 'executor' else 'antigravity'
+    # subagent-harness models run as Agent teammates (any seat); acpx models must
+    # match the agent's provider lock.
+    if m['harness'] == 'subagent':
+        continue
+    if agent == 'codex' and m['provider'] != 'openai':
+        sys.exit('executor got non-openai model: %s' % m['model_id'])
+    if agent == 'antigravity' and m['provider'] != 'google':
+        sys.exit('antigravity got non-google model: %s' % m['model_id'])
+print('ok: per-seat agent feasibility holds')
+"
+}
+
+# 6. isolation flags without --sandbox fail loudly instead of silently running
 # unsandboxed (F4).
 test_isolation_flags_require_sandbox(){
   local wd err
@@ -119,6 +153,7 @@ run "python unit suites green" test_py_suites
 run "selector yields valid unique panel" test_selector_cli
 run "dispatch writes per-seat verdicts" test_dispatch_writes_reviews
 run "dispatch passes selected model to acpx" test_dispatch_passes_selected_model
+run "selector --agents keeps per-seat feasibility" test_selector_agents_feasibility
 run "isolation flags require --sandbox" test_isolation_flags_require_sandbox
 rm -f "$SCRIPT_DIR/acpx" "$SCRIPT_DIR/agy" "$SCRIPT_DIR/claude" "$SCRIPT_DIR/codex"
 echo ""

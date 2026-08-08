@@ -9,9 +9,10 @@
 - `templates/debate-models.json` — model registry seed (model + price/cost_per_task +
   strengths + effort + harness + repo_aware + family/lab + available).
 - `../scripts/select-panel.py` — pick the model mix for the seats (diversity/completeness/
-  effort/budget/harness). Emits a per-seat `effective_effort` (depth-tiered from the deepest
-  seat down, capped to the model's `effort_range`) and an effort-scaled `effective_cost`;
-  under `--max-cost` it degrades effort monotonically, shallowest seats first.
+  effort/harness, plus `--agents <seat=agent,...>` per-seat provider feasibility). Emits a
+  per-seat `effective_effort` (depth-tiered from the deepest seat down, capped to the model's
+  `effort_range`) and an effort-scaled `effective_cost`; effort tiering is the only cost
+  control (the old `--max-cost` budget is gone).
 - `../scripts/refresh-models.py` — the refresh path for registry metrics. Pulls the
   Artificial Analysis Intelligence Index (via a mirror of artificialanalysis.ai) and
   LMArena human-preference Elo (a new `elo` field). ADDS capability tags to `strengths`

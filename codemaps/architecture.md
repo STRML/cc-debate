@@ -53,13 +53,23 @@ cc-debate/
 | Axis | Signal source | Consumed by |
 |------|--------------|-------------|
 | **Size** | `review-panel.js` classify: filesChanged/linesAdded, securityGrep, addsAbstraction, docsOnly | LENSES table buys/seats seats (`pickSeats()`) in changeset mode |
-| **Sensitivity (ZDR)** | `DEBATE_PRIVATE=1` env, `private_repos` config list, or `gh repo view --json isPrivate` → `--private-repo` on the selector | `select-panel.py` fail-closed on private repos: ZDR-only pool (route 31501 = openrouter); insufficient ZDR models → hard error, never a non-ZDR panel. Proxy branch forces `DS4_ZDR=1`. |
+| **Sensitivity (ZDR)** | `DEBATE_PRIVATE=1` env, `private_repos` config list, or `gh repo view --json isPrivate` → `--private-repo` on the selector | `select-panel.py` fail-closed on private repos: ZDR-only pool (route 31501 = openrouter); insufficient ZDR models, or a seat no ZDR model can fill → hard error, never a non-ZDR panel. `run.md` honors that by **stopping the dispatch** (`NO-SEATS-ZDR` marker) rather than falling back to config defaults — the fallback would route private content over non-ZDR models. Private also requires the `--agents` map (it is load-bearing for ZDR correctness). Proxy branch forces `DS4_ZDR=1`. |
 | **Difficulty** | classify shape → `--min-effort` tier (linesAdded≥300 or securitySensitive→xhigh, ≥150/addsAbstraction→high, ≥50→medium, else low) | selector's `_tier_for` per-seat effort scaling |
 
 Changeset mode sizes seats from the diff; plan mode uses the config's personas.
 Explicit selectors (preset name / reviewer subset) override lens seat-picking but
 classify still runs to measure. The selector assigns model+effort per seat; a seat
-with no assignment falls back to its configured agent default.
+with no assignment falls back to its configured agent default (non-private runs
+only — on a private repo a seat no agent can fill fails the panel closed rather
+than degrade to a non-ZDR default). The selector is **agent-aware**:
+`--agents <seat=agent,...>` (derived from the config) constrains each direct
+seat to models its agent can actually run — a codex seat gets OpenAI models
+only, an antigravity seat Google only, an `opus` seat Anthropic models only.
+Proxy transport is the exception: it only lands on an `opus` seat and carries its
+own provider (deepseek/zai/...), bypassing the anthropic lock. Without the map
+the selector fills for lab diversity and hands claude-opus-5 / gemini / glm to
+the local Codex CLI, which refuses them at spawn (2026-08-06: 4 of 6 panel seats
+dead).
 
 ## Two Execution Modes
 
@@ -83,7 +93,7 @@ Reviewers run through `invoke-acpx.sh`, which wraps timeout handling, config res
 
 Codex with `EFFORT` set runs `codex exec --ephemeral -m <model> -c model_reasoning_effort=<level> -s read-only -o <outfile> -` directly (acpx cannot pass `model_reasoning_effort`; effort auto-scaling #31 Q2). A non-codex seat with `EFFORT` logs the fallback and runs at its default.
 
-Reviewer configuration (agent name, timeout, system prompt) is stored in `~/.claude/debate-acpx.json`. The panel selector's per-seat model and effort reach the child as `MODEL`/`EFFORT` env vars via `run-parallel-acpx.sh`; each falls back to the config's `model`/`effort` when the selector does not supply one, so a run that skips the selector still honors the seat's configured defaults. The selector also forwards `transport: proxy` + `route` per seat, which routes the child to the cc-ds4 proxy (`claude --print --model ds4-<eff>` with `ANTHROPIC_BASE_URL=http://127.0.0.1:<route>`) — this is how a DeepSeek seat gets its effort honored and how ZDR (route 31501) is enforced on private repos. `select-panel.py` takes `--registry`, `--seats`, `--deepest`, `--installed-harnesses`, `--min-effort`, `--private-repo`; the hard `--max-cost` budget path was removed (effort tiering is the only cost lever).
+Reviewer configuration (agent name, timeout, system prompt) is stored in `~/.claude/debate-acpx.json`. The panel selector's per-seat model and effort reach the child as `MODEL`/`EFFORT` env vars via `run-parallel-acpx.sh`; each falls back to the config's `model`/`effort` when the selector does not supply one, so a run that skips the selector still honors the seat's configured defaults. The selector also forwards `transport: proxy` + `route` per seat, which routes the child to the cc-ds4 proxy (`claude --print --model ds4-<eff>` with `ANTHROPIC_BASE_URL=http://127.0.0.1:<route>`) — this is how a DeepSeek seat gets its effort honored and how ZDR (route 31501) is enforced on private repos. `select-panel.py` takes `--registry`, `--seats`, `--deepest`, `--installed-harnesses`, `--min-effort`, `--private-repo`, and `--agents <seat=agent,...>` (per-seat provider feasibility, derived from the config's `.reviewers[].agent`); the hard `--max-cost` budget path was removed (effort tiering is the only cost lever).
 
 ## Delivery — file-based for every reviewer (v2.6.0)
 

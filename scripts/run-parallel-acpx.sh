@@ -319,7 +319,64 @@ for NAME in "${REVIEWERS[@]}"; do
       31501|31502) ;;
       *) echo "[debate] $NAME: proxy transport with invalid route '${CHILD_ROUTE:-}' — skipping" >&2; continue ;;
     esac
-    INVOKE_ENV+=("PROXY_ROUTE=${CHILD_ROUTE}")
+    # The proxy branch in invoke-acpx.sh lives inside `if [ "$AGENT" = "opus" ]`,
+    # so a proxy model on any other agent would have PROXY_ROUTE ignored and the
+    # model_id forwarded to the wrong CLI. Fail loud here rather than let a
+    # drifted panel.json or config send a deepseek model to codex.
+    if [ "$AGENT" != "opus" ]; then
+      # Degrade to the seat's configured default (same policy as the provider
+      # mismatch below): a drifted panel must not silently lose a seat.
+      echo "[debate] $NAME: model on proxy transport (route ${CHILD_ROUTE}) needs an 'opus' seat, agent is '$AGENT' — clearing selected model; seat will run at its configured default" >&2
+      CHILD_MODEL=""
+      CHILD_EFFORT=""
+      CHILD_TRANSPORT=""
+      INVOKE_ENV+=("MODEL=" "EFFORT=")
+    else
+      INVOKE_ENV+=("PROXY_ROUTE=${CHILD_ROUTE}")
+    fi
+  fi
+
+  # Provider-feasibility backstop (mirrors the selector's --agents constraint).
+  # The registry's harness names a dispatch class, not an agent, so this checks
+  # the model's provider against the agent's lock. Normally the selector already
+  # prevented an infeasible assignment; this catches a hand-edited panel.json or
+  # a config change between selection and spawn so it degrades to the seat's
+  # default with a message instead of a 4-of-6 dead panel.
+  # Provider-feasibility only applies to a map that carries provider — the full
+  # select-panel.py output always does. A flat {seat: model_id} map has none:
+  # the caller pinned the model explicitly, so the runner has nothing to verify
+  # against and must pass it through rather than invent a provider.
+  CHILD_PROVIDER=$(jq -r --arg s "$NAME" '
+    if type == "object" and has("seats") then .seats[$s].provider
+    else empty end // empty' "$SEAT_MODELS" 2>/dev/null || true)
+  # Proxy transport already validated the agent (opus) above — a proxy model's
+  # provider (deepseek/zai/...) must NOT be run against the agent's provider
+  # lock, or every non-Anthropic cc-ds4 model on an opus seat would be rejected.
+  if [ -n "${CHILD_MODEL:-}" ] && [ -n "$CHILD_PROVIDER" ] && \
+     [ "${CHILD_TRANSPORT:-}" != "proxy" ]; then
+    # Reset per seat: a locked agent whose provider check PASSES never reassigns
+    # SKIP_PROVIDER (the `||` short-circuits), so a stale value from an earlier
+    # skipped seat would otherwise skip a runnable one.
+    SKIP_PROVIDER=""
+    case "$AGENT" in
+      codex)        [ "$CHILD_PROVIDER" = "openai" ] || SKIP_PROVIDER="codex only runs openai models (got $CHILD_PROVIDER)" ;;
+      antigravity)  [ "$CHILD_PROVIDER" = "google" ] || SKIP_PROVIDER="antigravity only runs google models (got $CHILD_PROVIDER)" ;;
+      opus|claude)  [ "$CHILD_PROVIDER" = "anthropic" ] || SKIP_PROVIDER="$AGENT only runs anthropic models (got $CHILD_PROVIDER)" ;;
+      *) SKIP_PROVIDER="" ;;   # flexible agent (opencode, custom wrappers) — no lock
+    esac
+    if [ -n "${SKIP_PROVIDER:-}" ]; then
+      # Degrade to the seat's configured default, don't skip: the message below
+      # promises the seat still runs, and `continue` would silently lose it
+      # (CR finding, PR #60). Clear the selected model/effort so invoke-acpx.sh
+      # falls back to the config's .model/.effort, and the PROXY_ROUTE from a
+      # non-proxy check must not survive either.
+      echo "[debate] $NAME: model ${CHILD_MODEL:-<none>} is not runnable by agent $AGENT — $SKIP_PROVIDER — clearing selected model; seat will run at its configured default" >&2
+      CHILD_MODEL=""
+      CHILD_EFFORT=""
+      unset PROXY_ROUTE
+      INVOKE_ENV+=("MODEL=" "EFFORT=")
+      INVOKE_ENV+=("PROXY_ROUTE=")
+    fi
   fi
   nohup env "${INVOKE_ENV[@]}" \
     bash "$SCRIPT_DIR/invoke-acpx.sh" "$CONFIG_FILE" "$WORK_DIR" "$NAME" "$TIMEOUT" \
