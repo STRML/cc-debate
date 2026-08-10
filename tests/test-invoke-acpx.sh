@@ -821,13 +821,17 @@ test_blank_output_does_not_log_review_received() {
   rm -rf "$work_dir"
 }
 
-# A review containing only raw control bytes is empty: a bare ESC, BEL, and the
-# C1-range openers (0x9B/0x9C/0x9D) that [:cntrl:] under LC_ALL=C would leave in
-# place. A terminal reset with no payload (ESC[0m) is the same class: its only
-# printable bytes are the sequence's own parameters, which is not a review.
+# A review containing only raw control bytes is empty: a bare ESC or BEL, and a
+# terminal reset with no payload (ESC[0m) whose only printable bytes are the
+# sequence's own parameters — none of which is a review.
+#
+# Bare C1 bytes (0x9B/0x9C/0x9D) are deliberately NOT in this list: they are
+# ambiguous with UTF-8 continuation bytes (Cyrillic Н is D0 9D, where 0x9D is a
+# continuation), and stripping them to treat a lone C1 as blank would mangle
+# real non-Latin reviews. A bare C1 counts as content, matching main.
 test_control_bytes_only_response_is_empty() {
   local work_dir config combo
-  for combo in '\033' '\007' '\033\007' '\233' '\234' '\235' '\033[0m'; do
+  for combo in '\033' '\007' '\033\007' '\033[0m'; do
     work_dir=$(setup_work_dir)
     config=$(setup_config "$work_dir")
 
@@ -916,9 +920,14 @@ test_colon_sgr_only_response_is_empty() {
 
 # A review needs no ASCII at all. Testing for [[:alnum:]] under LC_ALL=C threw away
 # every review written in a non-Latin script and reported the seat as failed.
+#
+# The scripts deliberately include codepoints whose UTF-8 continuation bytes fall
+# in the C1 range 0x80-0x9F (Cyrillic Н = D0 9D, and 'Ошибка' has continuations
+# 0x9E/0x88/0x88). A C1-byte strip would delete those bytes, so the strip must
+# leave the delivered review intact AND still judge it content.
 test_non_latin_review_is_not_empty() {
-  local work_dir config script
-  for script in '\345\220\214\346\204\217\343\200\202' '\320\236\321\210\320\270\320\261\320\272\320\260'; do
+  local work_dir config script stripped
+  for script in '\345\220\214\346\204\217\343\200\202' '\320\235' '\320\236\321\210\320\270\320\261\320\272\320\260'; do
     work_dir=$(setup_work_dir)
     config=$(setup_config "$work_dir")
 
@@ -929,6 +938,14 @@ test_non_latin_review_is_not_empty() {
 
     if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
       echo "  a non-Latin review was discarded as empty"
+      rm -rf "$work_dir"; return 1
+    fi
+    # Byte-integrity: the strip stage must not delete UTF-8 continuation bytes.
+    # Feed the same script through the escape/control strip and require every
+    # byte to survive — a C1-byte strip would drop the 0x80-0x9F continuations.
+    stripped="$(printf "$script" | LC_ALL=C tr -d '[:cntrl:]')"
+    if [ "$stripped" != "$(printf "$script")" ]; then
+      echo "  the control-byte strip corrupted a non-Latin review"
       rm -rf "$work_dir"; return 1
     fi
     rm -rf "$work_dir"

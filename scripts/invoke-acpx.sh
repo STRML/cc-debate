@@ -369,12 +369,14 @@ fi
 # punctuation. Formatting is: terminal escape sequences (whose *parameters* are
 # printable — a bare ESC[0m reset or ESC[2J clear has no content, and an OSC
 # hyperlink's URL is framing, not a review), zero-width characters and BOM, and
-# any leftover C0/C1 control bytes. A control-byte strip alone is not enough: the
-# sequence openers are control bytes but the params and payloads are not, so a
-# turn that emits only a reset would read as content. The content test is
-# deliberately permissive: it must not require ASCII alphanumerics, or a review
-# written in a non-Latin script (Chinese, Cyrillic, ...) would be thrown away as
-# blank.
+# any leftover C0/DEL control bytes. The C1 range (0x80-0x9F) is deliberately NOT
+# stripped: in valid UTF-8 those bytes are continuation bytes, so deleting them
+# would mangle every non-Latin review (Cyrillic Н is D0 9D — 0x9D is both a bare
+# C1 byte and a continuation). A lone C1 byte outside a complete sequence is
+# malformed output, not a realistic blank turn, and counting it as content
+# matches main. The content test is deliberately permissive: it must not require
+# ASCII alphanumerics, or a review written in a non-Latin script (Chinese,
+# Cyrillic, ...) would be thrown away as blank.
 output_is_blank() {
   local file="$1" esc bel st csi osc zwsp zwnj zwj wj bom
   [ -s "$file" ] || return 0
@@ -385,14 +387,17 @@ output_is_blank() {
   st=$(printf '\234'); csi=$(printf '\233'); osc=$(printf '\235')
   zwsp=$(printf '\342\200\213'); zwnj=$(printf '\342\200\214')
   zwj=$(printf '\342\200\215'); wj=$(printf '\342\201\240'); bom=$(printf '\357\273\277')
+  # grep -c, not grep -q: -q exits at its first match and SIGPIPEs the still-
+  # writing sed, which under pipefail false-blanks a large review. -c reads the
+  # whole stream, so no stage dies mid-pipe; its exit 0/1 carries the verdict.
   ! LC_ALL=C sed -E "
         s/(${esc}\]|${osc})[^${bel}${st}${esc}]*(${bel}|${st}|${esc}\\\\)//g
         s/(${esc}\[|${csi})[0-9;:?<=>]*[ -\/]*[@-~]//g
         s/${esc}[()][A-Za-z0-9]//g
         s/${zwsp}//g; s/${zwnj}//g; s/${zwj}//g; s/${wj}//g; s/${bom}//g
       " "$file" \
-    | LC_ALL=C tr -d '\000-\037\177\200-\237' \
-    | LC_ALL=C grep -q '[^[:space:][:punct:]]'
+    | LC_ALL=C tr -d '[:cntrl:]' \
+    | LC_ALL=C grep -c '[^[:space:][:punct:]]' > /dev/null
 }
 
 # Runs one reviewer invocation, retrying while it comes back blank.
