@@ -1,5 +1,38 @@
 # Changelog
 
+## [3.2.0] — 2026-08-10 (the parallel runner waits on its own children)
+
+- **`run-parallel-acpx.sh` stopped disowning the reviewers it spawns.** It spawned each
+  seat with `nohup … & disown`, which throws away the exit status the kernel is already
+  holding, and then rebuilt that status out of files. Each layer under it patched a hole
+  the layer above had opened: the child published its code to `<name>-exit.txt`; the
+  parent polled every 2s for that file to appear; polling on file *existence* meant an
+  exit file could be read while still empty, so `publish_exit` wrote to a temp name and
+  renamed; a killed child never published at all, so an EXIT trap synthesized one; that
+  trap saw `$?` of 0 on a harness kill and published a success for a seat with no review,
+  so a line was added to rewrite 0 to 1. And with no `wait` there was no way to bound the
+  run except a second timeout in the parent — `timeout × (retries + 1) + 60` — kept in
+  step by hand with the one already inside the child. When the two disagreed, both were
+  quiet about it.
+
+  The runner now spawns each seat under `timeout -k 5 <that seat's budget>` and waits on
+  it. Same arithmetic, applied to the process it actually bounds. Gone: the poll loop,
+  `POLL_INTERVAL`, the SIGTERM-then-SIGKILL ladder, and reading the exit codes back off
+  disk to aggregate them.
+
+- **A hung seat dies on its own clock instead of taking the panel with it.** The global
+  `MAX_WAIT` killed every reviewer at once when the slowest blew its budget, so one
+  wedged seat threw away the reviews that had already landed. Each seat is bounded
+  individually now, and the seats that answered are still counted.
+
+- **`<name>-exit.txt` is still written for a seat killed before its EXIT trap ran.** The
+  orchestrator reads that file, and after a hard kill the wait status is the only account
+  of what happened — so the runner writes it there.
+
+- **`POLL_MAX_WAIT` is rejected when it is not a positive integer.** It reaches `timeout`
+  as a duration now, and a malformed one would make `timeout` refuse to run and take
+  every seat down instantly. A bad value warns and falls back to the computed budget.
+
 ## [3.1.3] — 2026-08-04 (a reviewer's configured `effort` is honored again)
 
 - **`effort` in a reviewer config is load-bearing again, and now decides transport.**

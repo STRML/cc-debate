@@ -1,6 +1,7 @@
 #!/bin/bash
 # Parallel runner for acpx-based debate reviews.
-# Reads reviewer list from config, spawns invoke-acpx.sh for each, polls for completion.
+# Reads reviewer list from config, spawns invoke-acpx.sh for each under `timeout`,
+# and waits on them.
 #
 # Usage: run-parallel-acpx.sh <config_file> <REVIEW_ID> [reviewer1,reviewer2,...]
 #   config_file — path to JSON config (e.g. ~/.claude/debate-acpx.json)
@@ -42,7 +43,7 @@ else
 fi
 
 # Note: $() triggers permission prompts in Claude Code, but this script runs
-# via nohup/disown outside the sandbox, so it's fine here.
+# via nohup outside the sandbox, so it's fine here.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Per-seat model selection (F1). The panel selector picks a model per seat;
@@ -218,7 +219,32 @@ fi
 
 EXIT_FILES=()
 PIDS=()
+NAMES=()
+BUDGETS=()
 MAX_REVIEWER_BUDGET=0
+
+# Each reviewer is spawned under `timeout`, so the seat that hangs is the seat that
+# dies — the runner does not need a supervisor of its own. Without the binary there
+# is no outer bound here; invoke-acpx.sh degrades the same way and says so.
+TIMEOUT_BIN=""
+if command -v timeout > /dev/null 2>&1; then
+  TIMEOUT_BIN="timeout"
+elif command -v gtimeout > /dev/null 2>&1; then
+  TIMEOUT_BIN="gtimeout"
+else
+  echo "[debate] WARNING: neither timeout nor gtimeout found — reviewers run without an outer time bound." >&2
+  echo "  Install: brew install coreutils (macOS) / apt install coreutils (Linux)" >&2
+fi
+
+# POLL_MAX_WAIT overrides the computed per-reviewer budget. It is compared and
+# reported as a number of seconds and handed to `timeout` as a duration, so a
+# malformed value has to be rejected here rather than passed down: `timeout` exits
+# 125 without running anything on a duration it cannot parse, which kills the seat
+# at spawn instead of bounding it. Same rule the `timeout` config key already gets.
+if [ -n "${POLL_MAX_WAIT:-}" ] && { ! [[ "$POLL_MAX_WAIT" =~ ^[0-9]+$ ]] || [ "$POLL_MAX_WAIT" -le 0 ]; }; then
+  echo "[debate] Ignoring invalid POLL_MAX_WAIT '$POLL_MAX_WAIT' — using the computed budget." >&2
+  POLL_MAX_WAIT=""
+fi
 
 # The model map is load-bearing: a truncated or hand-edited file silently falling
 # back to defaults is how a panel loses its model selection without anyone
@@ -267,6 +293,16 @@ for NAME in "${REVIEWERS[@]}"; do
   WORST=$(( TIMEOUT * (RETRIES + 1) ))
   if [ "$WORST" -gt "$MAX_REVIEWER_BUDGET" ]; then
     MAX_REVIEWER_BUDGET="$WORST"
+  fi
+  # The seat's own bound: its worst case plus a startup buffer. invoke-acpx.sh puts
+  # `timeout` around each agent call, but not around everything it does — an
+  # `acpx sessions ensure` that hangs is outside that. This is the bound on the whole
+  # child. -k: a child that ignores SIGTERM gets SIGKILL 5s later, so one wedged seat
+  # cannot hold the panel open.
+  CHILD_BUDGET="${POLL_MAX_WAIT:-$(( WORST + 60 ))}"
+  SPAWN_PREFIX=()
+  if [ -n "$TIMEOUT_BIN" ]; then
+    SPAWN_PREFIX=("$TIMEOUT_BIN" -k 5 "$CHILD_BUDGET")
   fi
 
   echo "[debate] Spawning $NAME ($AGENT, timeout: ${TIMEOUT}s)..." >&2
@@ -378,11 +414,16 @@ for NAME in "${REVIEWERS[@]}"; do
       INVOKE_ENV+=("PROXY_ROUTE=")
     fi
   fi
-  nohup env "${INVOKE_ENV[@]}" \
+  # No `disown`. The kernel already reports when a child finishes and how it exited;
+  # disowning threw that away and left the runner to rebuild it out of files and a
+  # poll loop. Expand SPAWN_PREFIX bash-3.2-safely — "${arr[@]}" of an empty array
+  # under `set -u` is an error on the bash macOS ships.
+  nohup "${SPAWN_PREFIX[@]+"${SPAWN_PREFIX[@]}"}" env "${INVOKE_ENV[@]}" \
     bash "$SCRIPT_DIR/invoke-acpx.sh" "$CONFIG_FILE" "$WORK_DIR" "$NAME" "$TIMEOUT" \
     > /dev/null 2>"$WORK_DIR/${NAME}-invoke.log" &
   PIDS+=("$!")
-  disown "${PIDS[$((${#PIDS[@]}-1))]}"
+  NAMES+=("$NAME")
+  BUDGETS+=("$CHILD_BUDGET")
   EXIT_FILES+=("$WORK_DIR/${NAME}-exit.txt")
 done
 
@@ -391,15 +432,10 @@ if [ ${#EXIT_FILES[@]} -eq 0 ]; then
   exit 1
 fi
 
-echo "[debate] Waiting for ${#EXIT_FILES[@]} reviewer(s)..." >&2
-
-POLL_INTERVAL=2
-ELAPSED=0
-# MAX_WAIT must be >= the worst-case budget of the slowest reviewer + a startup
-# buffer. Worst case is timeout × (retries + 1), not timeout: a reviewer that
-# retries a blank turn spends the full timeout on every attempt, and budgeting for
-# one attempt would SIGTERM it mid-retry.
-# Override with POLL_MAX_WAIT env var.
+# The longest any seat may now run: the slowest seat's own budget. Worst case is
+# timeout × (retries + 1), not timeout — a reviewer that retries a blank turn spends
+# the full timeout on every attempt, and budgeting one attempt kills it mid-retry.
+# Override per seat with POLL_MAX_WAIT.
 if [ -n "${POLL_MAX_WAIT:-}" ]; then
   MAX_WAIT="$POLL_MAX_WAIT"
 elif [ "$MAX_REVIEWER_BUDGET" -gt 0 ]; then
@@ -408,62 +444,37 @@ else
   MAX_WAIT=450
 fi
 
-echo "[debate] Waiting for reviewers (max wait: ${MAX_WAIT}s)..." >&2
+echo "[debate] Waiting for ${#PIDS[@]} reviewer(s) (max wait: ${MAX_WAIT}s)..." >&2
 
-while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
-  DONE=0
-  for f in "${EXIT_FILES[@]}"; do
-    [ -f "$f" ] && DONE=$((DONE + 1))
-  done
-  if [ "$DONE" -ge "${#EXIT_FILES[@]}" ]; then
-    break
-  fi
-  sleep "$POLL_INTERVAL"
-  ELAPSED=$((ELAPSED + POLL_INTERVAL))
-done
-
-if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
-  echo "[debate] Timed out waiting for reviewers after ${MAX_WAIT}s. Sending SIGTERM..." >&2
-  for pid in "${PIDS[@]}"; do
-    kill "$pid" 2>/dev/null || true
-  done
-  # Give child EXIT traps ~3s to write exit files before escalating
-  local_wait=0
-  while [ "$local_wait" -lt 3 ]; do
-    alive=0
-    for pid in "${PIDS[@]}"; do
-      kill -0 "$pid" 2>/dev/null && alive=1
-    done
-    [ "$alive" -eq 0 ] && break
-    sleep 1
-    local_wait=$(( local_wait + 1 ))
-  done
-  # Escalate any survivors to SIGKILL
-  for pid in "${PIDS[@]}"; do
-    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-  done
-  rm -f "$WORK_DIR"/*-prompt.txt
-  exit 1
-else
-  echo "[debate] All reviewers complete (${ELAPSED}s elapsed)." >&2
-fi
-
-# Aggregate exit codes
+START=$SECONDS
 WORST_EXIT=0
-for f in "${EXIT_FILES[@]}"; do
-  if [ -f "$f" ]; then
-    CODE=$(cat "$f" 2>/dev/null)
-    if [[ "$CODE" =~ ^[0-9]+$ ]]; then
-      [ "$CODE" -gt "$WORST_EXIT" ] && WORST_EXIT="$CODE"
-    else
-      echo "[debate] Warning: non-numeric exit code in $f: '$CODE'" >&2
-      [ "$WORST_EXIT" -eq 0 ] && WORST_EXIT=1
-    fi
-  else
-    WORST_EXIT=1
+
+for i in "${!PIDS[@]}"; do
+  wait "${PIDS[$i]}"
+  CODE=$?
+  NAME="${NAMES[$i]}"
+  EXIT_FILE="${EXIT_FILES[$i]}"
+
+  # 124 covers both clocks and does not say which one fired: the agent's own
+  # `timeout` inside invoke-acpx.sh publishes 124 and exits 124, and the outer
+  # `timeout` here returns 124 when it kills the whole child. The seat is out of time
+  # either way — print its outer budget so an operator can tell them apart.
+  if [ "$CODE" -eq 124 ]; then
+    echo "[debate] $NAME timed out (seat budget ${BUDGETS[$i]}s)." >&2
   fi
+
+  # invoke-acpx.sh publishes its own code and exits with the same one, so the file
+  # and the wait status agree on every normal path. They diverge only when the child
+  # was killed hard enough that its EXIT trap never ran — then the wait status is the
+  # only account of what happened, and it goes in the file the orchestrator reads.
+  if [ ! -f "$EXIT_FILE" ]; then
+    printf '%s\n' "$CODE" > "$EXIT_FILE"
+  fi
+
+  [ "$CODE" -gt "$WORST_EXIT" ] && WORST_EXIT="$CODE"
 done
 
 rm -f "$WORK_DIR"/*-prompt.txt
 
+echo "[debate] All reviewers finished ($(( SECONDS - START ))s elapsed)." >&2
 exit "$WORST_EXIT"

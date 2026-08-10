@@ -620,10 +620,10 @@ You're not signed in. Run `agy` once in a terminal to complete the browser OAuth
 The `OPENCODE_CONFIG_CONTENT` env var may not be taking effect. Verify your `start.sh` exports it correctly and that the model ID matches what's on openrouter.ai/models exactly.
 
 **Reviews time out**
-Increase the `timeout` value for that reviewer in `~/.claude/debate-acpx.json`. Prompt-only seats are usually fine at 240-300s. A repo-aware `codex` seat is not: one spent 271s on a single-file, 13-line diff, so the shipped sample gives those seats 900s. The parallel runner sets `MAX_WAIT = max(timeout × (retries + 1)) + 60s`, which is 1860s for the shipped panel — raising a seat costs nothing until its own worst case passes every other seat's.
+Increase the `timeout` value for that reviewer in `~/.claude/debate-acpx.json`. Prompt-only seats are usually fine at 240-300s. A repo-aware `codex` seat is not: one spent 271s on a single-file, 13-line diff, so the shipped sample gives those seats 900s. The parallel runner gives each seat its own bound — `timeout × (retries + 1) + 60s`, which is 1860s for the slowest seat on the shipped panel — so raising one seat's timeout costs the other seats nothing.
 
 **`timeout: command not found` warning**
-Install GNU coreutils: `brew install coreutils` (macOS). Reviews still run without it — the per-reviewer hard kill just won't be enforced.
+Install GNU coreutils: `brew install coreutils` (macOS). Reviews still run without it, but nothing bounds them — neither the per-agent hard kill nor the runner's per-seat budget — so a wedged reviewer will hold the panel open until you interrupt it.
 
 ---
 

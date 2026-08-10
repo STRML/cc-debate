@@ -409,7 +409,7 @@ can't parse.
 locks to `~/.acpx/queues/<id>.lock` on every invocation. Without
 `Write(~/.acpx/**)` in the settings allowlist, the Claude Code sandbox blocks
 those writes and reviewer subprocesses exit 144. Because they're spawned via
-`nohup`/`disown`, the sandbox-blocked-write error never surfaces as a prompt;
+`nohup`, the sandbox-blocked-write error never surfaces as a prompt;
 `/debate:all` just reports "all reviewers failed" with no obvious cause.
 Printing the snippet and trusting the user to copy it is how this regression
 keeps recurring.

@@ -392,7 +392,7 @@ internally blocks until all reviewers complete or time out, and you'll get a tas
 notification when it exits. This keeps the call from serializing the skeptic subagents
 behind it.
 
-**Run this Bash call with `dangerouslyDisableSandbox: true`.** The external reviewers need to escape the Claude Code sandbox: the `antigravity` reviewer writes its project config to `~/.gemini/config/projects/` before it can open a conversation (a sandboxed write there fails with `operation not permitted`, and `agy` then reports `failed to send message: no active conversation` — surfacing as an empty/garbage review), and codex/gemini need outbound network the seatbelt policy otherwise blocks. `nohup`/`disown` inside the runner dodge permission prompts but do **not** lift the seatbelt sandbox — only launching the call unsandboxed does. (Alternative if you prefer not to disable the sandbox per-call: add `~/.gemini` to the write allowlist in `settings.json`.)
+**Run this Bash call with `dangerouslyDisableSandbox: true`.** The external reviewers need to escape the Claude Code sandbox: the `antigravity` reviewer writes its project config to `~/.gemini/config/projects/` before it can open a conversation (a sandboxed write there fails with `operation not permitted`, and `agy` then reports `failed to send message: no active conversation` — surfacing as an empty/garbage review), and codex/gemini need outbound network the seatbelt policy otherwise blocks. `nohup` inside the runner dodges permission prompts but do **not** lift the seatbelt sandbox — only launching the call unsandboxed does. (Alternative if you prefer not to disable the sandbox per-call: add `~/.gemini` to the write allowlist in `settings.json`.)
 
 ### 2a-prime. Subagent-harness seats (Agent)
 
@@ -1139,7 +1139,7 @@ abort Cleanup path above):
   preset with `"claude_reviewers": {}` runs a Codex/Gemini-only panel — the "tokens are
   tight" case. Preset-key matches take precedence over reviewer-name matches (Step 1a).
 - **Security:** Never inline plan content or AI output in shell strings — use files.
-- **Timeout:** Each reviewer's timeout is in the config. The runner adds a 60s buffer to MAX_WAIT automatically.
+- **Timeout:** Each reviewer's timeout is in the config. The runner spawns every seat under `timeout` at that seat's own budget — `timeout × (retries + 1) + 60s` — so a hung seat dies on its own clock instead of holding the panel open. `POLL_MAX_WAIT` overrides the budget.
 - **Graceful degradation:** If a reviewer fails, skip it in synthesis. If all fail, return UNDECIDED.
 - **Debate guard:** Skip debate if fewer than 2 reviewers succeeded.
 - **Read fully, never grep-skim.** You MUST read each reviewer's complete output with the Read tool. Never use `grep -A`, `grep -iE`, or keyword extraction to summarize reviews — this reliably misses 50%+ of findings. If you catch yourself reaching for grep on reviewer output, stop and use Read instead.
