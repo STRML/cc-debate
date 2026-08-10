@@ -365,28 +365,34 @@ fi
 # message leaves 1 byte behind — which `[ -s ]` reports as non-empty, and the round
 # records a blank review as a success.
 #
-# Strip every control byte and zero-width character, then require a character that
-# is neither whitespace nor punctuation. The character test is deliberately
-# permissive: it must not require ASCII alphanumerics, or a review written in a
-# non-Latin script (Chinese, Cyrillic, ...) would be thrown away as blank.
-#
-# Stripping control bytes instead of parsing terminal escape sequences is a
-# deliberate trade. The old implementation matched the CSI/OSC *grammar* — colon-
-# form SGR, hyperlink payloads, every opener/terminator combination — because a
-# lone escape sequence contains no whitespace or punctuation and would otherwise
-# read as content. Blankness is only ever judged after a transport has written the
-# output file: acpx captures agent stdout, the exit-code paths replace failure
-# dumps with a plain error message, and the direct CLIs strip PTY noise before
-# this runs. So a leftover control byte means nothing; every terminal sequence is
-# made of them, and blanket removal cannot misclassify a real review.
+# Strip formatting, then require a character that is neither whitespace nor
+# punctuation. Formatting is: terminal escape sequences (whose *parameters* are
+# printable — a bare ESC[0m reset or ESC[2J clear has no content, and an OSC
+# hyperlink's URL is framing, not a review), zero-width characters and BOM, and
+# any leftover C0/C1 control bytes. A control-byte strip alone is not enough: the
+# sequence openers are control bytes but the params and payloads are not, so a
+# turn that emits only a reset would read as content. The content test is
+# deliberately permissive: it must not require ASCII alphanumerics, or a review
+# written in a non-Latin script (Chinese, Cyrillic, ...) would be thrown away as
+# blank.
 output_is_blank() {
-  local file="$1"
+  local file="$1" esc bel st csi osc zwsp zwnj zwj wj bom
   [ -s "$file" ] || return 0
-  # Delete C0 (0x00-0x1F), DEL (0x7F), and C1 (0x80-0x9F). LC_ALL=C keeps byte
-  # semantics stable across locales, and tr(1) needs no escape-sequence grammar.
-  # [:cntrl:] would not be enough: under LC_ALL=C it stops at 0x7F, leaving the
-  # C1 range - the 8-bit OSC/CSI openers (0x9B/0x9C/0x9D) - in place.
-  ! LC_ALL=C tr -d '\000-\037\177\200-\237' < "$file" | LC_ALL=C grep -q '[^[:space:][:punct:]]'
+  # Byte literals built with printf, not \x escapes: BSD sed rejects \x outright.
+  # OSC opens with ESC] or 0x9D and ends at BEL, 0x9C, or ESC-backslash, freely
+  # mixed; CSI opens with ESC[ or 0x9B and covers colon-form SGR.
+  esc=$(printf '\033'); bel=$(printf '\007')
+  st=$(printf '\234'); csi=$(printf '\233'); osc=$(printf '\235')
+  zwsp=$(printf '\342\200\213'); zwnj=$(printf '\342\200\214')
+  zwj=$(printf '\342\200\215'); wj=$(printf '\342\201\240'); bom=$(printf '\357\273\277')
+  ! LC_ALL=C sed -E "
+        s/(${esc}\]|${osc})[^${bel}${st}${esc}]*(${bel}|${st}|${esc}\\\\)//g
+        s/(${esc}\[|${csi})[0-9;:?<=>]*[ -\/]*[@-~]//g
+        s/${esc}[()][A-Za-z0-9]//g
+        s/${zwsp}//g; s/${zwnj}//g; s/${zwj}//g; s/${wj}//g; s/${bom}//g
+      " "$file" \
+    | LC_ALL=C tr -d '\000-\037\177\200-\237' \
+    | LC_ALL=C grep -q '[^[:space:][:punct:]]'
 }
 
 # Runs one reviewer invocation, retrying while it comes back blank.

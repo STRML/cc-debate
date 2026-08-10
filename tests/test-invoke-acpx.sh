@@ -821,16 +821,13 @@ test_blank_output_does_not_log_review_received() {
   rm -rf "$work_dir"
 }
 
-# A review containing only raw control bytes is empty: ESC, BEL and friends
-# carry no content and must not read as one. This covers the C0 range, DEL,
-# and the C1 range - the 8-bit OSC/CSI openers (0x9B/0x9C/0x9D) that [:cntrl:]
-# under LC_ALL=C would leave in place. With the grammar parser gone, any
-# printable residue of a mangled sequence is treated as content (see
-# test_escape_payload_is_treated_as_content) — but a lone control byte is
-# stripped entirely.
+# A review containing only raw control bytes is empty: a bare ESC, BEL, and the
+# C1-range openers (0x9B/0x9C/0x9D) that [:cntrl:] under LC_ALL=C would leave in
+# place. A terminal reset with no payload (ESC[0m) is the same class: its only
+# printable bytes are the sequence's own parameters, which is not a review.
 test_control_bytes_only_response_is_empty() {
   local work_dir config combo
-  for combo in '\033' '\007' '\033\007' '\233' '\234' '\235'; do
+  for combo in '\033' '\007' '\033\007' '\233' '\234' '\235' '\033[0m'; do
     work_dir=$(setup_work_dir)
     config=$(setup_config "$work_dir")
 
@@ -840,18 +837,18 @@ test_control_bytes_only_response_is_empty() {
       bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
 
     if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
-      echo "  control bytes accepted as a delivered review"
+      echo "  control bytes / bare reset accepted as a delivered review"
       rm -rf "$work_dir"; return 1
     fi
     rm -rf "$work_dir"
   done
 }
 
-# An escape sequence whose payload carries printable bytes IS content now. The
-# old parser stripped the OSC grammar specifically because a hyperlink escape is
-# full of alphanumerics — but the payload is exactly what the reviewer said, so
-# blanket control-stripping leaves it intact and the check must not discard it.
-test_escape_payload_is_treated_as_content() {
+# A lone OSC hyperlink escape is framing, not a review — the payload is a URL
+# the agent wrapped, never the agent's message. Openers (ESC] and 0x9D) and
+# terminators (BEL, 0x9C, ESC-backslash) combine freely, including mixed
+# 7-bit/8-bit, so every combination is checked here.
+test_osc_all_encodings_count_as_empty() {
   local work_dir config combo n=0
   for combo in \
     '\033]8;;https://example.invalid/x\007' \
@@ -868,10 +865,10 @@ test_escape_payload_is_treated_as_content() {
     SKIP_SESSION_CHECK=1 \
     PATH="$SCRIPT_DIR:$PATH" \
     MOCK_ACPX_RESPONSE="$(printf "$combo")" \
-      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
 
-    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
-      echo "  OSC encoding $n with a payload was discarded as empty"
+    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
+      echo "  OSC encoding $n was accepted as a delivered review"
       rm -rf "$work_dir"; return 1
     fi
     rm -rf "$work_dir"
@@ -895,10 +892,10 @@ test_review_containing_a_url_still_passes() {
   rm -rf "$work_dir"
 }
 
-# A colon-form SGR colour carries printable digits, so it is content under the
-# blanket strip — a mangled sequence can no longer masquerade as a delivered
-# review, and its digits are not evidence of silence to be parsed away.
-test_colon_sgr_is_treated_as_content() {
+# A colon-form SGR colour is a control sequence whose parameter bytes include ':'.
+# The CSI rule must cover it: the printable digits are the sequence's own
+# parameters, not content, so a bare colour setup counts as blank.
+test_colon_sgr_only_response_is_empty() {
   local work_dir config combo
   for combo in '\033[38:2::255:0:0m' '\23338:2::255:0:0m'; do
     work_dir=$(setup_work_dir)
@@ -907,10 +904,10 @@ test_colon_sgr_is_treated_as_content() {
     SKIP_SESSION_CHECK=1 \
     PATH="$SCRIPT_DIR:$PATH" \
     MOCK_ACPX_RESPONSE="$(printf "$combo")" \
-      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
 
-    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
-      echo "  colon-form SGR discarded as empty"
+    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
+      echo "  colon-form SGR accepted as a delivered review"
       rm -rf "$work_dir"; return 1
     fi
     rm -rf "$work_dir"
@@ -1642,9 +1639,9 @@ run_test "retries 0 disables retry" test_retries_zero_disables_retry
 run_test "hard failure is not retried" test_hard_failure_is_not_retried
 run_test "default allows one retry" test_default_allows_one_retry
 run_test "control-bytes-only response counts as empty" test_control_bytes_only_response_is_empty
-run_test "escape payload is treated as content" test_escape_payload_is_treated_as_content
+run_test "OSC in every encoding counts as empty" test_osc_all_encodings_count_as_empty
 run_test "review containing a URL still passes" test_review_containing_a_url_still_passes
-run_test "colon-form SGR is treated as content" test_colon_sgr_is_treated_as_content
+run_test "colon-form SGR counts as empty" test_colon_sgr_only_response_is_empty
 run_test "non-Latin review is not empty" test_non_latin_review_is_not_empty
 run_test "punctuation-only response counts as empty" test_punctuation_only_response_is_empty
 run_test "whitespace-only response counts as empty" test_whitespace_only_response_is_empty
