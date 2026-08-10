@@ -849,17 +849,15 @@ test_control_bytes_only_response_is_empty() {
 }
 
 # A lone OSC hyperlink escape is framing, not a review — the payload is a URL
-# the agent wrapped, never the agent's message. Openers are 7-bit only (ESC]);
-# terminators (BEL, 0x9C, ESC-backslash) combine freely, so every terminator is
-# checked here. 8-bit openers (0x9D) are NOT in the list: 0x9D is a UTF-8
-# continuation byte in real text, so matching it as an opener would delete
-# non-Latin reviews.
+# the agent wrapped, never the agent's message. Openers and terminators are
+# 7-bit only (ESC] ... BEL | ESC-backslash): 0x9D and 0x9C are UTF-8
+# continuation bytes, so matching them as opener/terminator would eat non-Latin
+# text ('ESC]8;;М' would terminate at М's 0x9C continuation).
 test_osc_all_encodings_count_as_empty() {
   local work_dir config combo n=0
   for combo in \
     '\033]8;;https://example.invalid/x\007' \
-    '\033]8;;https://example.invalid/x\033\\' \
-    '\033]8;;https://example.invalid/x\234'
+    '\033]8;;https://example.invalid/x\033\\'
   do
     n=$((n + 1))
     work_dir=$(setup_work_dir)
@@ -879,13 +877,14 @@ test_osc_all_encodings_count_as_empty() {
 }
 
 # A review in a script whose UTF-8 continuation bytes collide with C1 escape
-# bytes must survive byte-identical. The escape openers are 7-bit only for
-# exactly this reason: Л = D0 9B, Н = D0 9D, and 0x9B/0x9D are continuation bytes
-# (Cyrillic М's second byte is 0x9C, an OSC terminator, so 'Н М' also exercises
-# the terminator path).
+# bytes must survive byte-identical. The escape grammar is 7-bit only for exactly
+# this reason: Л = D0 9B, Н = D0 9D, М = D0 9C — and 0x9B/0x9D/0x9C are
+# continuation bytes. The 'ESC]8;;М' case opens a real OSC that runs straight
+# into a 0x9C continuation, which must NOT terminate the sequence and eat the
+# text after it.
 test_non_latin_with_c1_colliding_bytes_not_mangled() {
   local work_dir config
-  for combo in '\320\233 VERDICT: APPROVED' '\320\235 \320\234'; do
+  for combo in '\320\233 VERDICT: APPROVED' '\320\235 \320\234' '\033]8;;\320\234'; do
     work_dir=$(setup_work_dir)
     config=$(setup_config "$work_dir")
 
@@ -968,12 +967,16 @@ test_non_latin_review_is_not_empty() {
       echo "  a non-Latin review was discarded as empty"
       rm -rf "$work_dir"; return 1
     fi
-    # Byte-integrity through the same escape/control strip the function runs. A
-    # strip that deleted UTF-8 continuation bytes (a C1-byte strip, or a C1
-    # escape-opener that ate the following text) would change the bytes here.
+    # Byte-integrity through the same escape/control strip the function runs
+    # (all production rules: ESC] OSC, ESC[ CSI, ESC-two-char, zero-width/BOM,
+    # then C0/DEL). A strip that deleted UTF-8 continuation bytes, or used a C1
+    # escape byte as opener/terminator, would change the bytes here.
     stripped="$(printf "$script" | LC_ALL=C sed -E "
-        s/($(printf '\033')\])[^$(printf '\007')$(printf '\234')$(printf '\033')]*($(printf '\007')|$(printf '\234')|$(printf '\033')\\\\)//g
+        s/($(printf '\033')\])[^$(printf '\007')$(printf '\033')]*($(printf '\007')|$(printf '\033')\\\\)//g
         s/($(printf '\033')\[)[0-9;:?<=>]*[ -\/]*[@-~]//g
+        s/$(printf '\033')[()][A-Za-z0-9]//g
+        s/$(printf '\342\200\213')//g; s/$(printf '\342\200\214')//g; s/$(printf '\342\200\215')//g
+        s/$(printf '\342\201\240')//g; s/$(printf '\357\273\277')//g
       " | LC_ALL=C tr -d '[:cntrl:]')"
     if [ "$stripped" != "$(printf "$script")" ]; then
       echo "  the blank-check strip corrupted a non-Latin review"
