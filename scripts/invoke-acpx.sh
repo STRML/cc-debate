@@ -378,9 +378,10 @@ fi
 # continuation and eat text after it; NOT excluding it from the payload lets the
 # greedy [^BEL ESC]* bridge across it and eat text up to a later BEL. Excluding
 # it from the payload (with BEL and ESC-\ as terminators) does neither: a match
-# stops at a 0x9C, which survives as content. An 8-bit OSC terminated by 0x9C is
-# not stripped, and an un-terminated ESC] leaves residual text — both malformed
-# output, counted as content, matching main. The content test is deliberately
+# stops at a 0x9C, which survives as content. An 8-bit OSC terminated by 0x9C, a
+# bare C1 byte, and an un-terminated ESC] all leave residual text that counts as
+# content — malformed output, which main (whose grammar strips only complete
+# sequences) also counted as content. The content test is deliberately
 # permissive: it must not require ASCII alphanumerics, or a review written in a
 # non-Latin script (Chinese, Cyrillic, ...) would be thrown away as blank.
 output_is_blank() {
@@ -398,7 +399,7 @@ output_is_blank() {
   # whole stream, so no stage dies mid-pipe; its exit 0/1 carries the verdict.
   ! LC_ALL=C sed -E "
         s/(${esc}\])[^${bel}${st}${esc}]*(${bel}|${esc}\\\\)//g
-        s/(${esc}\[)[0-9;:?<=>]*[ -\/]*[@-~]//g
+        s/(${esc}\[)[0-9;:?<=>]*[ -/]*[@-~]//g
         s/${esc}[()][A-Za-z0-9]//g
         s/${zwsp}//g; s/${zwnj}//g; s/${zwj}//g; s/${wj}//g; s/${bom}//g
       " "$file" \

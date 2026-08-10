@@ -897,6 +897,27 @@ test_osc_terminated_by_0x9c_counts_as_content() {
   rm -rf "$work_dir"
 }
 
+# A response that is only a bare C1 byte counts as content: C1 bytes are UTF-8
+# continuation bytes, are not stripped, and are not whitespace/punctuation. This
+# matches main, whose grammar stripped only complete escape sequences.
+test_bare_c1_counts_as_content() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\235')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+
+  if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
+    echo "  a bare C1 byte was discarded as empty"
+    rm -rf "$work_dir"; return 1
+  fi
+
+  rm -rf "$work_dir"
+}
+
 # A review in a script whose UTF-8 continuation bytes collide with C1 escape
 # bytes must survive byte-identical. The escape grammar is 7-bit only for exactly
 # this reason: Л = D0 9B, Н = D0 9D, М = D0 9C — and 0x9B/0x9D/0x9C are
@@ -1715,6 +1736,7 @@ run_test "default allows one retry" test_default_allows_one_retry
 run_test "control-bytes-only response counts as empty" test_control_bytes_only_response_is_empty
 run_test "OSC in every encoding counts as empty" test_osc_all_encodings_count_as_empty
 run_test "OSC terminated by 0x9C counts as content" test_osc_terminated_by_0x9c_counts_as_content
+run_test "bare C1 byte counts as content" test_bare_c1_counts_as_content
 run_test "review containing a URL still passes" test_review_containing_a_url_still_passes
 run_test "colon-form SGR counts as empty" test_colon_sgr_only_response_is_empty
 run_test "non-Latin review is not empty" test_non_latin_review_is_not_empty
