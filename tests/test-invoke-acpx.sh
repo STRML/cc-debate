@@ -822,13 +822,15 @@ test_blank_output_does_not_log_review_received() {
 }
 
 # A review containing only raw control bytes is empty: ESC, BEL and friends
-# carry no content and must not read as one. With the grammar parser gone,
-# any printable residue of a mangled sequence is treated as content (see
+# carry no content and must not read as one. This covers the C0 range, DEL,
+# and the C1 range - the 8-bit OSC/CSI openers (0x9B/0x9C/0x9D) that [:cntrl:]
+# under LC_ALL=C would leave in place. With the grammar parser gone, any
+# printable residue of a mangled sequence is treated as content (see
 # test_escape_payload_is_treated_as_content) — but a lone control byte is
 # stripped entirely.
 test_control_bytes_only_response_is_empty() {
   local work_dir config combo
-  for combo in '\033' '\007' '\033\007'; do
+  for combo in '\033' '\007' '\033\007' '\233' '\234' '\235'; do
     work_dir=$(setup_work_dir)
     config=$(setup_config "$work_dir")
 

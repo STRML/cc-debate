@@ -382,9 +382,11 @@ fi
 output_is_blank() {
   local file="$1"
   [ -s "$file" ] || return 0
-  # LC_ALL=C keeps byte semantics stable across locales, and tr(1) needs no
-  # escape-sequence grammar.
-  ! LC_ALL=C tr -d '[:cntrl:]' < "$file" | LC_ALL=C grep -q '[^[:space:][:punct:]]'
+  # Delete C0 (0x00-0x1F), DEL (0x7F), and C1 (0x80-0x9F). LC_ALL=C keeps byte
+  # semantics stable across locales, and tr(1) needs no escape-sequence grammar.
+  # [:cntrl:] would not be enough: under LC_ALL=C it stops at 0x7F, leaving the
+  # C1 range - the 8-bit OSC/CSI openers (0x9B/0x9C/0x9D) - in place.
+  ! LC_ALL=C tr -d '\000-\037\177\200-\237' < "$file" | LC_ALL=C grep -q '[^[:space:][:punct:]]'
 }
 
 # Runs one reviewer invocation, retrying while it comes back blank.
