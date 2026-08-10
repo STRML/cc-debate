@@ -223,15 +223,37 @@ NAMES=()
 BUDGETS=()
 MAX_REVIEWER_BUDGET=0
 
+# Signal a seat and everything under it. A seat is a chain — this runner spawns
+# `timeout` (or, with no timeout binary, `env`), which runs `bash invoke-acpx.sh`,
+# which runs the agent — and signalling only the pid we happen to hold reaps the
+# wrapper while the agent keeps running with ppid 1, still burning tokens after the
+# panel reports it dead. `pgrep -P` lists direct children only, so recurse, and
+# signal children before their parent so nothing is reparented out of reach.
+kill_tree() {
+  local sig="$1" pid="$2" child
+  for child in $(pgrep -P "$pid" 2> /dev/null); do
+    kill_tree "$sig" "$child"
+  done
+  kill "-$sig" "$pid" 2> /dev/null
+}
+
+kill_all_seats() {
+  local sig="$1" p
+  for p in "${PIDS[@]}"; do
+    kill_tree "$sig" "$p"
+  done
+}
+
 # Each reviewer is spawned under `timeout`, so the seat that hangs is the seat that
 # dies and the runner needs no supervisor of its own. Stock macOS ships neither
 # `timeout` nor `gtimeout` (GitHub's macos runners included), and that is the common
 # case, not an exotic one — so the fallback below is a real code path, not a courtesy.
 #
-# The `-x` test is load-bearing, not defensive noise: bash 3.2 — which IS /bin/bash on
-# stock macOS — resolves `command -v foo` to a PATH hit that is not executable, where
-# bash 5 skips it and keeps looking. Trusting that answer puts an unrunnable binary in
-# front of every seat and kills the whole panel with exec code 126 at spawn.
+# The `-x` test is not defensive noise: `command -v` reports the first PATH match
+# without checking the execute bit, on bash 3.2 and bash 5 alike. Verified with the
+# same probe name and PATH on 3.2.57 and 5.3.15, with and without a real executable
+# behind the dud — both return the dud. Trusting that answer puts an unrunnable
+# binary in front of every seat and kills the whole panel with exec code 126.
 TIMEOUT_BIN=""
 for _tb in timeout gtimeout; do
   _tb_path=$(command -v "$_tb" 2> /dev/null) || continue
@@ -241,15 +263,23 @@ for _tb in timeout gtimeout; do
   fi
 done
 unset _tb _tb_path
-# DEBATE_TIMEOUT_BIN overrides the probe: an explicit path, or `none` to force the
-# watchdog. Without it the fallback is reachable only on a host that happens to lack
-# coreutils, which leaves the path stock macOS actually takes untested everywhere
-# else — and PATH tricks cannot stand in, because bash 5 skips a non-executable hit
-# and finds the real binary behind it.
+# DEBATE_TIMEOUT_BIN pins the binary, or forces the watchdog fallback with `none`.
+# A PATH shim cannot stand in for this: `command -v` skips a non-executable entry
+# whenever a real binary exists behind it, so on any host with coreutils the shim is
+# ignored and the fallback stays untested. (It is only when NOTHING executable is on
+# PATH that `command -v` hands back the dud — which is the case the `-x` guard above
+# exists for.) An explicit path still has to pass `-x`, or pinning it would walk
+# straight back into the 126-at-spawn failure that guard just closed.
 case "${DEBATE_TIMEOUT_BIN:-}" in
   "")   ;;
   none) TIMEOUT_BIN="" ;;
-  *)    TIMEOUT_BIN="$DEBATE_TIMEOUT_BIN" ;;
+  *)
+    if [ -x "${DEBATE_TIMEOUT_BIN}" ]; then
+      TIMEOUT_BIN="$DEBATE_TIMEOUT_BIN"
+    else
+      echo "[debate] DEBATE_TIMEOUT_BIN='$DEBATE_TIMEOUT_BIN' is not executable — ignoring it." >&2
+    fi
+    ;;
 esac
 if [ -z "$TIMEOUT_BIN" ]; then
   echo "[debate] No usable timeout/gtimeout — bounding the panel with one watchdog instead of each seat." >&2
@@ -466,6 +496,13 @@ fi
 
 echo "[debate] Waiting for ${#PIDS[@]} reviewer(s) (max wait: ${MAX_WAIT}s)..." >&2
 
+# Under `timeout` a seat is its own process group, so a signal aimed at this runner's
+# group no longer reaches it — cancelling a debate would leave the reviewers running,
+# and a survivor from the cancelled round would later overwrite the next round's
+# review in the same work dir. Tear the seats down explicitly instead.
+trap 'kill_all_seats TERM; exit 130' INT
+trap 'kill_all_seats TERM; exit 143' TERM
+
 # Fallback bound for hosts with no `timeout` binary. One sleeping process for the
 # whole panel, not a poll loop and not per-seat: it is strictly the old global
 # MAX_WAIT behaviour, kept because stock macOS has no other bound and an unbounded
@@ -475,9 +512,9 @@ WATCHDOG_PID=""
 if [ -z "$TIMEOUT_BIN" ]; then
   (
     sleep "$MAX_WAIT"
-    kill "${PIDS[@]}" 2> /dev/null
+    kill_all_seats TERM
     sleep 5
-    kill -9 "${PIDS[@]}" 2> /dev/null
+    kill_all_seats KILL
   ) &
   WATCHDOG_PID=$!
 fi
@@ -504,19 +541,32 @@ for i in "${!PIDS[@]}"; do
   # and the wait status agree on every normal path. They diverge only when the child
   # was killed hard enough that its EXIT trap never ran — then the wait status is the
   # only account of what happened, and it goes in the file the orchestrator reads.
+  #
+  # 137/143 is written as 124. run.md documents 0/4/124/other, and a seat the
+  # watchdog killed for running past its budget IS the timeout case — writing the raw
+  # signal code would land it in "other" and send the orchestrator looking for an
+  # error that never happened.
   if [ ! -f "$EXIT_FILE" ]; then
-    printf '%s\n' "$CODE" > "$EXIT_FILE"
+    case "$CODE" in
+      137|143) printf '124\n' > "$EXIT_FILE" ;;
+      *)       printf '%s\n' "$CODE" > "$EXIT_FILE" ;;
+    esac
   fi
 
   [ "$CODE" -gt "$WORST_EXIT" ] && WORST_EXIT="$CODE"
 done
 
-# Disarm the watchdog. Its `sleep` is a child of the subshell, so killing the
-# subshell alone leaves the sleep orphaned until its budget runs out — kill the
-# children first, while the parent link still exists.
+trap - INT TERM
+
+# Disarm the watchdog. Order matters and is the opposite of the obvious one: killing
+# its `sleep` first is what the sleep is waiting for, so the subshell wakes and runs
+# its kill path on the way out. Kill the subshell first so that path can never run,
+# then clean up the sleep — whose pid has to be read before the parent link is gone,
+# because once the subshell dies it reparents to init and `pgrep -P` cannot find it.
 if [ -n "$WATCHDOG_PID" ]; then
-  pkill -P "$WATCHDOG_PID" 2> /dev/null
+  WATCHDOG_SLEEP=$(pgrep -P "$WATCHDOG_PID" 2> /dev/null)
   kill "$WATCHDOG_PID" 2> /dev/null
+  [ -n "$WATCHDOG_SLEEP" ] && kill $WATCHDOG_SLEEP 2> /dev/null
 fi
 
 rm -f "$WORK_DIR"/*-prompt.txt

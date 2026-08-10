@@ -35,12 +35,25 @@
   of what happened — so the runner writes it there.
 
 - **A non-executable `timeout` on PATH no longer kills every seat at spawn.** Both
-  scripts resolved the binary with a bare `command -v`, and bash 3.2 — which is
-  `/bin/bash` on stock macOS — answers that with a PATH hit it has not checked for the
-  execute bit, where bash 5 skips it and keeps looking. Acting on that answer prefixes
-  every agent call with something that cannot run, and the seat dies at exec with code
-  126, reading as a dead agent. Both resolvers now require `-x`. `DEBATE_TIMEOUT_BIN`
-  pins the binary, or forces the watchdog fallback when set to `none`.
+  scripts resolved the binary with a bare `command -v`, which reports the first PATH
+  match without checking the execute bit. Acting on that answer prefixes every agent
+  call with something that cannot run, and the seat dies at exec with code 126, reading
+  as a dead agent rather than a PATH problem. Both resolvers now require `-x`.
+
+- **Killing a seat kills the agent, not just the wrapper.** A seat is a chain — runner
+  to `timeout` to `bash invoke-acpx.sh` to the agent — and signalling only the pid the
+  runner holds reaped the wrapper while the agent kept running with ppid 1, still
+  spending tokens after the panel reported it dead. On a host with no `timeout` binary
+  nothing else would ever collect it. Teardown now walks the process tree, and the
+  runner traps INT/TERM to do the same on cancel: under `timeout` each seat is its own
+  process group, so a signal aimed at the runner's group no longer reaches it, and a
+  survivor of a cancelled round would otherwise finish later and overwrite the next
+  round's review in the same work dir.
+
+- **A watchdog-killed seat records 124, not a raw signal code.** `run.md` documents
+  `0/4/124/other`, and a seat killed for running past its budget is the timeout case;
+  writing 137 or 143 landed it in "other" and sent the orchestrator hunting an error
+  that never happened.
 
 - **`POLL_MAX_WAIT` is rejected when it is not a positive integer.** It reaches `timeout`
   as a duration now, and a malformed one would make `timeout` refuse to run and take

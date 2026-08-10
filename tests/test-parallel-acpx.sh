@@ -964,11 +964,14 @@ EOF
 # <name>-exit.txt, and a seat killed before its EXIT trap could run gets that file
 # written from the wait status instead.
 #
-# $1 (optional) "no-timeout": force the watchdog fallback via DEBATE_TIMEOUT_BIN.
-# Stock macOS ships no timeout binary, so that is the common path there, and it has
-# to be reachable on hosts that do have coreutils or it never gets tested. A PATH
-# shim cannot do this job: bash 5 skips a non-executable entry and finds the real
-# binary behind it, so the case would quietly test the wrong branch.
+# $1 (optional) "no-timeout": force the watchdog fallback with DEBATE_TIMEOUT_BIN=none,
+# which both the runner and invoke-acpx.sh honour — so this reproduces the pairing a
+# no-coreutils host actually runs (outer watchdog, no inner bound), not a hybrid.
+#
+# A PATH shim cannot do this job. Measured on bash 3.2.57 and 5.3.15 alike:
+# `command -v` skips a non-executable entry whenever a real binary sits behind it on
+# PATH, so on any host with coreutils the stub is ignored and this case would quietly
+# test the per-seat path instead.
 hung_reviewer_case() {
   local mode="${1:-}"
   local tmp_dir review_id work_dir out rc start elapsed
@@ -1021,6 +1024,65 @@ EOF
 
 test_hung_reviewer_dies_at_its_budget() { hung_reviewer_case; }
 test_hung_reviewer_bounded_without_timeout_binary() { hung_reviewer_case no-timeout; }
+
+# Killing the seat means killing the agent, not just the invoke-acpx.sh wrapper it
+# runs under. Signalling only the pid the runner holds reaps the wrapper and leaves
+# the agent running with ppid 1, still burning tokens after the panel reports it
+# dead — and on the watchdog path (no timeout binary) nothing else would ever
+# collect it. The mock writes its marker only if it outlived its delay, so the
+# passing condition is that the file never appears.
+test_seat_kill_reaches_the_agent_process() {
+  local tmp_dir review_id work_dir survived waited
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-tree"
+  work_dir=".tmp/ai-review-${review_id}"
+  survived="$tmp_dir/survived.txt"
+
+  cat > "$tmp_dir/config.json" << 'EOF'
+{
+  "reviewers": {
+    "alpha": { "agent": "codex", "timeout": 120, "retries": 0 }
+  }
+}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  # kill_tree walks the tree with `pgrep -P`, and some sandboxes deny process
+  # enumeration outright ("Cannot get process list"). There the walk cannot work and
+  # this would fail for a reason that has nothing to do with the code, so skip rather
+  # than report a red herring. CI and a normal shell both have it.
+  if ! pgrep -P $$ > /dev/null 2>&1 && ! pgrep -l init > /dev/null 2>&1; then
+    echo -n "(skipped: pgrep unavailable) " >&2
+    rm -rf "$work_dir" "$tmp_dir"
+    return 0
+  fi
+
+  # Watchdog path: no timeout binary, so the runner's own kill is the only thing
+  # standing between a wedged agent and forever.
+  PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT=3 \
+    DEBATE_TIMEOUT_BIN=none \
+    MOCK_ACPX_DELAY=12 MOCK_ACPX_SURVIVED_FILE="$survived" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" > /dev/null 2>&1
+
+  # Outlive the mock's delay: if the agent was left running it writes the marker at
+  # T+12s, well after the runner returned at its 3s budget.
+  waited=0
+  while [ "$waited" -lt 14 ]; do
+    sleep 2
+    waited=$(( waited + 2 ))
+    [ -f "$survived" ] && break
+  done
+
+  if [ -f "$survived" ]; then
+    echo "DIAG tree: agent survived the seat kill (marker written)" >&2
+    rm -rf "$work_dir" "$tmp_dir"
+    return 1
+  fi
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
 
 # POLL_MAX_WAIT is a `timeout` argument now, and `timeout` refuses to run at all on
 # a malformed duration — which would kill every seat instantly instead of ignoring
@@ -1099,6 +1161,7 @@ run_test "proxy opus seat not provider-locked" test_proxy_opus_provider_not_lock
 run_test "provider mismatch runs config default" test_provider_mismatch_runs_config_default
 run_test "hung reviewer dies at its budget" test_hung_reviewer_dies_at_its_budget
 run_test "hung reviewer bounded without a timeout binary" test_hung_reviewer_bounded_without_timeout_binary
+run_test "seat kill reaches the agent process" test_seat_kill_reaches_the_agent_process
 run_test "invalid POLL_MAX_WAIT ignored" test_invalid_poll_max_wait_ignored
 
 echo ""

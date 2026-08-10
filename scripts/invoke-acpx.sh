@@ -346,10 +346,10 @@ fi
 
 # --- Resolve timeout binary ---
 
-# The `-x` test matters on bash 3.2 (stock macOS /bin/bash): `command -v` there
-# resolves to a PATH hit that is not executable, where bash 5 skips it and keeps
-# looking. Prefixing the agent call with an unrunnable binary fails the seat at exec
-# with code 126 and reads as a dead agent. Same guard as run-parallel-acpx.sh.
+# `command -v` reports the first PATH match without checking the execute bit (bash
+# 3.2 and bash 5 alike), so prefixing the agent call with what it returns can fail
+# the seat at exec with code 126 and read as a dead agent. Same guard as
+# run-parallel-acpx.sh.
 TIMEOUT_BIN=""
 for _tb in timeout gtimeout; do
   _tb_path=$(command -v "$_tb" 2> /dev/null) || continue
@@ -359,6 +359,21 @@ for _tb in timeout gtimeout; do
   fi
 done
 unset _tb _tb_path
+# Honour the same pin/disable the runner does. Without this a seat spawned with the
+# runner's watchdog fallback would still find a working `timeout` one level down, so
+# the combination a no-coreutils host actually runs — outer watchdog, no inner bound
+# — could never be reproduced anywhere else.
+case "${DEBATE_TIMEOUT_BIN:-}" in
+  "")   ;;
+  none) TIMEOUT_BIN="" ;;
+  # An `[ -x ] && assign` one-liner would be a `set -e` landmine here: the compound
+  # returns 1 when the test fails, which kills the seat over an ignorable env var.
+  *)
+    if [ -x "${DEBATE_TIMEOUT_BIN}" ]; then
+      TIMEOUT_BIN="$DEBATE_TIMEOUT_BIN"
+    fi
+    ;;
+esac
 if [ -z "$TIMEOUT_BIN" ]; then
   echo "[$REVIEWER] WARNING: no usable timeout or gtimeout — running without timeout enforcement" >&2
   echo "  Install: brew install coreutils (macOS) / apt install coreutils (Linux)" >&2

@@ -5,6 +5,8 @@
 #   MOCK_ACPX_EXIT     — exit code (default: 0)
 #   MOCK_ACPX_RESPONSE — text to write to stdout (default: "Mock review. VERDICT: APPROVED")
 #   MOCK_ACPX_DELAY    — seconds to sleep before responding (default: 0)
+#   MOCK_ACPX_SURVIVED_FILE — written AFTER the delay; a test that kills this process
+#                             mid-delay asserts the file never appears (default: "")
 #   MOCK_ACPX_STDERR   — text to write to stderr (default: "")
 #   MOCK_ACPX_LOG      — file to append invocation args to (default: "")
 #
@@ -77,6 +79,13 @@ fi
 # Simulate delay
 if [ "$DELAY" -gt 0 ] 2>/dev/null; then
   sleep "$DELAY"
+fi
+
+# Survival marker. Written only if this process outlived its delay, which is how a
+# test tells "the runner killed the whole seat" from "the runner killed the wrapper
+# and left the agent running". Absence is the passing condition.
+if [ -n "${MOCK_ACPX_SURVIVED_FILE:-}" ]; then
+  echo "survived" > "$MOCK_ACPX_SURVIVED_FILE"
 fi
 
 # Simulate an agent that ends its first N turns without a final message. Real
