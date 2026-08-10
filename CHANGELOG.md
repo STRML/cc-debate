@@ -25,6 +25,11 @@
   wedged seat threw away the reviews that had already landed. Each seat is bounded
   individually now, and the seats that answered are still counted.
 
+  Per-seat bounds need a `timeout` binary, and stock macOS ships neither `timeout` nor
+  `gtimeout`. There the runner arms one watchdog for the whole panel at the slowest
+  seat's budget — the old global behaviour, kept deliberately, because dropping it would
+  leave the most common dev platform with nothing bounding a wedged reviewer.
+
 - **`<name>-exit.txt` is still written for a seat killed before its EXIT trap ran.** The
   orchestrator reads that file, and after a hard kill the wait status is the only account
   of what happened — so the runner writes it there.

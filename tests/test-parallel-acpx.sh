@@ -959,14 +959,19 @@ EOF
   rm -rf "$work_dir" "$tmp_dir"
 }
 
-# Each reviewer is spawned under `timeout`, so a seat that hangs dies at its own
-# budget instead of holding the panel until a global clock runs out. The seat is
-# still accounted for: the orchestrator reads <name>-exit.txt, and a seat killed
-# before its EXIT trap could run gets that file written from the wait status.
-test_hung_reviewer_dies_at_its_budget() {
-  local tmp_dir review_id work_dir out rc start elapsed
+# A wedged seat must come back at its budget rather than at the agent's own much
+# larger timeout, and it must still be accounted for: the orchestrator reads
+# <name>-exit.txt, and a seat killed before its EXIT trap could run gets that file
+# written from the wait status instead.
+#
+# $1 (optional) "no-timeout": hide timeout/gtimeout from the runner, exercising the
+# watchdog fallback. Stock macOS has no timeout binary, so that path is the common
+# one there and CI on macos-latest runs it for real.
+hung_reviewer_case() {
+  local mode="${1:-}"
+  local tmp_dir review_id work_dir out rc start elapsed shim=""
   tmp_dir=$(setup_env)
-  review_id="test-$(date +%s)-hang"
+  review_id="test-$(date +%s)-hang${mode:+-nt}"
   work_dir=".tmp/ai-review-${review_id}"
 
   cat > "$tmp_dir/config.json" << 'EOF'
@@ -980,23 +985,39 @@ EOF
   mkdir -p "$work_dir"
   echo "Test plan" > "$work_dir/plan.md"
 
+  # `command -v` consults PATH, so a shim directory holding non-executable stubs
+  # named timeout/gtimeout is enough to make the runner believe neither exists.
+  if [ "$mode" = "no-timeout" ]; then
+    shim=$(mktemp -d)
+    : > "$shim/timeout"; : > "$shim/gtimeout"
+    chmod 000 "$shim/timeout" "$shim/gtimeout"
+  fi
+
   start=$SECONDS
   rc=0
-  out=$(PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT=3 \
+  out=$(PATH="${shim:+$shim:}$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT=3 \
     MOCK_ACPX_DELAY=60 \
     bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>&1) || rc=$?
   elapsed=$(( SECONDS - start ))
 
+  local cleanup="$work_dir $tmp_dir $shim"
   # Back at the budget, not at the agent's own 120s timeout.
-  [ "$elapsed" -lt 30 ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
-  [ "$rc" -ne 0 ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
-  echo "$out" | grep -q "alpha timed out (seat budget 3s)" || {
-    echo "DIAG hung: $out" >&2; rm -rf "$work_dir" "$tmp_dir"; return 1; }
-  [ -f "$work_dir/alpha-exit.txt" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
-  [ "$(cat "$work_dir/alpha-exit.txt")" != "0" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ "$elapsed" -lt 30 ] || {
+    echo "DIAG hung($mode): took ${elapsed}s -- $out" >&2; rm -rf $cleanup; return 1; }
+  [ "$rc" -ne 0 ] || { echo "DIAG hung($mode): rc=0 -- $out" >&2; rm -rf $cleanup; return 1; }
+  # `timeout` reports 124, the watchdog reports a signal; both name the seat budget.
+  echo "$out" | grep -qE "alpha (timed out|was killed before it finished) \(seat budget 3s\)" || {
+    echo "DIAG hung($mode): $out" >&2; rm -rf $cleanup; return 1; }
+  [ -f "$work_dir/alpha-exit.txt" ] || {
+    echo "DIAG hung($mode): no exit file" >&2; rm -rf $cleanup; return 1; }
+  [ "$(cat "$work_dir/alpha-exit.txt")" != "0" ] || {
+    echo "DIAG hung($mode): exit file said 0" >&2; rm -rf $cleanup; return 1; }
 
-  rm -rf "$work_dir" "$tmp_dir"
+  rm -rf $cleanup
 }
+
+test_hung_reviewer_dies_at_its_budget() { hung_reviewer_case; }
+test_hung_reviewer_bounded_without_timeout_binary() { hung_reviewer_case no-timeout; }
 
 # POLL_MAX_WAIT is a `timeout` argument now, and `timeout` refuses to run at all on
 # a malformed duration — which would kill every seat instantly instead of ignoring
@@ -1074,6 +1095,7 @@ run_test "subagent harness seat skipped by this runner" test_subagent_seat_skipp
 run_test "proxy opus seat not provider-locked" test_proxy_opus_provider_not_locked
 run_test "provider mismatch runs config default" test_provider_mismatch_runs_config_default
 run_test "hung reviewer dies at its budget" test_hung_reviewer_dies_at_its_budget
+run_test "hung reviewer bounded without a timeout binary" test_hung_reviewer_bounded_without_timeout_binary
 run_test "invalid POLL_MAX_WAIT ignored" test_invalid_poll_max_wait_ignored
 
 echo ""

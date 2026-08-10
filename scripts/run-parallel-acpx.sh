@@ -224,16 +224,17 @@ BUDGETS=()
 MAX_REVIEWER_BUDGET=0
 
 # Each reviewer is spawned under `timeout`, so the seat that hangs is the seat that
-# dies — the runner does not need a supervisor of its own. Without the binary there
-# is no outer bound here; invoke-acpx.sh degrades the same way and says so.
+# dies and the runner needs no supervisor of its own. Stock macOS ships neither
+# `timeout` nor `gtimeout` (GitHub's macos runners included), and that is the common
+# case, not an exotic one — so the fallback below is a real code path, not a courtesy.
 TIMEOUT_BIN=""
 if command -v timeout > /dev/null 2>&1; then
   TIMEOUT_BIN="timeout"
 elif command -v gtimeout > /dev/null 2>&1; then
   TIMEOUT_BIN="gtimeout"
 else
-  echo "[debate] WARNING: neither timeout nor gtimeout found — reviewers run without an outer time bound." >&2
-  echo "  Install: brew install coreutils (macOS) / apt install coreutils (Linux)" >&2
+  echo "[debate] No timeout/gtimeout — bounding the panel with one watchdog instead of each seat." >&2
+  echo "  Install coreutils (brew install coreutils) for per-seat bounds." >&2
 fi
 
 # POLL_MAX_WAIT overrides the computed per-reviewer budget. It is compared and
@@ -446,6 +447,22 @@ fi
 
 echo "[debate] Waiting for ${#PIDS[@]} reviewer(s) (max wait: ${MAX_WAIT}s)..." >&2
 
+# Fallback bound for hosts with no `timeout` binary. One sleeping process for the
+# whole panel, not a poll loop and not per-seat: it is strictly the old global
+# MAX_WAIT behaviour, kept because stock macOS has no other bound and an unbounded
+# panel hangs the orchestrator. The seats keep their own budgets wherever `timeout`
+# exists, and this never arms there.
+WATCHDOG_PID=""
+if [ -z "$TIMEOUT_BIN" ]; then
+  (
+    sleep "$MAX_WAIT"
+    kill "${PIDS[@]}" 2> /dev/null
+    sleep 5
+    kill -9 "${PIDS[@]}" 2> /dev/null
+  ) &
+  WATCHDOG_PID=$!
+fi
+
 START=$SECONDS
 WORST_EXIT=0
 
@@ -455,13 +472,14 @@ for i in "${!PIDS[@]}"; do
   NAME="${NAMES[$i]}"
   EXIT_FILE="${EXIT_FILES[$i]}"
 
-  # 124 covers both clocks and does not say which one fired: the agent's own
-  # `timeout` inside invoke-acpx.sh publishes 124 and exits 124, and the outer
-  # `timeout` here returns 124 when it kills the whole child. The seat is out of time
-  # either way — print its outer budget so an operator can tell them apart.
-  if [ "$CODE" -eq 124 ]; then
-    echo "[debate] $NAME timed out (seat budget ${BUDGETS[$i]}s)." >&2
-  fi
+  # 124 covers two clocks and does not say which fired: the agent's own `timeout`
+  # inside invoke-acpx.sh publishes 124 and exits 124, and the outer `timeout` here
+  # returns 124 when it kills the whole child. 143/137 is the watchdog on a host
+  # without `timeout`. Print the seat's budget either way so the two are separable.
+  case "$CODE" in
+    124)     echo "[debate] $NAME timed out (seat budget ${BUDGETS[$i]}s)." >&2 ;;
+    137|143) echo "[debate] $NAME was killed before it finished (seat budget ${BUDGETS[$i]}s)." >&2 ;;
+  esac
 
   # invoke-acpx.sh publishes its own code and exits with the same one, so the file
   # and the wait status agree on every normal path. They diverge only when the child
@@ -473,6 +491,14 @@ for i in "${!PIDS[@]}"; do
 
   [ "$CODE" -gt "$WORST_EXIT" ] && WORST_EXIT="$CODE"
 done
+
+# Disarm the watchdog. Its `sleep` is a child of the subshell, so killing the
+# subshell alone leaves the sleep orphaned until its budget runs out — kill the
+# children first, while the parent link still exists.
+if [ -n "$WATCHDOG_PID" ]; then
+  pkill -P "$WATCHDOG_PID" 2> /dev/null
+  kill "$WATCHDOG_PID" 2> /dev/null
+fi
 
 rm -f "$WORK_DIR"/*-prompt.txt
 
