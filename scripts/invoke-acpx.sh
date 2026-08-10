@@ -369,30 +369,33 @@ fi
 # punctuation. Formatting is: terminal escape sequences (whose *parameters* are
 # printable — a bare ESC[0m reset or ESC[2J clear has no content, and an OSC
 # hyperlink's URL is framing, not a review), zero-width characters and BOM, and
-# any leftover C0/DEL control bytes. The C1 range (0x80-0x9F) is deliberately NOT
-# stripped: in valid UTF-8 those bytes are continuation bytes, so deleting them
-# would mangle every non-Latin review (Cyrillic Н is D0 9D — 0x9D is both a bare
-# C1 byte and a continuation). A lone C1 byte outside a complete sequence is
-# malformed output, not a realistic blank turn, and counting it as content
-# matches main. The content test is deliberately permissive: it must not require
-# ASCII alphanumerics, or a review written in a non-Latin script (Chinese,
-# Cyrillic, ...) would be thrown away as blank.
+# any leftover C0/DEL control bytes.
+#
+# The C1 range (0x80-0x9F) is deliberately NOT stripped and NOT used as an escape
+# opener: in valid UTF-8 those bytes are continuation bytes, so deleting them or
+# treating them as openers would mangle every non-Latin review (Cyrillic Л is D0
+# 9B, Н is D0 9D — 0x9B/0x9D are continuations). C1 escapes are matched only as a
+# terminator (0x9C) once a real ESC]-OSC opened a sequence. A stray C1 byte
+# outside a complete sequence is malformed output, not a realistic blank turn,
+# and counting it as content matches main. The content test is deliberately
+# permissive: it must not require ASCII alphanumerics, or a review written in a
+# non-Latin script (Chinese, Cyrillic, ...) would be thrown away as blank.
 output_is_blank() {
-  local file="$1" esc bel st csi osc zwsp zwnj zwj wj bom
+  local file="$1" esc bel st zwsp zwnj zwj wj bom
   [ -s "$file" ] || return 0
   # Byte literals built with printf, not \x escapes: BSD sed rejects \x outright.
-  # OSC opens with ESC] or 0x9D and ends at BEL, 0x9C, or ESC-backslash, freely
-  # mixed; CSI opens with ESC[ or 0x9B and covers colon-form SGR.
+  # OSC opens with ESC] and ends at BEL, 0x9C, or ESC-backslash; CSI opens with
+  # ESC[ and covers colon-form SGR.
   esc=$(printf '\033'); bel=$(printf '\007')
-  st=$(printf '\234'); csi=$(printf '\233'); osc=$(printf '\235')
+  st=$(printf '\234')
   zwsp=$(printf '\342\200\213'); zwnj=$(printf '\342\200\214')
   zwj=$(printf '\342\200\215'); wj=$(printf '\342\201\240'); bom=$(printf '\357\273\277')
   # grep -c, not grep -q: -q exits at its first match and SIGPIPEs the still-
   # writing sed, which under pipefail false-blanks a large review. -c reads the
   # whole stream, so no stage dies mid-pipe; its exit 0/1 carries the verdict.
   ! LC_ALL=C sed -E "
-        s/(${esc}\]|${osc})[^${bel}${st}${esc}]*(${bel}|${st}|${esc}\\\\)//g
-        s/(${esc}\[|${csi})[0-9;:?<=>]*[ -\/]*[@-~]//g
+        s/(${esc}\])[^${bel}${st}${esc}]*(${bel}|${st}|${esc}\\\\)//g
+        s/(${esc}\[)[0-9;:?<=>]*[ -\/]*[@-~]//g
         s/${esc}[()][A-Za-z0-9]//g
         s/${zwsp}//g; s/${zwnj}//g; s/${zwj}//g; s/${wj}//g; s/${bom}//g
       " "$file" \

@@ -849,18 +849,17 @@ test_control_bytes_only_response_is_empty() {
 }
 
 # A lone OSC hyperlink escape is framing, not a review — the payload is a URL
-# the agent wrapped, never the agent's message. Openers (ESC] and 0x9D) and
-# terminators (BEL, 0x9C, ESC-backslash) combine freely, including mixed
-# 7-bit/8-bit, so every combination is checked here.
+# the agent wrapped, never the agent's message. Openers are 7-bit only (ESC]);
+# terminators (BEL, 0x9C, ESC-backslash) combine freely, so every terminator is
+# checked here. 8-bit openers (0x9D) are NOT in the list: 0x9D is a UTF-8
+# continuation byte in real text, so matching it as an opener would delete
+# non-Latin reviews.
 test_osc_all_encodings_count_as_empty() {
   local work_dir config combo n=0
   for combo in \
     '\033]8;;https://example.invalid/x\007' \
     '\033]8;;https://example.invalid/x\033\\' \
-    '\033]8;;https://example.invalid/x\234' \
-    '\2358;;https://example.invalid/x\234' \
-    '\2358;;https://example.invalid/x\007' \
-    '\2358;;https://example.invalid/x\033\\'
+    '\033]8;;https://example.invalid/x\234'
   do
     n=$((n + 1))
     work_dir=$(setup_work_dir)
@@ -873,6 +872,34 @@ test_osc_all_encodings_count_as_empty() {
 
     if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
       echo "  OSC encoding $n was accepted as a delivered review"
+      rm -rf "$work_dir"; return 1
+    fi
+    rm -rf "$work_dir"
+  done
+}
+
+# A review in a script whose UTF-8 continuation bytes collide with C1 escape
+# bytes must survive byte-identical. The escape openers are 7-bit only for
+# exactly this reason: Л = D0 9B, Н = D0 9D, and 0x9B/0x9D are continuation bytes
+# (Cyrillic М's second byte is 0x9C, an OSC terminator, so 'Н М' also exercises
+# the terminator path).
+test_non_latin_with_c1_colliding_bytes_not_mangled() {
+  local work_dir config
+  for combo in '\320\233 VERDICT: APPROVED' '\320\235 \320\234'; do
+    work_dir=$(setup_work_dir)
+    config=$(setup_config "$work_dir")
+
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_ACPX_RESPONSE="$(printf "$combo")" \
+      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+
+    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
+      echo "  a non-Latin review with C1-colliding bytes was discarded as empty"
+      rm -rf "$work_dir"; return 1
+    fi
+    if [ "$(cat "$work_dir/no-retry-reviewer-output.md")" != "$(printf "$combo")" ]; then
+      echo "  a non-Latin review with C1-colliding bytes was corrupted"
       rm -rf "$work_dir"; return 1
     fi
     rm -rf "$work_dir"
@@ -898,24 +925,25 @@ test_review_containing_a_url_still_passes() {
 
 # A colon-form SGR colour is a control sequence whose parameter bytes include ':'.
 # The CSI rule must cover it: the printable digits are the sequence's own
-# parameters, not content, so a bare colour setup counts as blank.
+# parameters, not content, so a bare colour setup counts as blank. The 8-bit
+# opener 0x9B is not tested here — it is a UTF-8 continuation byte and is
+# deliberately left as content (see test_non_latin_with_c1_colliding_bytes).
 test_colon_sgr_only_response_is_empty() {
-  local work_dir config combo
-  for combo in '\033[38:2::255:0:0m' '\23338:2::255:0:0m'; do
-    work_dir=$(setup_work_dir)
-    config=$(setup_config "$work_dir")
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
 
-    SKIP_SESSION_CHECK=1 \
-    PATH="$SCRIPT_DIR:$PATH" \
-    MOCK_ACPX_RESPONSE="$(printf "$combo")" \
-      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\033[38:2::255:0:0m')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
 
-    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
-      echo "  colon-form SGR accepted as a delivered review"
-      rm -rf "$work_dir"; return 1
-    fi
-    rm -rf "$work_dir"
-  done
+  if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
+    echo "  colon-form SGR accepted as a delivered review"
+    rm -rf "$work_dir"; return 1
+  fi
+
+  rm -rf "$work_dir"
 }
 
 # A review needs no ASCII at all. Testing for [[:alnum:]] under LC_ALL=C threw away
@@ -923,8 +951,8 @@ test_colon_sgr_only_response_is_empty() {
 #
 # The scripts deliberately include codepoints whose UTF-8 continuation bytes fall
 # in the C1 range 0x80-0x9F (Cyrillic Н = D0 9D, and 'Ошибка' has continuations
-# 0x9E/0x88/0x88). A C1-byte strip would delete those bytes, so the strip must
-# leave the delivered review intact AND still judge it content.
+# 0x9E/0x88/0x88). The blank-check strip must not delete those bytes — it runs
+# the same sed|tr pipeline the function uses, and requires every byte to survive.
 test_non_latin_review_is_not_empty() {
   local work_dir config script stripped
   for script in '\345\220\214\346\204\217\343\200\202' '\320\235' '\320\236\321\210\320\270\320\261\320\272\320\260'; do
@@ -940,12 +968,15 @@ test_non_latin_review_is_not_empty() {
       echo "  a non-Latin review was discarded as empty"
       rm -rf "$work_dir"; return 1
     fi
-    # Byte-integrity: the strip stage must not delete UTF-8 continuation bytes.
-    # Feed the same script through the escape/control strip and require every
-    # byte to survive — a C1-byte strip would drop the 0x80-0x9F continuations.
-    stripped="$(printf "$script" | LC_ALL=C tr -d '[:cntrl:]')"
+    # Byte-integrity through the same escape/control strip the function runs. A
+    # strip that deleted UTF-8 continuation bytes (a C1-byte strip, or a C1
+    # escape-opener that ate the following text) would change the bytes here.
+    stripped="$(printf "$script" | LC_ALL=C sed -E "
+        s/($(printf '\033')\])[^$(printf '\007')$(printf '\234')$(printf '\033')]*($(printf '\007')|$(printf '\234')|$(printf '\033')\\\\)//g
+        s/($(printf '\033')\[)[0-9;:?<=>]*[ -\/]*[@-~]//g
+      " | LC_ALL=C tr -d '[:cntrl:]')"
     if [ "$stripped" != "$(printf "$script")" ]; then
-      echo "  the control-byte strip corrupted a non-Latin review"
+      echo "  the blank-check strip corrupted a non-Latin review"
       rm -rf "$work_dir"; return 1
     fi
     rm -rf "$work_dir"
@@ -1660,6 +1691,7 @@ run_test "OSC in every encoding counts as empty" test_osc_all_encodings_count_as
 run_test "review containing a URL still passes" test_review_containing_a_url_still_passes
 run_test "colon-form SGR counts as empty" test_colon_sgr_only_response_is_empty
 run_test "non-Latin review is not empty" test_non_latin_review_is_not_empty
+run_test "non-Latin review with C1-colliding bytes is not mangled" test_non_latin_with_c1_colliding_bytes_not_mangled
 run_test "punctuation-only response counts as empty" test_punctuation_only_response_is_empty
 run_test "whitespace-only response counts as empty" test_whitespace_only_response_is_empty
 run_test "newline-only response counts as empty" test_newline_only_response_is_empty
