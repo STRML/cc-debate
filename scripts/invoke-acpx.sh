@@ -365,55 +365,26 @@ fi
 # message leaves 1 byte behind — which `[ -s ]` reports as non-empty, and the round
 # records a blank review as a success.
 #
-# Escapes and zero-width characters are stripped, then the remainder must contain a
-# character that is neither whitespace nor punctuation. Stripping is what does the
-# work; the character test is deliberately permissive.
+# Strip every control byte and zero-width character, then require a character that
+# is neither whitespace nor punctuation. The character test is deliberately
+# permissive: it must not require ASCII alphanumerics, or a review written in a
+# non-Latin script (Chinese, Cyrillic, ...) would be thrown away as blank.
 #
-# It did test for a letter or digit, which was wrong in a way no control-byte case
-# would have caught: under LC_ALL=C a review written in Chinese or Cyrillic has no
-# ASCII alphanumeric, so a perfectly good review was thrown away as blank and the
-# seat reported a failure. Any non-Latin script hits this. The current test accepts
-# those bytes while still rejecting a response of only dashes.
-#
-# The CSI rule follows the real grammar — parameter bytes, optional intermediates,
-# final byte — because `[0-9;?]*` did not include `:`, and a colon-form SGR colour
-# like `ESC[38:2::255:0:0m` therefore went unstripped and passed on its digits.
-# OSC is stripped first and deliberately: unlike CSI, an OSC payload carries text,
-# so `ESC]8;;https://…BEL` (a hyperlink) is full of alphanumerics and sails through
-# an alnum test untouched. Verified. OSC ends at BEL or at ST (ESC backslash), so
-# both terminators are handled.
+# Stripping control bytes instead of parsing terminal escape sequences is a
+# deliberate trade. The old implementation matched the CSI/OSC *grammar* — colon-
+# form SGR, hyperlink payloads, every opener/terminator combination — because a
+# lone escape sequence contains no whitespace or punctuation and would otherwise
+# read as content. Blankness is only ever judged after a transport has written the
+# output file: acpx captures agent stdout, the exit-code paths replace failure
+# dumps with a plain error message, and the direct CLIs strip PTY noise before
+# this runs. So a leftover control byte means nothing; every terminal sequence is
+# made of them, and blanket removal cannot misclassify a real review.
 output_is_blank() {
-  local file="$1" esc bel osc8 st8 csi8 zwsp zwnj zwj wj bom
+  local file="$1"
   [ -s "$file" ] || return 0
-  esc=$(printf '\033')
-  bel=$(printf '\007')
-  # Zero-width and BOM characters are removed by name rather than left to the
-  # character test: they are multi-byte UTF-8, so under LC_ALL=C they are neither
-  # space nor punctuation and would read as content.
-  zwsp=$(printf '\342\200\213')
-  zwnj=$(printf '\342\200\214')
-  zwj=$(printf '\342\200\215')
-  wj=$(printf '\342\201\240')
-  bom=$(printf '\357\273\277')
-  # Built with printf, not written as \x9d in the regex: BSD sed rejects \x escapes
-  # outright ("illegal byte sequence"), and a sed that errors out prints nothing,
-  # which this function would have read as a blank review — a broken filter that
-  # looks like a working one.
-  osc8=$(printf '\235')
-  st8=$(printf '\234')
-  csi8=$(printf '\233')
-  # One rule covers OSC rather than one per encoding. The opener is ESC] or 0x9D and
-  # the terminator is BEL, 0x9C or ESC-backslash, and a sequence may MIX them —
-  # `0x9D … ESC\` and `ESC] … 0x9C` are both valid. Pairing each opener with only its
-  # own terminator left exactly those two mixed forms intact, payload and all.
-  # All six opener/terminator combinations are covered by tests.
-  ! LC_ALL=C sed -E "
-        s/(${esc}\]|${osc8})[^${bel}${st8}${esc}]*(${bel}|${st8}|${esc}\\\\)//g
-        s/(${esc}\[|${csi8})[0-9;:?<=>]*[ -\/]*[@-~]//g
-        s/${esc}[()][A-Za-z0-9]//g
-        s/${zwsp}//g; s/${zwnj}//g; s/${zwj}//g; s/${wj}//g; s/${bom}//g
-      " "$file" \
-    | LC_ALL=C grep -q '[^[:space:][:punct:]]'
+  # LC_ALL=C keeps byte semantics stable across locales, and tr(1) needs no
+  # escape-sequence grammar.
+  ! LC_ALL=C tr -d '[:cntrl:]' < "$file" | LC_ALL=C grep -q '[^[:space:][:punct:]]'
 }
 
 # Runs one reviewer invocation, retrying while it comes back blank.
