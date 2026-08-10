@@ -34,6 +34,14 @@
   orchestrator reads that file, and after a hard kill the wait status is the only account
   of what happened — so the runner writes it there.
 
+- **A non-executable `timeout` on PATH no longer kills every seat at spawn.** Both
+  scripts resolved the binary with a bare `command -v`, and bash 3.2 — which is
+  `/bin/bash` on stock macOS — answers that with a PATH hit it has not checked for the
+  execute bit, where bash 5 skips it and keeps looking. Acting on that answer prefixes
+  every agent call with something that cannot run, and the seat dies at exec with code
+  126, reading as a dead agent. Both resolvers now require `-x`. `DEBATE_TIMEOUT_BIN`
+  pins the binary, or forces the watchdog fallback when set to `none`.
+
 - **`POLL_MAX_WAIT` is rejected when it is not a positive integer.** It reaches `timeout`
   as a duration now, and a malformed one would make `timeout` refuse to run and take
   every seat down instantly. A bad value warns and falls back to the computed budget.

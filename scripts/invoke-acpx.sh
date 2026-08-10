@@ -346,13 +346,21 @@ fi
 
 # --- Resolve timeout binary ---
 
+# The `-x` test matters on bash 3.2 (stock macOS /bin/bash): `command -v` there
+# resolves to a PATH hit that is not executable, where bash 5 skips it and keeps
+# looking. Prefixing the agent call with an unrunnable binary fails the seat at exec
+# with code 126 and reads as a dead agent. Same guard as run-parallel-acpx.sh.
 TIMEOUT_BIN=""
-if command -v timeout > /dev/null 2>&1; then
-  TIMEOUT_BIN="timeout"
-elif command -v gtimeout > /dev/null 2>&1; then
-  TIMEOUT_BIN="gtimeout"
-else
-  echo "[$REVIEWER] WARNING: neither timeout nor gtimeout found — running without timeout enforcement" >&2
+for _tb in timeout gtimeout; do
+  _tb_path=$(command -v "$_tb" 2> /dev/null) || continue
+  if [ -x "$_tb_path" ]; then
+    TIMEOUT_BIN="$_tb_path"
+    break
+  fi
+done
+unset _tb _tb_path
+if [ -z "$TIMEOUT_BIN" ]; then
+  echo "[$REVIEWER] WARNING: no usable timeout or gtimeout — running without timeout enforcement" >&2
   echo "  Install: brew install coreutils (macOS) / apt install coreutils (Linux)" >&2
 fi
 

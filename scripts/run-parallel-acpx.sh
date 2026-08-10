@@ -227,13 +227,32 @@ MAX_REVIEWER_BUDGET=0
 # dies and the runner needs no supervisor of its own. Stock macOS ships neither
 # `timeout` nor `gtimeout` (GitHub's macos runners included), and that is the common
 # case, not an exotic one — so the fallback below is a real code path, not a courtesy.
+#
+# The `-x` test is load-bearing, not defensive noise: bash 3.2 — which IS /bin/bash on
+# stock macOS — resolves `command -v foo` to a PATH hit that is not executable, where
+# bash 5 skips it and keeps looking. Trusting that answer puts an unrunnable binary in
+# front of every seat and kills the whole panel with exec code 126 at spawn.
 TIMEOUT_BIN=""
-if command -v timeout > /dev/null 2>&1; then
-  TIMEOUT_BIN="timeout"
-elif command -v gtimeout > /dev/null 2>&1; then
-  TIMEOUT_BIN="gtimeout"
-else
-  echo "[debate] No timeout/gtimeout — bounding the panel with one watchdog instead of each seat." >&2
+for _tb in timeout gtimeout; do
+  _tb_path=$(command -v "$_tb" 2> /dev/null) || continue
+  if [ -x "$_tb_path" ]; then
+    TIMEOUT_BIN="$_tb_path"
+    break
+  fi
+done
+unset _tb _tb_path
+# DEBATE_TIMEOUT_BIN overrides the probe: an explicit path, or `none` to force the
+# watchdog. Without it the fallback is reachable only on a host that happens to lack
+# coreutils, which leaves the path stock macOS actually takes untested everywhere
+# else — and PATH tricks cannot stand in, because bash 5 skips a non-executable hit
+# and finds the real binary behind it.
+case "${DEBATE_TIMEOUT_BIN:-}" in
+  "")   ;;
+  none) TIMEOUT_BIN="" ;;
+  *)    TIMEOUT_BIN="$DEBATE_TIMEOUT_BIN" ;;
+esac
+if [ -z "$TIMEOUT_BIN" ]; then
+  echo "[debate] No usable timeout/gtimeout — bounding the panel with one watchdog instead of each seat." >&2
   echo "  Install coreutils (brew install coreutils) for per-seat bounds." >&2
 fi
 

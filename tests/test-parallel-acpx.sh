@@ -964,12 +964,14 @@ EOF
 # <name>-exit.txt, and a seat killed before its EXIT trap could run gets that file
 # written from the wait status instead.
 #
-# $1 (optional) "no-timeout": hide timeout/gtimeout from the runner, exercising the
-# watchdog fallback. Stock macOS has no timeout binary, so that path is the common
-# one there and CI on macos-latest runs it for real.
+# $1 (optional) "no-timeout": force the watchdog fallback via DEBATE_TIMEOUT_BIN.
+# Stock macOS ships no timeout binary, so that is the common path there, and it has
+# to be reachable on hosts that do have coreutils or it never gets tested. A PATH
+# shim cannot do this job: bash 5 skips a non-executable entry and finds the real
+# binary behind it, so the case would quietly test the wrong branch.
 hung_reviewer_case() {
   local mode="${1:-}"
-  local tmp_dir review_id work_dir out rc start elapsed shim=""
+  local tmp_dir review_id work_dir out rc start elapsed
   tmp_dir=$(setup_env)
   review_id="test-$(date +%s)-hang${mode:+-nt}"
   work_dir=".tmp/ai-review-${review_id}"
@@ -985,26 +987,27 @@ EOF
   mkdir -p "$work_dir"
   echo "Test plan" > "$work_dir/plan.md"
 
-  # `command -v` consults PATH, so a shim directory holding non-executable stubs
-  # named timeout/gtimeout is enough to make the runner believe neither exists.
-  if [ "$mode" = "no-timeout" ]; then
-    shim=$(mktemp -d)
-    : > "$shim/timeout"; : > "$shim/gtimeout"
-    chmod 000 "$shim/timeout" "$shim/gtimeout"
-  fi
-
   start=$SECONDS
   rc=0
-  out=$(PATH="${shim:+$shim:}$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT=3 \
+  out=$(PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT=3 \
     MOCK_ACPX_DELAY=60 \
+    DEBATE_TIMEOUT_BIN="$([ "$mode" = "no-timeout" ] && echo none)" \
     bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>&1) || rc=$?
   elapsed=$(( SECONDS - start ))
 
-  local cleanup="$work_dir $tmp_dir $shim"
+  local cleanup="$work_dir $tmp_dir"
   # Back at the budget, not at the agent's own 120s timeout.
   [ "$elapsed" -lt 30 ] || {
     echo "DIAG hung($mode): took ${elapsed}s -- $out" >&2; rm -rf $cleanup; return 1; }
   [ "$rc" -ne 0 ] || { echo "DIAG hung($mode): rc=0 -- $out" >&2; rm -rf $cleanup; return 1; }
+  # Assert the branch, not just the outcome: without this the no-timeout case passes
+  # on a host with coreutils by taking the per-seat path it was written to avoid.
+  # The plain case gets no matching assertion on purpose - a host without coreutils
+  # takes the watchdog there legitimately, and CI on macos-latest is such a host.
+  if [ "$mode" = "no-timeout" ]; then
+    echo "$out" | grep -q "bounding the panel with one watchdog" || {
+      echo "DIAG hung($mode): took the per-seat path -- $out" >&2; rm -rf $cleanup; return 1; }
+  fi
   # `timeout` reports 124, the watchdog reports a signal; both name the seat budget.
   echo "$out" | grep -qE "alpha (timed out|was killed before it finished) \(seat budget 3s\)" || {
     echo "DIAG hung($mode): $out" >&2; rm -rf $cleanup; return 1; }
