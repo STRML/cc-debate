@@ -373,55 +373,46 @@ fi
 # message leaves 1 byte behind — which `[ -s ]` reports as non-empty, and the round
 # records a blank review as a success.
 #
-# Escapes and zero-width characters are stripped, then the remainder must contain a
-# character that is neither whitespace nor punctuation. Stripping is what does the
-# work; the character test is deliberately permissive.
+# Strip formatting, then require a character that is neither whitespace nor
+# punctuation. Formatting is: terminal escape sequences (whose *parameters* are
+# printable — a bare ESC[0m reset or ESC[2J clear has no content, and an OSC
+# hyperlink's URL is framing, not a review), zero-width characters and BOM, and
+# any leftover C0/DEL control bytes.
 #
-# It did test for a letter or digit, which was wrong in a way no control-byte case
-# would have caught: under LC_ALL=C a review written in Chinese or Cyrillic has no
-# ASCII alphanumeric, so a perfectly good review was thrown away as blank and the
-# seat reported a failure. Any non-Latin script hits this. The current test accepts
-# those bytes while still rejecting a response of only dashes.
-#
-# The CSI rule follows the real grammar — parameter bytes, optional intermediates,
-# final byte — because `[0-9;?]*` did not include `:`, and a colon-form SGR colour
-# like `ESC[38:2::255:0:0m` therefore went unstripped and passed on its digits.
-# OSC is stripped first and deliberately: unlike CSI, an OSC payload carries text,
-# so `ESC]8;;https://…BEL` (a hyperlink) is full of alphanumerics and sails through
-# an alnum test untouched. Verified. OSC ends at BEL or at ST (ESC backslash), so
-# both terminators are handled.
+# The C1 range (0x80-0x9F) is deliberately NOT stripped and NOT used as an escape
+# opener or terminator — but 0x9C IS excluded from the OSC payload class. In
+# valid UTF-8 those bytes are continuation bytes: Cyrillic Л is D0 9B, М is D0
+# 9C, Н is D0 9D. Treating 0x9C as a terminator would end an OSC at М's
+# continuation and eat text after it; NOT excluding it from the payload lets the
+# greedy [^BEL ESC]* bridge across it and eat text up to a later BEL. Excluding
+# it from the payload (with BEL and ESC-\ as terminators) does neither: a match
+# stops at a 0x9C, which survives as content. An 8-bit OSC terminated by 0x9C, a
+# bare C1 byte, and an un-terminated ESC] all leave residual text that counts as
+# content — malformed output, which main (whose grammar strips only complete
+# sequences) also counted as content. The content test is deliberately
+# permissive: it must not require ASCII alphanumerics, or a review written in a
+# non-Latin script (Chinese, Cyrillic, ...) would be thrown away as blank.
 output_is_blank() {
-  local file="$1" esc bel osc8 st8 csi8 zwsp zwnj zwj wj bom
+  local file="$1" esc bel st zwsp zwnj zwj wj bom
   [ -s "$file" ] || return 0
-  esc=$(printf '\033')
-  bel=$(printf '\007')
-  # Zero-width and BOM characters are removed by name rather than left to the
-  # character test: they are multi-byte UTF-8, so under LC_ALL=C they are neither
-  # space nor punctuation and would read as content.
-  zwsp=$(printf '\342\200\213')
-  zwnj=$(printf '\342\200\214')
-  zwj=$(printf '\342\200\215')
-  wj=$(printf '\342\201\240')
-  bom=$(printf '\357\273\277')
-  # Built with printf, not written as \x9d in the regex: BSD sed rejects \x escapes
-  # outright ("illegal byte sequence"), and a sed that errors out prints nothing,
-  # which this function would have read as a blank review — a broken filter that
-  # looks like a working one.
-  osc8=$(printf '\235')
-  st8=$(printf '\234')
-  csi8=$(printf '\233')
-  # One rule covers OSC rather than one per encoding. The opener is ESC] or 0x9D and
-  # the terminator is BEL, 0x9C or ESC-backslash, and a sequence may MIX them —
-  # `0x9D … ESC\` and `ESC] … 0x9C` are both valid. Pairing each opener with only its
-  # own terminator left exactly those two mixed forms intact, payload and all.
-  # All six opener/terminator combinations are covered by tests.
+  # Byte literals built with printf, not \x escapes: BSD sed rejects \x outright.
+  # OSC opens with ESC] and ends at BEL or ESC-backslash; CSI opens with ESC[ and
+  # covers colon-form SGR. 0x9C is excluded from the OSC payload, not a terminator.
+  esc=$(printf '\033'); bel=$(printf '\007')
+  st=$(printf '\234')
+  zwsp=$(printf '\342\200\213'); zwnj=$(printf '\342\200\214')
+  zwj=$(printf '\342\200\215'); wj=$(printf '\342\201\240'); bom=$(printf '\357\273\277')
+  # grep -c, not grep -q: -q exits at its first match and SIGPIPEs the still-
+  # writing sed, which under pipefail false-blanks a large review. -c reads the
+  # whole stream, so no stage dies mid-pipe; its exit 0/1 carries the verdict.
   ! LC_ALL=C sed -E "
-        s/(${esc}\]|${osc8})[^${bel}${st8}${esc}]*(${bel}|${st8}|${esc}\\\\)//g
-        s/(${esc}\[|${csi8})[0-9;:?<=>]*[ -\/]*[@-~]//g
+        s/(${esc}\])[^${bel}${st}${esc}]*(${bel}|${esc}\\\\)//g
+        s/(${esc}\[)[0-9;:?<=>]*[ -/]*[@-~]//g
         s/${esc}[()][A-Za-z0-9]//g
         s/${zwsp}//g; s/${zwnj}//g; s/${zwj}//g; s/${wj}//g; s/${bom}//g
       " "$file" \
-    | LC_ALL=C grep -q '[^[:space:][:punct:]]'
+    | LC_ALL=C tr -d '[:cntrl:]' \
+    | LC_ALL=C grep -c '[^[:space:][:punct:]]' > /dev/null
 }
 
 # Runs one reviewer invocation, retrying while it comes back blank.
