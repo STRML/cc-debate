@@ -138,11 +138,9 @@ def scrub_env(home, tmpdir, path=None):
         if (k.startswith("ACPX_") or k.startswith("CODEX_")) and k not in env:
             env[k] = v
     # Runner controls the wrapped run-parallel-acpx.sh reads: DEBATE_FREEZE_DIFF /
-    # DEBATE_DIFF_BASE pick the diff, POLL_MAX_WAIT bounds the wait,
-    # DEBATE_TIMEOUT_BIN pins or disables the per-seat timeout binary. A scrub that
+    # DEBATE_DIFF_BASE pick the diff, POLL_MAX_WAIT bounds the wait. A scrub that
     # dropped these silently changed the review target inside the sandbox (#45).
-    for k in ("DEBATE_FREEZE_DIFF", "DEBATE_DIFF_BASE", "POLL_MAX_WAIT",
-              "DEBATE_TIMEOUT_BIN"):
+    for k in ("DEBATE_FREEZE_DIFF", "DEBATE_DIFF_BASE", "POLL_MAX_WAIT"):
         if os.environ.get(k):
             env[k] = os.environ[k]
     # The antigravity direct-CLI seat authenticates via ANTIGRAVITY_API_KEY /

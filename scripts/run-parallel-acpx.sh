@@ -221,76 +221,32 @@ EXIT_FILES=()
 PIDS=()
 NAMES=()
 BUDGETS=()
+GUARDS=()
 MAX_REVIEWER_BUDGET=0
 
-# Signal a seat and everything under it. A seat is a chain — this runner spawns
-# `timeout` (or, with no timeout binary, `env`), which runs `bash invoke-acpx.sh`,
-# which runs the agent — and signalling only the pid we happen to hold reaps the
-# wrapper while the agent keeps running with ppid 1, still burning tokens after the
-# panel reports it dead. `pgrep -P` lists direct children only, so recurse, and
-# signal children before their parent so nothing is reparented out of reach.
-kill_tree() {
-  local sig="$1" pid="$2" child
-  for child in $(pgrep -P "$pid" 2> /dev/null); do
-    kill_tree "$sig" "$child"
-  done
-  kill "-$sig" "$pid" 2> /dev/null
+# A seat is a process group, not a process. Each one is spawned under `set -m`, so
+# bash makes it a group leader and its pid IS its process-group id — the same number
+# we wait on is the one we signal. `kill -- -PID` then reaches the whole chain
+# (env, bash invoke-acpx.sh, acpx, the agent) in one atomic kernel operation.
+#
+# The alternative, walking children with `pgrep -P`, reimplements in userspace what
+# the kernel already tracks: it races processes that spawn during the walk, needs a
+# readable /proc (blind under a PID-namespaced sandbox), and leaves stale pids to
+# signal after a reap. A group persists as long as any member lives, so this also
+# reaches survivors after the leader has exited — which is exactly the orphaned-agent
+# case. Verified on this platform, including the leaderless-group case.
+kill_seat() {
+  kill "-$1" -- "-$2" 2> /dev/null
 }
 
 kill_all_seats() {
   local sig="$1" p
   for p in "${PIDS[@]}"; do
-    kill_tree "$sig" "$p"
+    kill_seat "$sig" "$p"
   done
 }
 
-# Each reviewer is spawned under `timeout`, so the seat that hangs is the seat that
-# dies and the runner needs no supervisor of its own. Stock macOS ships neither
-# `timeout` nor `gtimeout` (GitHub's macos runners included), and that is the common
-# case, not an exotic one — so the fallback below is a real code path, not a courtesy.
-#
-# The `-x` test is not defensive noise: `command -v` reports the first PATH match
-# without checking the execute bit, on bash 3.2 and bash 5 alike. Verified with the
-# same probe name and PATH on 3.2.57 and 5.3.15, with and without a real executable
-# behind the dud — both return the dud. Trusting that answer puts an unrunnable
-# binary in front of every seat and kills the whole panel with exec code 126.
-TIMEOUT_BIN=""
-for _tb in timeout gtimeout; do
-  _tb_path=$(command -v "$_tb" 2> /dev/null) || continue
-  if [ -x "$_tb_path" ]; then
-    TIMEOUT_BIN="$_tb_path"
-    break
-  fi
-done
-unset _tb _tb_path
-# DEBATE_TIMEOUT_BIN pins the binary, or forces the watchdog fallback with `none`.
-# A PATH shim cannot stand in for this: `command -v` skips a non-executable entry
-# whenever a real binary exists behind it, so on any host with coreutils the shim is
-# ignored and the fallback stays untested. (It is only when NOTHING executable is on
-# PATH that `command -v` hands back the dud — which is the case the `-x` guard above
-# exists for.) An explicit path still has to pass `-x`, or pinning it would walk
-# straight back into the 126-at-spawn failure that guard just closed.
-case "${DEBATE_TIMEOUT_BIN:-}" in
-  "")   ;;
-  none) TIMEOUT_BIN="" ;;
-  *)
-    if [ -x "${DEBATE_TIMEOUT_BIN}" ]; then
-      TIMEOUT_BIN="$DEBATE_TIMEOUT_BIN"
-    else
-      echo "[debate] DEBATE_TIMEOUT_BIN='$DEBATE_TIMEOUT_BIN' is not executable — ignoring it." >&2
-    fi
-    ;;
-esac
-if [ -z "$TIMEOUT_BIN" ]; then
-  echo "[debate] No usable timeout/gtimeout — bounding the panel with one watchdog instead of each seat." >&2
-  echo "  Install coreutils (brew install coreutils) for per-seat bounds." >&2
-fi
-
-# POLL_MAX_WAIT overrides the computed per-reviewer budget. It is compared and
-# reported as a number of seconds and handed to `timeout` as a duration, so a
-# malformed value has to be rejected here rather than passed down: `timeout` exits
-# 125 without running anything on a duration it cannot parse, which kills the seat
-# at spawn instead of bounding it. Same rule the `timeout` config key already gets.
+# POLL_MAX_WAIT overrides the computed per-reviewer budget.
 if [ -n "${POLL_MAX_WAIT:-}" ] && { ! [[ "$POLL_MAX_WAIT" =~ ^[0-9]+$ ]] || [ "$POLL_MAX_WAIT" -le 0 ]; }; then
   echo "[debate] Ignoring invalid POLL_MAX_WAIT '$POLL_MAX_WAIT' — using the computed budget." >&2
   POLL_MAX_WAIT=""
@@ -309,6 +265,18 @@ if [ -n "$SEAT_MODELS" ]; then
     exit 1
   fi
 fi
+
+# One teardown path, armed before the first seat exists. Cancelling mid-spawn used
+# to leave everything already launched running: the seats are in their own process
+# groups now, so a signal to this runner never reaches them on its own.
+cleanup() {
+  kill_all_seats TERM
+  for g in "${GUARDS[@]}"; do kill_seat TERM "$g"; done
+  rm -f "$WORK_DIR"/*-prompt.txt
+  return 0
+}
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 for NAME in "${REVIEWERS[@]}"; do
   # Sanitize reviewer name — must be alphanumeric/dash/underscore only
@@ -346,14 +314,8 @@ for NAME in "${REVIEWERS[@]}"; do
   fi
   # The seat's own bound: its worst case plus a startup buffer. invoke-acpx.sh puts
   # `timeout` around each agent call, but not around everything it does — an
-  # `acpx sessions ensure` that hangs is outside that. This is the bound on the whole
-  # child. -k: a child that ignores SIGTERM gets SIGKILL 5s later, so one wedged seat
-  # cannot hold the panel open.
+  # `acpx sessions ensure` that hangs is outside that. This bounds the whole seat.
   CHILD_BUDGET="${POLL_MAX_WAIT:-$(( WORST + 60 ))}"
-  SPAWN_PREFIX=()
-  if [ -n "$TIMEOUT_BIN" ]; then
-    SPAWN_PREFIX=("$TIMEOUT_BIN" -k 5 "$CHILD_BUDGET")
-  fi
 
   echo "[debate] Spawning $NAME ($AGENT, timeout: ${TIMEOUT}s)..." >&2
   rm -f "$WORK_DIR/${NAME}-exit.txt"
@@ -464,14 +426,40 @@ for NAME in "${REVIEWERS[@]}"; do
       INVOKE_ENV+=("PROXY_ROUTE=")
     fi
   fi
+  # `set -m` for the spawn only: it makes this job a process-group leader, so $! is
+  # both the pid to wait on and the group to signal. Turning it back off afterwards
+  # keeps job control out of everything else — the group assignment is already made.
+  # stdin from /dev/null because a background process group that reads the terminal
+  # takes SIGTTIN and stops; no seat reads stdin (prompts arrive by file).
+  #
   # No `disown`. The kernel already reports when a child finishes and how it exited;
   # disowning threw that away and left the runner to rebuild it out of files and a
-  # poll loop. Expand SPAWN_PREFIX bash-3.2-safely — "${arr[@]}" of an empty array
-  # under `set -u` is an error on the bash macOS ships.
-  nohup "${SPAWN_PREFIX[@]+"${SPAWN_PREFIX[@]}"}" env "${INVOKE_ENV[@]}" \
+  # poll loop.
+  set -m
+  nohup env "${INVOKE_ENV[@]}" \
     bash "$SCRIPT_DIR/invoke-acpx.sh" "$CONFIG_FILE" "$WORK_DIR" "$NAME" "$TIMEOUT" \
-    > /dev/null 2>"$WORK_DIR/${NAME}-invoke.log" &
-  PIDS+=("$!")
+    < /dev/null > /dev/null 2>"$WORK_DIR/${NAME}-invoke.log" &
+  SEAT_PID=$!
+
+  # This seat's clock. It signals the group, so it reaches the agent and not just
+  # the wrapper; TERM first, then KILL for anything that ignores it. One sleeping
+  # process per seat, no polling, and no dependency on a `timeout` binary.
+  #
+  # Its own stdio goes to /dev/null, and this matters more than it looks: a guard
+  # holding the runner's stdout keeps a caller's `$(...)` open until the guard's
+  # sleep ends, so a seat with a 460s budget hung any test that captured output for
+  # 460s after the panel was done. It is also spawned inside `set -m` so it leads
+  # its own group, and disarming it takes the sleep with it instead of orphaning it.
+  (
+    sleep "$CHILD_BUDGET"
+    kill -TERM -- "-$SEAT_PID" 2> /dev/null
+    sleep 5
+    kill -KILL -- "-$SEAT_PID" 2> /dev/null
+  ) < /dev/null > /dev/null 2>&1 &
+  GUARDS+=("$!")
+  set +m
+
+  PIDS+=("$SEAT_PID")
   NAMES+=("$NAME")
   BUDGETS+=("$CHILD_BUDGET")
   EXIT_FILES+=("$WORK_DIR/${NAME}-exit.txt")
@@ -496,29 +484,6 @@ fi
 
 echo "[debate] Waiting for ${#PIDS[@]} reviewer(s) (max wait: ${MAX_WAIT}s)..." >&2
 
-# Under `timeout` a seat is its own process group, so a signal aimed at this runner's
-# group no longer reaches it — cancelling a debate would leave the reviewers running,
-# and a survivor from the cancelled round would later overwrite the next round's
-# review in the same work dir. Tear the seats down explicitly instead.
-trap 'kill_all_seats TERM; exit 130' INT
-trap 'kill_all_seats TERM; exit 143' TERM
-
-# Fallback bound for hosts with no `timeout` binary. One sleeping process for the
-# whole panel, not a poll loop and not per-seat: it is strictly the old global
-# MAX_WAIT behaviour, kept because stock macOS has no other bound and an unbounded
-# panel hangs the orchestrator. The seats keep their own budgets wherever `timeout`
-# exists, and this never arms there.
-WATCHDOG_PID=""
-if [ -z "$TIMEOUT_BIN" ]; then
-  (
-    sleep "$MAX_WAIT"
-    kill_all_seats TERM
-    sleep 5
-    kill_all_seats KILL
-  ) &
-  WATCHDOG_PID=$!
-fi
-
 START=$SECONDS
 WORST_EXIT=0
 
@@ -526,49 +491,38 @@ for i in "${!PIDS[@]}"; do
   wait "${PIDS[$i]}"
   CODE=$?
   NAME="${NAMES[$i]}"
-  EXIT_FILE="${EXIT_FILES[$i]}"
 
-  # 124 covers two clocks and does not say which fired: the agent's own `timeout`
-  # inside invoke-acpx.sh publishes 124 and exits 124, and the outer `timeout` here
-  # returns 124 when it kills the whole child. 143/137 is the watchdog on a host
-  # without `timeout`. Print the seat's budget either way so the two are separable.
+  # The seat's guard has done its job either way; stop its clock before it can fire
+  # against a pid this shell has already reaped.
+  kill_seat TERM "${GUARDS[$i]}"
+
+  # Sweep the group now that the leader is reaped. A group outlives its leader, so
+  # this is what collects an agent that ignored TERM — and doing it here rather than
+  # in the guard means there is no grace period for the two to race over.
+  kill_seat KILL "${PIDS[$i]}"
+
+  # 124 is the agent's own `timeout` inside invoke-acpx.sh; a signal code is this
+  # runner's guard. Both mean the seat ran out of time, so both are reported the same
+  # way and recorded as 124 — run.md documents 0/4/124/other, and a raw signal code
+  # would land a timeout in "other" and send the orchestrator hunting a stderr error
+  # that never happened.
   case "$CODE" in
-    124)     echo "[debate] $NAME timed out (seat budget ${BUDGETS[$i]}s)." >&2 ;;
-    137|143) echo "[debate] $NAME was killed before it finished (seat budget ${BUDGETS[$i]}s)." >&2 ;;
+    124|137|143)
+      echo "[debate] $NAME ran out of time (seat budget ${BUDGETS[$i]}s)." >&2
+      CODE=124
+      ;;
   esac
 
   # invoke-acpx.sh publishes its own code and exits with the same one, so the file
-  # and the wait status agree on every normal path. They diverge only when the child
-  # was killed hard enough that its EXIT trap never ran — then the wait status is the
-  # only account of what happened, and it goes in the file the orchestrator reads.
-  #
-  # 137/143 is written as 124. run.md documents 0/4/124/other, and a seat the
-  # watchdog killed for running past its budget IS the timeout case — writing the raw
-  # signal code would land it in "other" and send the orchestrator looking for an
-  # error that never happened.
-  if [ ! -f "$EXIT_FILE" ]; then
-    case "$CODE" in
-      137|143) printf '124\n' > "$EXIT_FILE" ;;
-      *)       printf '%s\n' "$CODE" > "$EXIT_FILE" ;;
-    esac
-  fi
+  # and the wait status agree on every normal path. They diverge when the seat was
+  # killed — its trap may have written a raw signal code, or never run at all — and
+  # the wait status is the better account either way, so it wins.
+  printf '%s\n' "$CODE" > "${EXIT_FILES[$i]}"
 
   [ "$CODE" -gt "$WORST_EXIT" ] && WORST_EXIT="$CODE"
 done
 
 trap - INT TERM
-
-# Disarm the watchdog. Order matters and is the opposite of the obvious one: killing
-# its `sleep` first is what the sleep is waiting for, so the subshell wakes and runs
-# its kill path on the way out. Kill the subshell first so that path can never run,
-# then clean up the sleep — whose pid has to be read before the parent link is gone,
-# because once the subshell dies it reparents to init and `pgrep -P` cannot find it.
-if [ -n "$WATCHDOG_PID" ]; then
-  WATCHDOG_SLEEP=$(pgrep -P "$WATCHDOG_PID" 2> /dev/null)
-  kill "$WATCHDOG_PID" 2> /dev/null
-  [ -n "$WATCHDOG_SLEEP" ] && kill $WATCHDOG_SLEEP 2> /dev/null
-fi
-
 rm -f "$WORK_DIR"/*-prompt.txt
 
 echo "[debate] All reviewers finished ($(( SECONDS - START ))s elapsed)." >&2

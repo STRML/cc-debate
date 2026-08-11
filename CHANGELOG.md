@@ -34,26 +34,48 @@
   orchestrator reads that file, and after a hard kill the wait status is the only account
   of what happened — so the runner writes it there.
 
-- **A non-executable `timeout` on PATH no longer kills every seat at spawn.** Both
-  scripts resolved the binary with a bare `command -v`, which reports the first PATH
-  match without checking the execute bit. Acting on that answer prefixes every agent
-  call with something that cannot run, and the seat dies at exec with code 126, reading
-  as a dead agent rather than a PATH problem. Both resolvers now require `-x`.
+- **A seat is a process group, so killing one kills the agent.** A seat is a chain —
+  runner to `env` to `bash invoke-acpx.sh` to the agent — and signalling the one pid
+  the runner holds reaped the wrapper while the agent kept running with ppid 1, still
+  spending tokens after the panel reported it dead. Each seat is now spawned under
+  `set -m`, which makes it a process-group leader: the pid the runner waits on IS the
+  group id, so `kill -- -PID` reaches the whole chain in one kernel operation. A group
+  outlives its leader, so the same handle also collects survivors after the wrapper is
+  reaped — which is exactly the orphaned-agent case.
 
-- **Killing a seat kills the agent, not just the wrapper.** A seat is a chain — runner
-  to `timeout` to `bash invoke-acpx.sh` to the agent — and signalling only the pid the
-  runner holds reaped the wrapper while the agent kept running with ppid 1, still
-  spending tokens after the panel reported it dead. On a host with no `timeout` binary
-  nothing else would ever collect it. Teardown now walks the process tree, and the
-  runner traps INT/TERM to do the same on cancel: under `timeout` each seat is its own
-  process group, so a signal aimed at the runner's group no longer reaches it, and a
-  survivor of a cancelled round would otherwise finish later and overwrite the next
-  round's review in the same work dir.
+  This replaced a `pgrep -P` tree walk, which was the wrong tool: it reimplements in
+  userspace what the kernel already tracks, races processes spawned during the walk,
+  goes blind under a PID-namespaced sandbox, and left stale pids to signal after a
+  reap. Process groups are what the OS provides for this.
 
-- **A watchdog-killed seat records 124, not a raw signal code.** `run.md` documents
-  `0/4/124/other`, and a seat killed for running past its budget is the timeout case;
-  writing 137 or 143 landed it in "other" and sent the orchestrator hunting an error
-  that never happened.
+- **The runner no longer needs a `timeout` binary at all.** Grouping comes from
+  `set -m`, so each seat's clock is a three-line sleeper that signals the group. That
+  removed the whole second code path — the coreutils probe, its `-x` guard, the
+  global-watchdog fallback for stock macOS, and the `DEBATE_TIMEOUT_BIN` seam that
+  existed only to test the fallback. `invoke-acpx.sh` still uses `timeout` for the
+  per-agent bound inside a seat, and keeps the `-x` guard there: `command -v` reports
+  the first PATH match without checking the execute bit, and acting on that kills the
+  seat at exec with 126.
+
+- **One teardown path, armed before the first seat is spawned.** Cancelling mid-spawn
+  used to leave everything already launched running, since the seats are in their own
+  process groups and never see a signal aimed at the runner.
+
+- **`reap_process_group` no longer asks `ps` what it already knows.** It probed for its
+  own process-group id to decide whether sweeping was safe, and read a failed probe as
+  "decline" — so under any sandbox that denies process enumeration the sweep silently
+  became a no-op, exactly where orphaned adapters pile up. A child leads a group when
+  it was launched under `timeout`, which this script knows without asking.
+
+- **A seat's guard holds no inherited file descriptors.** It kept the runner's stdout
+  open, so a caller capturing output with `$(...)` blocked until the guard's sleep
+  ended — a seat with a 460s budget hung its caller for 460s after the panel had
+  finished. The guard also leads its own group now, so disarming it takes its sleep
+  with it instead of orphaning one per seat.
+
+- **A seat that runs out of time records 124, whichever clock caught it.** `run.md`
+  documents `0/4/124/other`; a raw signal code landed a timeout in "other" and sent
+  the orchestrator hunting a stderr error that never happened.
 
 - **`POLL_MAX_WAIT` is rejected when it is not a positive integer.** It reaches `timeout`
   as a duration now, and a malformed one would make `timeout` refuse to run and take

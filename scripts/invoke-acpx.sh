@@ -359,21 +359,6 @@ for _tb in timeout gtimeout; do
   fi
 done
 unset _tb _tb_path
-# Honour the same pin/disable the runner does. Without this a seat spawned with the
-# runner's watchdog fallback would still find a working `timeout` one level down, so
-# the combination a no-coreutils host actually runs — outer watchdog, no inner bound
-# — could never be reproduced anywhere else.
-case "${DEBATE_TIMEOUT_BIN:-}" in
-  "")   ;;
-  none) TIMEOUT_BIN="" ;;
-  # An `[ -x ] && assign` one-liner would be a `set -e` landmine here: the compound
-  # returns 1 when the test fails, which kills the seat over an ignorable env var.
-  *)
-    if [ -x "${DEBATE_TIMEOUT_BIN}" ]; then
-      TIMEOUT_BIN="$DEBATE_TIMEOUT_BIN"
-    fi
-    ;;
-esac
 if [ -z "$TIMEOUT_BIN" ]; then
   echo "[$REVIEWER] WARNING: no usable timeout or gtimeout — running without timeout enforcement" >&2
   echo "  Install: brew install coreutils (macOS) / apt install coreutils (Linux)" >&2
@@ -853,20 +838,29 @@ reap_process_group() {
   local pgid="${1:-}"
   [ -n "$pgid" ] || return 0
 
-  local self_pgid
-  # A `ps` failure (unusual sandbox/PATH) must not abort the seat under set -e:
-  # an empty pgid means "can't determine my own group", which declines the sweep
-  # exactly like the shared-group case below.
-  self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" || true
-  if [ -z "$self_pgid" ] || [ "$pgid" = "$self_pgid" ]; then
-    return 0
-  fi
+  # Whether that pid leads a group is not something to rediscover at runtime: it
+  # leads one exactly when we launched it under `timeout`, and we know if we did.
+  # Asking `ps` instead was worse than redundant — a sandbox that denies process
+  # enumeration made the answer empty, which this function read as "decline", so
+  # the sweep silently became a no-op precisely where orphans pile up.
+  [ -n "$TIMEOUT_BIN" ] || return 0
 
   # A negative pid means "every process in this group". An empty group is the
   # normal, healthy outcome, so a failure here is expected and not worth
   # reporting — hence the discard.
   kill -TERM -- "-$pgid" 2> /dev/null || true
 }
+
+# The runner kills a seat by its process group, and that reaches this script — but
+# not the agent, because the `timeout` above put the agent in a group of its own.
+# So forward it: sweep the child's group before dying, using the same handle the
+# success path uses. Without this the panel reports a seat killed while its agent
+# keeps running with ppid 1.
+#
+# `wait` is interruptible by a trapped signal, which is where this script spends
+# the seat's whole life, so the trap fires promptly rather than after the agent
+# finishes. Armed here, below the function it calls.
+trap 'reap_process_group "${ACPX_PID:-}"; exit 143' TERM
 
 attempt_acpx() {
   set +e

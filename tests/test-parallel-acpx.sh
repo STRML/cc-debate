@@ -964,19 +964,10 @@ EOF
 # <name>-exit.txt, and a seat killed before its EXIT trap could run gets that file
 # written from the wait status instead.
 #
-# $1 (optional) "no-timeout": force the watchdog fallback with DEBATE_TIMEOUT_BIN=none,
-# which both the runner and invoke-acpx.sh honour — so this reproduces the pairing a
-# no-coreutils host actually runs (outer watchdog, no inner bound), not a hybrid.
-#
-# A PATH shim cannot do this job. Measured on bash 3.2.57 and 5.3.15 alike:
-# `command -v` skips a non-executable entry whenever a real binary sits behind it on
-# PATH, so on any host with coreutils the stub is ignored and this case would quietly
-# test the per-seat path instead.
-hung_reviewer_case() {
-  local mode="${1:-}"
+test_hung_reviewer_dies_at_its_budget() {
   local tmp_dir review_id work_dir out rc start elapsed
   tmp_dir=$(setup_env)
-  review_id="test-$(date +%s)-hang${mode:+-nt}"
+  review_id="test-$(date +%s)-hang"
   work_dir=".tmp/ai-review-${review_id}"
 
   cat > "$tmp_dir/config.json" << 'EOF'
@@ -994,47 +985,36 @@ EOF
   rc=0
   out=$(PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT=3 \
     MOCK_ACPX_DELAY=60 \
-    DEBATE_TIMEOUT_BIN="$([ "$mode" = "no-timeout" ] && echo none)" \
     bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>&1) || rc=$?
   elapsed=$(( SECONDS - start ))
 
   local cleanup="$work_dir $tmp_dir"
   # Back at the budget, not at the agent's own 120s timeout.
   [ "$elapsed" -lt 30 ] || {
-    echo "DIAG hung($mode): took ${elapsed}s -- $out" >&2; rm -rf $cleanup; return 1; }
-  [ "$rc" -ne 0 ] || { echo "DIAG hung($mode): rc=0 -- $out" >&2; rm -rf $cleanup; return 1; }
-  # Assert the branch, not just the outcome: without this the no-timeout case passes
-  # on a host with coreutils by taking the per-seat path it was written to avoid.
-  # The plain case gets no matching assertion on purpose - a host without coreutils
-  # takes the watchdog there legitimately, and CI on macos-latest is such a host.
-  if [ "$mode" = "no-timeout" ]; then
-    echo "$out" | grep -q "bounding the panel with one watchdog" || {
-      echo "DIAG hung($mode): took the per-seat path -- $out" >&2; rm -rf $cleanup; return 1; }
-  fi
-  # `timeout` reports 124, the watchdog reports a signal; both name the seat budget.
-  echo "$out" | grep -qE "alpha (timed out|was killed before it finished) \(seat budget 3s\)" || {
-    echo "DIAG hung($mode): $out" >&2; rm -rf $cleanup; return 1; }
-  [ -f "$work_dir/alpha-exit.txt" ] || {
-    echo "DIAG hung($mode): no exit file" >&2; rm -rf $cleanup; return 1; }
-  [ "$(cat "$work_dir/alpha-exit.txt")" != "0" ] || {
-    echo "DIAG hung($mode): exit file said 0" >&2; rm -rf $cleanup; return 1; }
+    echo "DIAG hung: took ${elapsed}s -- $out" >&2; rm -rf $cleanup; return 1; }
+  [ "$rc" -ne 0 ] || { echo "DIAG hung: rc=0 -- $out" >&2; rm -rf $cleanup; return 1; }
+  echo "$out" | grep -q "alpha ran out of time (seat budget 3s)" || {
+    echo "DIAG hung: $out" >&2; rm -rf $cleanup; return 1; }
+  # A timeout is recorded as 124; run.md's contract has no signal codes in it.
+  [ "$(cat "$work_dir/alpha-exit.txt" 2>&1)" = "124" ] || {
+    echo "DIAG hung: exit=[$(cat "$work_dir/alpha-exit.txt" 2>&1)]" >&2
+    rm -rf $cleanup; return 1; }
 
   rm -rf $cleanup
 }
 
-test_hung_reviewer_dies_at_its_budget() { hung_reviewer_case; }
-test_hung_reviewer_bounded_without_timeout_binary() { hung_reviewer_case no-timeout; }
-
-# Killing the seat means killing the agent, not just the invoke-acpx.sh wrapper it
-# runs under. Signalling only the pid the runner holds reaps the wrapper and leaves
-# the agent running with ppid 1, still burning tokens after the panel reports it
-# dead — and on the watchdog path (no timeout binary) nothing else would ever
-# collect it. The mock writes its marker only if it outlived its delay, so the
-# passing condition is that the file never appears.
-test_seat_kill_reaches_the_agent_process() {
-  local tmp_dir review_id work_dir survived waited
+# Killing a seat has to kill the agent, not just the invoke-acpx.sh wrapper: a
+# wrapper-only kill leaves the agent with ppid 1, still burning tokens after the
+# panel reports it dead. The mock writes a marker only if it outlives its delay.
+#
+# $1 budget: short enough to kill the seat mid-delay, or long enough to let it
+# finish. Both directions are asserted, because "no marker" on its own also
+# describes a seat that never launched — the run with the long budget is the
+# positive control that proves the marker can appear at all.
+seat_survival_marker() {
+  local budget="$1" tmp_dir review_id work_dir survived waited
   tmp_dir=$(setup_env)
-  review_id="test-$(date +%s)-tree"
+  review_id="test-$(date +%s)-kill$budget"
   work_dir=".tmp/ai-review-${review_id}"
   survived="$tmp_dir/survived.txt"
 
@@ -1049,39 +1029,33 @@ EOF
   mkdir -p "$work_dir"
   echo "Test plan" > "$work_dir/plan.md"
 
-  # kill_tree walks the tree with `pgrep -P`, and some sandboxes deny process
-  # enumeration outright ("Cannot get process list"). There the walk cannot work and
-  # this would fail for a reason that has nothing to do with the code, so skip rather
-  # than report a red herring. CI and a normal shell both have it.
-  if ! pgrep -P $$ > /dev/null 2>&1 && ! pgrep -l init > /dev/null 2>&1; then
-    echo -n "(skipped: pgrep unavailable) " >&2
-    rm -rf "$work_dir" "$tmp_dir"
-    return 0
-  fi
-
-  # Watchdog path: no timeout binary, so the runner's own kill is the only thing
-  # standing between a wedged agent and forever.
-  PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT=3 \
-    DEBATE_TIMEOUT_BIN=none \
-    MOCK_ACPX_DELAY=12 MOCK_ACPX_SURVIVED_FILE="$survived" \
+  PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT="$budget" \
+    MOCK_ACPX_DELAY=8 MOCK_ACPX_SURVIVED_FILE="$survived" \
     bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" > /dev/null 2>&1
 
-  # Outlive the mock's delay: if the agent was left running it writes the marker at
-  # T+12s, well after the runner returned at its 3s budget.
+  # Outlive the mock's delay, so a survivor has time to write its marker.
   waited=0
-  while [ "$waited" -lt 14 ]; do
+  while [ "$waited" -lt 12 ] && [ ! -f "$survived" ]; do
     sleep 2
     waited=$(( waited + 2 ))
-    [ -f "$survived" ] && break
   done
 
-  if [ -f "$survived" ]; then
-    echo "DIAG tree: agent survived the seat kill (marker written)" >&2
-    rm -rf "$work_dir" "$tmp_dir"
-    return 1
-  fi
-
+  [ -f "$survived" ] && echo survived || echo killed
   rm -rf "$work_dir" "$tmp_dir"
+}
+
+test_seat_kill_reaches_the_agent_process() {
+  local killed lived
+  # Positive control first: with room to finish, the marker MUST appear. Without
+  # this the negative case below passes just as happily when nothing ever ran.
+  lived=$(seat_survival_marker 60)
+  [ "$lived" = "survived" ] || {
+    echo "DIAG kill: positive control failed - marker absent with a 60s budget ($lived)" >&2
+    return 1; }
+
+  killed=$(seat_survival_marker 3)
+  [ "$killed" = "killed" ] || {
+    echo "DIAG kill: agent outlived the seat kill ($killed)" >&2; return 1; }
 }
 
 # POLL_MAX_WAIT is a `timeout` argument now, and `timeout` refuses to run at all on
@@ -1160,7 +1134,6 @@ run_test "subagent harness seat skipped by this runner" test_subagent_seat_skipp
 run_test "proxy opus seat not provider-locked" test_proxy_opus_provider_not_locked
 run_test "provider mismatch runs config default" test_provider_mismatch_runs_config_default
 run_test "hung reviewer dies at its budget" test_hung_reviewer_dies_at_its_budget
-run_test "hung reviewer bounded without a timeout binary" test_hung_reviewer_bounded_without_timeout_binary
 run_test "seat kill reaches the agent process" test_seat_kill_reaches_the_agent_process
 run_test "invalid POLL_MAX_WAIT ignored" test_invalid_poll_max_wait_ignored
 
