@@ -1139,7 +1139,7 @@ abort Cleanup path above):
   preset with `"claude_reviewers": {}` runs a Codex/Gemini-only panel — the "tokens are
   tight" case. Preset-key matches take precedence over reviewer-name matches (Step 1a).
 - **Security:** Never inline plan content or AI output in shell strings — use files.
-- **Timeout:** Each reviewer's timeout is in the config. The runner spawns every seat under `timeout` at that seat's own budget — `timeout × (retries + 1) + 60s` — so a hung seat dies on its own clock instead of holding the panel open. `POLL_MAX_WAIT` overrides the budget.
+- **Timeout:** Each reviewer's timeout is in the config. Every seat runs in its own process group, bounded by a guard that sleeps `timeout × (retries + 1) + 60s` and then signals the group — so a hung seat dies on its own clock instead of holding the panel open. `POLL_MAX_WAIT` overrides the budget. (The runner itself needs no `timeout` binary; inside a seat, `invoke-acpx.sh` wraps each agent call in GNU `timeout --foreground`, which keeps the agent in the seat's group so the same signal that kills the seat reaches the agent.)
 - **Graceful degradation:** If a reviewer fails, skip it in synthesis. If all fail, return UNDECIDED.
 - **Debate guard:** Skip debate if fewer than 2 reviewers succeeded.
 - **Read fully, never grep-skim.** You MUST read each reviewer's complete output with the Read tool. Never use `grep -A`, `grep -iE`, or keyword extraction to summarize reviews — this reliably misses 50%+ of findings. If you catch yourself reaching for grep on reviewer output, stop and use Read instead.

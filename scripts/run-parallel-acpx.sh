@@ -246,10 +246,18 @@ kill_all_seats() {
   done
 }
 
-# POLL_MAX_WAIT overrides the computed per-reviewer budget.
-if [ -n "${POLL_MAX_WAIT:-}" ] && { ! [[ "$POLL_MAX_WAIT" =~ ^[0-9]+$ ]] || [ "$POLL_MAX_WAIT" -le 0 ]; }; then
-  echo "[debate] Ignoring invalid POLL_MAX_WAIT '$POLL_MAX_WAIT' — using the computed budget." >&2
-  POLL_MAX_WAIT=""
+# POLL_MAX_WAIT overrides the computed per-reviewer budget. It must be a positive
+# integer no larger than macOS /bin/sleep accepts (2^31-1); the guard sleeps this
+# value directly, and /bin/sleep rejects anything larger, which would kill every seat
+# instantly when the guard's sleep fails. The range check goes through awk, not
+# `[ -le 0 ]`: on a value beyond bash's 64-bit arithmetic the test errors out and the
+# validation is silently bypassed (observed with POLL_MAX_WAIT=99999999999).
+if [ -n "${POLL_MAX_WAIT:-}" ]; then
+  if ! [[ "$POLL_MAX_WAIT" =~ ^[0-9]+$ ]] || \
+     ! awk -v n="$POLL_MAX_WAIT" 'BEGIN { exit !(n >= 1 && n <= 2147483647) }'; then
+    echo "[debate] Ignoring invalid POLL_MAX_WAIT '$POLL_MAX_WAIT' — using the computed budget." >&2
+    POLL_MAX_WAIT=""
+  fi
 fi
 
 # The model map is load-bearing: a truncated or hand-edited file silently falling
@@ -442,7 +450,10 @@ for NAME in "${REVIEWERS[@]}"; do
   SEAT_PID=$!
 
   # This seat's clock. It signals the group, so it reaches the agent and not just
-  # the wrapper; TERM first, then KILL for anything that ignores it. One sleeping
+  # the wrapper; TERM first, then KILL for anything that ignores it. The KILL is the
+  # backstop for a TERM-unresponsive seat — the runner is blocked in `wait` on it,
+  # so nothing else will ever terminate it. (The runner's post-wait KILL sweep is the
+  # escalation on the normal path, where the seat exits on TERM.) One sleeping
   # process per seat, no polling, and no dependency on a `timeout` binary.
   #
   # Its own stdio goes to /dev/null, and this matters more than it looks: a guard
@@ -493,8 +504,10 @@ for i in "${!PIDS[@]}"; do
   NAME="${NAMES[$i]}"
 
   # The seat's guard has done its job either way; stop its clock before it can fire
-  # against a pid this shell has already reaped.
+  # against a pid this shell has already reaped, then reap it — a TERM'd guard that
+  # is never `wait`ed zombies until this runner exits, one per seat.
   kill_seat TERM "${GUARDS[$i]}"
+  wait "${GUARDS[$i]}" 2> /dev/null
 
   # Sweep the group now that the leader is reaped. A group outlives its leader, so
   # this is what collects an agent that ignored TERM — and doing it here rather than
@@ -516,8 +529,11 @@ for i in "${!PIDS[@]}"; do
   # invoke-acpx.sh publishes its own code and exits with the same one, so the file
   # and the wait status agree on every normal path. They diverge when the seat was
   # killed — its trap may have written a raw signal code, or never run at all — and
-  # the wait status is the better account either way, so it wins.
-  printf '%s\n' "$CODE" > "${EXIT_FILES[$i]}"
+  # the wait status is the better account either way, so it wins. Write it the same
+  # atomic way invoke-acpx.sh does (temp + rename) so a concurrent reader never sees
+  # a partially-written file.
+  printf '%s\n' "$CODE" > "${EXIT_FILES[$i]}.tmp.$$" && \
+    mv -f "${EXIT_FILES[$i]}.tmp.$$" "${EXIT_FILES[$i]}"
 
   [ "$CODE" -gt "$WORST_EXIT" ] && WORST_EXIT="$CODE"
 done

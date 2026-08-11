@@ -364,6 +364,21 @@ if [ -z "$TIMEOUT_BIN" ]; then
   echo "  Install: brew install coreutils (macOS) / apt install coreutils (Linux)" >&2
 fi
 
+# The seat is a process group, and the runner kills it by that group. A GNU `timeout`
+# normally calls setpgid on itself and becomes a NEW group leader, so the agent runs in
+# a group of its own that a seat-group kill never reaches — the orphan the process-group
+# design exists to prevent. `--foreground` stops timeout from doing that: the agent stays
+# in the seat's group, so the pid the runner waits on IS the group that holds the whole
+# chain. Only meaningful for a GNU timeout (the flag is a coreutils extension), so probe
+# the resolved binary before relying on it; a non-GNU `timeout` is left as-is and the
+# agent keeps its own (unreachable) group — the seat still gets its per-agent bound.
+TIMEOUT_FOREGROUND=()
+if [ -n "$TIMEOUT_BIN" ]; then
+  if "$TIMEOUT_BIN" --version 2>/dev/null | grep -qi "GNU coreutils"; then
+    TIMEOUT_FOREGROUND=(--foreground)
+  fi
+fi
+
 # --- Shared result handler ---
 # Call after running any reviewer command. Uses globals: REVIEWER, WORK_DIR, TIMEOUT, EXIT_CODE.
 # $1: label used in log/error messages (e.g. "agy (Antigravity CLI)" or "acpx")
@@ -571,7 +586,7 @@ this review."
 
   TIMEOUT_PREFIX=()
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-    TIMEOUT_PREFIX=("$TIMEOUT_BIN" "$TIMEOUT")
+    TIMEOUT_PREFIX=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]}" "$TIMEOUT")
   fi
 
   # Strip the PTY's ANSI escapes (literal ESC via printf — portable across BSD/GNU sed),
@@ -671,7 +686,7 @@ if [ "$AGENT" = "opus" ]; then
 
   OPUS_CMD=()
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-    OPUS_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
+    OPUS_CMD+=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]}" "$TIMEOUT")
   fi
   # --permission-mode plan: read-only mode — the reviewer cannot edit/write files.
   if [ -n "$PROXY_ROUTE" ]; then
@@ -764,7 +779,7 @@ if [ "$AGENT" = "codex" ] && [ -n "$EFFORT" ]; then
   # never need repo trust. Skip the check rather than leave the seat dead.
   CODEX_CMD+=(--skip-git-repo-check)
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-    CODEX_CMD=("$TIMEOUT_BIN" "$TIMEOUT" "${CODEX_CMD[@]}")
+    CODEX_CMD=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]}" "$TIMEOUT" "${CODEX_CMD[@]}")
   fi
 
   attempt_codex() {
@@ -781,7 +796,7 @@ fi
 
 ACPX_CMD=()
 if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-  ACPX_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
+  ACPX_CMD+=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]}" "$TIMEOUT")
 fi
 # `exec` must land directly after the agent name — it is that agent's subcommand,
 # not a global acpx flag, and acpx rejects it anywhere else.
@@ -816,42 +831,11 @@ ACPX_CMD+=("${AGENT_ARGS[@]}" --file "$PROMPT_FILE")
 # orphaned adapter trees, every one of them in a process group whose leader had
 # long since exited.
 #
-# `timeout` makes ITSELF the process-group leader — its pid equals its pgid, and
-# the command it runs joins that group — so $! is both the pid to wait on and
-# the group to sweep afterwards. Once it exits the survivors are orphans with
-# ppid=1, but they are still in that now-leaderless group, and the group is the
-# only remaining handle on them.
-#
-# Without a timeout binary the command shares THIS script's process group, and
-# sweeping it would kill the script mid-run. reap_process_group declines that
-# case, so a timeout-less host keeps exactly its current behaviour.
-reap_process_group() {
-  local pgid="${1:-}"
-  [ -n "$pgid" ] || return 0
-
-  # Whether that pid leads a group is not something to rediscover at runtime: it
-  # leads one exactly when we launched it under `timeout`, and we know if we did.
-  # Asking `ps` instead was worse than redundant — a sandbox that denies process
-  # enumeration made the answer empty, which this function read as "decline", so
-  # the sweep silently became a no-op precisely where orphans pile up.
-  [ -n "$TIMEOUT_BIN" ] || return 0
-
-  # A negative pid means "every process in this group". An empty group is the
-  # normal, healthy outcome, so a failure here is expected and not worth
-  # reporting — hence the discard.
-  kill -TERM -- "-$pgid" 2> /dev/null || true
-}
-
-# The runner kills a seat by its process group, and that reaches this script — but
-# not the agent, because the `timeout` above put the agent in a group of its own.
-# So forward it: sweep the child's group before dying, using the same handle the
-# success path uses. Without this the panel reports a seat killed while its agent
-# keeps running with ppid 1.
-#
-# `wait` is interruptible by a trapped signal, which is where this script spends
-# the seat's whole life, so the trap fires promptly rather than after the agent
-# finishes. Armed here, below the function it calls.
-trap 'reap_process_group "${ACPX_PID:-}"; exit 143' TERM
+# With `timeout --foreground` the agent stays in THIS seat's process group, so
+# those survivors are reaped by the runner's post-wait group sweep — the same
+# `kill -- -SEAT_PID` that stops a wedged agent. Sweeping from here instead would
+# kill this script (it shares that group), so the runner is the only safe place
+# for it.
 
 attempt_acpx() {
   set +e
@@ -864,10 +848,8 @@ attempt_acpx() {
   wait "$ACPX_PID"
   EXIT_CODE=$?
   set -e
-  # Sweep whatever acpx left behind, on both the timeout and the success path.
-  # Under `timeout` this pid IS the process-group id (see above); without one it
-  # is just acpx's pid in our own group, which reap_process_group declines.
-  reap_process_group "$ACPX_PID"
+  # Whatever acpx left behind stays in this seat's group and is reaped by the
+  # runner's post-wait sweep — not here, which would kill this seat too.
 
   # acpx exit 5 is PERMISSION_DENIED, and on this panel it is not a failed review.
   #

@@ -15,20 +15,20 @@
   step by hand with the one already inside the child. When the two disagreed, both were
   quiet about it.
 
-  The runner now spawns each seat under `timeout -k 5 <that seat's budget>` and waits on
-  it. Same arithmetic, applied to the process it actually bounds. Gone: the poll loop,
+  The runner now spawns each seat in its own process group and `wait`s on it, with a
+  guard subshell that sleeps that seat's budget and then signals the group. Same
+  arithmetic, applied to the process it actually bounds. Gone: the poll loop,
   `POLL_INTERVAL`, the SIGTERM-then-SIGKILL ladder, and reading the exit codes back off
-  disk to aggregate them.
+  disk to aggregate them. The runner itself needs no `timeout` binary — the seat's clock
+  is a sleeper that signals the group.
 
 - **A hung seat dies on its own clock instead of taking the panel with it.** The global
   `MAX_WAIT` killed every reviewer at once when the slowest blew its budget, so one
   wedged seat threw away the reviews that had already landed. Each seat is bounded
-  individually now, and the seats that answered are still counted.
-
-  Per-seat bounds need a `timeout` binary, and stock macOS ships neither `timeout` nor
-  `gtimeout`. There the runner arms one watchdog for the whole panel at the slowest
-  seat's budget — the old global behaviour, kept deliberately, because dropping it would
-  leave the most common dev platform with nothing bounding a wedged reviewer.
+  individually now by a guard subshell that sleeps that seat's budget and then signals
+  the seat's process group — no `timeout` binary involved, so stock macOS (which ships
+  neither `timeout` nor `gtimeout`) gets the same per-seat bound as anywhere else, and
+  the seats that answered are still counted.
 
 - **`<name>-exit.txt` is still written for a seat killed before its EXIT trap ran.** The
   orchestrator reads that file, and after a hard kill the wait status is the only account
@@ -43,6 +43,14 @@
   outlives its leader, so the same handle also collects survivors after the wrapper is
   reaped — which is exactly the orphaned-agent case.
 
+  The chain stays in one group because the agent runs under GNU `timeout --foreground`
+  inside the seat. Plain `timeout` calls `setpgid` on itself and becomes a NEW group
+  leader, so the agent lives in a group of its own that a seat-group kill never reaches —
+  the orphan this design exists to prevent, just moved. `--foreground` is a coreutils
+  extension, so invoke-acpx.sh probes `timeout --version` for "GNU coreutils" before
+  relying on it; a non-GNU `timeout` is used as-is and the agent keeps its own
+  (unreachable) group.
+
   This replaced a `pgrep -P` tree walk, which was the wrong tool: it reimplements in
   userspace what the kernel already tracks, races processes spawned during the walk,
   goes blind under a PID-namespaced sandbox, and left stale pids to signal after a
@@ -53,7 +61,8 @@
   removed the whole second code path — the coreutils probe, its `-x` guard, the
   global-watchdog fallback for stock macOS, and the `DEBATE_TIMEOUT_BIN` seam that
   existed only to test the fallback. `invoke-acpx.sh` still uses `timeout` for the
-  per-agent bound inside a seat, and keeps the `-x` guard there: `command -v` reports
+  per-agent bound inside a seat (now `timeout --foreground` to keep the agent in the
+  seat's group), and keeps the `-x` guard there: `command -v` reports
   the first PATH match without checking the execute bit, and acting on that kills the
   seat at exec with 126.
 
@@ -61,11 +70,14 @@
   used to leave everything already launched running, since the seats are in their own
   process groups and never see a signal aimed at the runner.
 
-- **`reap_process_group` no longer asks `ps` what it already knows.** It probed for its
-  own process-group id to decide whether sweeping was safe, and read a failed probe as
-  "decline" — so under any sandbox that denies process enumeration the sweep silently
-  became a no-op, exactly where orphaned adapters pile up. A child leads a group when
-  it was launched under `timeout`, which this script knows without asking.
+- **Orphaned adapters are collected by the runner's post-wait group sweep, not a
+  separate reaper.** An earlier form had `invoke-acpx.sh` sweep the agent's own group
+  after each call, gating on `ps` to avoid killing itself — and a sandbox that denies
+  process enumeration made that probe fail, turning the sweep into a silent no-op
+  exactly where orphans pile up. With `--foreground` the agent shares the seat's group,
+  so invoke-acpx.sh can no longer sweep (it would kill itself); the runner's existing
+  post-wait `kill -- -SEAT_PID` — which already collected TERM-ignoring agents — now
+  also collects the adapters. One mechanism for both, and it never had to ask `ps`.
 
 - **A seat's guard holds no inherited file descriptors.** It kept the runner's stdout
   open, so a caller capturing output with `$(...)` blocked until the guard's sleep
@@ -77,9 +89,12 @@
   documents `0/4/124/other`; a raw signal code landed a timeout in "other" and sent
   the orchestrator hunting a stderr error that never happened.
 
-- **`POLL_MAX_WAIT` is rejected when it is not a positive integer.** It reaches `timeout`
-  as a duration now, and a malformed one would make `timeout` refuse to run and take
-  every seat down instantly. A bad value warns and falls back to the computed budget.
+- **`POLL_MAX_WAIT` is rejected when it is not a positive integer, and capped at the
+  largest `sleep` accepts.** It becomes the guard's `sleep` duration, and a value over
+  2^31-1 makes macOS `/bin/sleep` fail instantly — every seat killed at spawn. The range
+  check goes through `awk` (a `[ -le 0 ]` on a value beyond bash's 64-bit arithmetic
+  errors out and silently bypasses the guard). A bad value warns and falls back to the
+  computed budget.
 
 ## [3.1.3] — 2026-08-04 (a reviewer's configured `effort` is honored again)
 

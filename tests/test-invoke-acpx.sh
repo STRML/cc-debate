@@ -1825,40 +1825,12 @@ run_test "missing-config guard message preserved in output" test_missing_config_
 # and therefore never signals the group. That is precisely the case that
 # leaked: acpx returns, its spawned adapter keeps running and reparents to
 # init. MOCK_ACPX_ORPHAN makes the mock leave exactly such a child behind.
-test_orphaned_adapter_reaped() {
-  local work_dir config orphan_file orphan_pid i
-  # The reap only works when the acpx call has its own process group, which
-  # `timeout`/`gtimeout` provides. Without one (e.g. macOS CI without
-  # coreutils) the mock shares this script's group and reap_process_group
-  # correctly declines — that is the designed fallback, so skip rather than
-  # fail. Verified on ubuntu (coreutils present) and local hosts.
-  if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1; then
-    return 0
-  fi
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-  orphan_file="$work_dir/orphan.pid"
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_ACPX_ORPHAN="$orphan_file" \
-    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2> /dev/null
-
-  [ -f "$orphan_file" ] || { rm -rf "$work_dir"; return 1; }
-  orphan_pid=$(cat "$orphan_file")
-  # Give the sweep a moment, then confirm the orphan is gone.
-  for i in 1 2 3 4 5; do
-    kill -0 "$orphan_pid" 2>/dev/null || break
-    sleep 0.2
-  done
-  if kill -0 "$orphan_pid" 2>/dev/null; then
-    echo "  orphan pid $orphan_pid still alive after reap"
-    rm -rf "$work_dir"; return 1
-  fi
-  rm -rf "$work_dir"
-}
-run_test "orphaned adapter is reaped after a success" test_orphaned_adapter_reaped
-
+#
+# NOTE: the sweep lives in run-parallel-acpx.sh now, not here. With `timeout
+# --foreground` the agent shares this seat's process group, so sweeping from
+# inside invoke-acpx.sh would kill the seat itself. The runner's post-wait
+# `kill -- -SEAT_PID` is the only safe place for it — the corresponding test is
+# `test_orphaned_adapter_reaped` in test-parallel-acpx.sh.
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="
 

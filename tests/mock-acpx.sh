@@ -76,6 +76,14 @@ if [ -n "$FILE_ARG" ] && [ ! -f "$FILE_ARG" ]; then
   exit 1
 fi
 
+# Simulate a wedged agent that ignores SIGTERM — the case the runner's process-group
+# sweep exists for. A group TERM cannot stop it; only a KILL of the seat's group does,
+# and that requires the agent to be IN that group (which needs `timeout --foreground`).
+# Absence of the survival marker is the passing condition.
+if [ "${MOCK_ACPX_IGNORE_TERM:-0}" = "1" ]; then
+  trap '' TERM
+fi
+
 # Simulate delay
 if [ "$DELAY" -gt 0 ] 2>/dev/null; then
   sleep "$DELAY"
