@@ -666,6 +666,11 @@ if [ "$AGENT" = "opus" ]; then
     OPUS_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
   fi
   # --permission-mode plan: read-only mode — the reviewer cannot edit/write files.
+  # --no-session-persistence: the reviewer's deliverable is stdout, captured into
+  # <reviewer>-output.md, so its transcript has no reader. Without this every seat
+  # wrote a full session JSONL into the debate's cwd project bucket — 30 of them
+  # piled up in the cc-debate-wait worktree and polluted search-sessions. (Note it
+  # does not suppress Claude Code's async ai-title stub; that one needs a cwd change.)
   if [ -n "$PROXY_ROUTE" ]; then
     # Proxy route: set the base URL via env on the child and send the sentinel.
     # Force DS4_ZDR=1 on 31501 (openrouter) so ZDR is not silently disabled by an
@@ -674,9 +679,9 @@ if [ "$AGENT" = "opus" ]; then
     OPUS_CMD+=(env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY \
       ANTHROPIC_BASE_URL="$PROXY_BASE_URL" \
       DS4_ZDR=1 \
-      claude --print --permission-mode plan --model "$PROXY_SENTINEL")
+      claude --print --no-session-persistence --permission-mode plan --model "$PROXY_SENTINEL")
   else
-    OPUS_CMD+=(claude --print --permission-mode plan --model "${MODEL:-${CONFIG_MODEL:-claude-opus-4-8}}")
+    OPUS_CMD+=(claude --print --no-session-persistence --permission-mode plan --model "${MODEL:-${CONFIG_MODEL:-claude-opus-4-8}}")
   fi
 
   attempt_opus() {
