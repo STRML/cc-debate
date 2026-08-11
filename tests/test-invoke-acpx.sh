@@ -821,54 +821,43 @@ test_blank_output_does_not_log_review_received() {
   rm -rf "$work_dir"
 }
 
-# A terminal reset or a zero-width space is not whitespace by POSIX, so a review
-# containing only control bytes used to pass as delivered. Both verified to match
-# `[^[:space:]]`, which is why the gate tests for alphanumerics instead.
+# A review containing only raw control bytes is empty: a bare ESC or BEL, and a
+# terminal reset with no payload (ESC[0m) whose only printable bytes are the
+# sequence's own parameters — none of which is a review.
+#
+# Bare C1 bytes (0x9B/0x9C/0x9D) are deliberately NOT in this list: they are
+# ambiguous with UTF-8 continuation bytes (Cyrillic Н is D0 9D, where 0x9D is a
+# continuation), and stripping them to treat a lone C1 as blank would mangle
+# real non-Latin reviews. A bare C1 counts as content, matching main.
 test_control_bytes_only_response_is_empty() {
-  local work_dir config
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
+  local work_dir config combo
+  for combo in '\033' '\007' '\033\007' '\033[0m'; do
+    work_dir=$(setup_work_dir)
+    config=$(setup_config "$work_dir")
 
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_ACPX_RESPONSE="$(printf '\033[0m')" \
-    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_ACPX_RESPONSE="$(printf "$combo")" \
+      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
 
-  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
-
-  rm -rf "$work_dir"
+    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
+      echo "  control bytes / bare reset accepted as a delivered review"
+      rm -rf "$work_dir"; return 1
+    fi
+    rm -rf "$work_dir"
+  done
 }
 
-# OSC payloads carry text, so a lone hyperlink escape is full of alphanumerics and
-# survives the alnum test unless OSC is stripped specifically. CSI has no payload,
-# which is why stripping it was not enough.
-test_osc_only_response_is_empty() {
-  local work_dir config
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_ACPX_RESPONSE="$(printf '\033]8;;https://example.invalid/x\007\033]8;;\007')" \
-    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
-
-  [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" = "1" ] || return 1
-
-  rm -rf "$work_dir"
-}
-
-# OSC openers (ESC] and 0x9D) and terminators (BEL, 0x9C, ESC-backslash) combine
-# freely, including mixed 7-bit/8-bit. Pairing each opener with only its own
-# terminator left two live bypasses, so every combination is checked here.
+# A lone OSC hyperlink escape is framing, not a review — the payload is a URL
+# the agent wrapped, never the agent's message. Openers are 7-bit (ESC]);
+# terminators are BEL and ESC-backslash. 0x9C is excluded from the payload (it is
+# a UTF-8 continuation byte) and is deliberately NOT a terminator, so a
+# 0x9C-terminated OSC leaves residual text that counts as content.
 test_osc_all_encodings_count_as_empty() {
   local work_dir config combo n=0
   for combo in \
     '\033]8;;https://example.invalid/x\007' \
-    '\033]8;;https://example.invalid/x\033\\' \
-    '\033]8;;https://example.invalid/x\234' \
-    '\2358;;https://example.invalid/x\234' \
-    '\2358;;https://example.invalid/x\007' \
-    '\2358;;https://example.invalid/x\033\\'
+    '\033]8;;https://example.invalid/x\033\\'
   do
     n=$((n + 1))
     work_dir=$(setup_work_dir)
@@ -881,8 +870,101 @@ test_osc_all_encodings_count_as_empty() {
 
     if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
       echo "  OSC encoding $n was accepted as a delivered review"
-      rm -rf "$work_dir"
-      return 1
+      rm -rf "$work_dir"; return 1
+    fi
+    rm -rf "$work_dir"
+  done
+}
+
+# A 0x9C-terminated OSC is not stripped — 0x9C is a UTF-8 continuation byte and
+# is excluded from the payload, so the match stops there and the residual text
+# counts as content. Pin that so a future change cannot regress it silently.
+test_osc_terminated_by_0x9c_counts_as_content() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\033]8;;https://example.invalid/x\234')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+
+  if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
+    echo "  a 0x9C-terminated OSC was discarded as empty"
+    rm -rf "$work_dir"; return 1
+  fi
+
+  rm -rf "$work_dir"
+}
+
+# An unterminated CSI followed by text counts as content. The intermediate
+# class must be [ -/] (0x20-0x2F), not [ -\/] (0x20-0x5C): the wide class would
+# eat 'ESC[1 QUICK CHECK' to blank, the narrow one strips only 'ESC[1 Q' (Q is a
+# valid final byte) and preserves 'UICK CHECK'.
+test_unterminated_csi_preserves_text() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\033[1 QUICK CHECK')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+
+  if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
+    echo "  an unterminated CSI ate the text after it"
+    rm -rf "$work_dir"; return 1
+  fi
+
+  rm -rf "$work_dir"
+}
+
+# A response that is only a bare C1 byte counts as content: C1 bytes are UTF-8
+# continuation bytes, are not stripped, and are not whitespace/punctuation. This
+# matches main, whose grammar stripped only complete escape sequences.
+test_bare_c1_counts_as_content() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\235')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+
+  if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
+    echo "  a bare C1 byte was discarded as empty"
+    rm -rf "$work_dir"; return 1
+  fi
+
+  rm -rf "$work_dir"
+}
+
+# A review in a script whose UTF-8 continuation bytes collide with C1 escape
+# bytes must survive byte-identical. The escape grammar is 7-bit only for exactly
+# this reason: Л = D0 9B, Н = D0 9D, М = D0 9C — and 0x9B/0x9D/0x9C are
+# continuation bytes. The 'ESC]8;;М TEXT BEL' case opens a real OSC, runs into a
+# 0x9C continuation inside the payload, and must preserve the text after it —
+# 0x9C is excluded from the payload so the match stops there rather than
+# bridging across it to a later BEL.
+test_non_latin_with_c1_colliding_bytes_not_mangled() {
+  local work_dir config
+  for combo in '\320\233 VERDICT: APPROVED' '\320\235 \320\234' '\033]8;;\320\234 REVIEW TEXT\007'; do
+    work_dir=$(setup_work_dir)
+    config=$(setup_config "$work_dir")
+
+    SKIP_SESSION_CHECK=1 \
+    PATH="$SCRIPT_DIR:$PATH" \
+    MOCK_ACPX_RESPONSE="$(printf "$combo")" \
+      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+
+    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
+      echo "  a non-Latin review with C1-colliding bytes was discarded as empty"
+      rm -rf "$work_dir"; return 1
+    fi
+    if [ "$(cat "$work_dir/no-retry-reviewer-output.md")" != "$(printf "$combo")" ]; then
+      echo "  a non-Latin review with C1-colliding bytes was corrupted"
+      rm -rf "$work_dir"; return 1
     fi
     rm -rf "$work_dir"
   done
@@ -906,31 +988,38 @@ test_review_containing_a_url_still_passes() {
 }
 
 # A colon-form SGR colour is a control sequence whose parameter bytes include ':'.
-# A CSI pattern of [0-9;?]* does not match it, and its digits then read as content.
+# The CSI rule must cover it: the printable digits are the sequence's own
+# parameters, not content, so a bare colour setup counts as blank. The 8-bit
+# opener 0x9B is not tested here — it is a UTF-8 continuation byte and is
+# deliberately left as content (see test_non_latin_with_c1_colliding_bytes).
 test_colon_sgr_only_response_is_empty() {
-  local work_dir config combo
-  for combo in '\033[38:2::255:0:0m' '\23338:2::255:0:0m'; do
-    work_dir=$(setup_work_dir)
-    config=$(setup_config "$work_dir")
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
 
-    SKIP_SESSION_CHECK=1 \
-    PATH="$SCRIPT_DIR:$PATH" \
-    MOCK_ACPX_RESPONSE="$(printf "$combo")" \
-      bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\033[38:2::255:0:0m')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null || true
 
-    if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
-      echo "  colon-form SGR accepted as a delivered review"
-      rm -rf "$work_dir"; return 1
-    fi
-    rm -rf "$work_dir"
-  done
+  if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "1" ]; then
+    echo "  colon-form SGR accepted as a delivered review"
+    rm -rf "$work_dir"; return 1
+  fi
+
+  rm -rf "$work_dir"
 }
 
 # A review needs no ASCII at all. Testing for [[:alnum:]] under LC_ALL=C threw away
 # every review written in a non-Latin script and reported the seat as failed.
+#
+# The scripts deliberately include codepoints whose UTF-8 continuation bytes fall
+# in the C1 range 0x80-0x9F (Cyrillic Н = D0 9D, and 'Ошибка' has continuations
+# 0x9E/0x88/0x88). The blank-check strip must not delete those bytes — it runs
+# the same sed|tr pipeline the function uses, and requires every byte to survive.
 test_non_latin_review_is_not_empty() {
-  local work_dir config script
-  for script in '\345\220\214\346\204\217\343\200\202' '\320\236\321\210\320\270\320\261\320\272\320\260'; do
+  local work_dir config script stripped
+  for script in '\345\220\214\346\204\217\343\200\202' '\320\235' '\320\236\321\210\320\270\320\261\320\272\320\260'; do
     work_dir=$(setup_work_dir)
     config=$(setup_config "$work_dir")
 
@@ -941,6 +1030,22 @@ test_non_latin_review_is_not_empty() {
 
     if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
       echo "  a non-Latin review was discarded as empty"
+      rm -rf "$work_dir"; return 1
+    fi
+    # Byte-integrity through the same escape/control strip the function runs
+    # (all production rules: ESC] OSC with 0x9C excluded from the payload,
+    # ESC[ CSI, ESC-two-char, zero-width/BOM, then C0/DEL). A strip that deleted
+    # UTF-8 continuation bytes, or used a C1 escape byte as opener/terminator,
+    # would change the bytes here.
+    stripped="$(printf "$script" | LC_ALL=C sed -E "
+        s/($(printf '\033')\])[^$(printf '\007')$(printf '\234')$(printf '\033')]*($(printf '\007')|$(printf '\033')\\\\)//g
+        s/($(printf '\033')\[)[0-9;:?<=>]*[ -/]*[@-~]//g
+        s/$(printf '\033')[()][A-Za-z0-9]//g
+        s/$(printf '\342\200\213')//g; s/$(printf '\342\200\214')//g; s/$(printf '\342\200\215')//g
+        s/$(printf '\342\201\240')//g; s/$(printf '\357\273\277')//g
+      " | LC_ALL=C tr -d '[:cntrl:]')"
+    if [ "$stripped" != "$(printf "$script")" ]; then
+      echo "  the blank-check strip corrupted a non-Latin review"
       rm -rf "$work_dir"; return 1
     fi
     rm -rf "$work_dir"
@@ -1651,11 +1756,14 @@ run_test "retries 0 disables retry" test_retries_zero_disables_retry
 run_test "hard failure is not retried" test_hard_failure_is_not_retried
 run_test "default allows one retry" test_default_allows_one_retry
 run_test "control-bytes-only response counts as empty" test_control_bytes_only_response_is_empty
-run_test "OSC-only response counts as empty" test_osc_only_response_is_empty
 run_test "OSC in every encoding counts as empty" test_osc_all_encodings_count_as_empty
+run_test "OSC terminated by 0x9C counts as content" test_osc_terminated_by_0x9c_counts_as_content
+run_test "unterminated CSI preserves text" test_unterminated_csi_preserves_text
+run_test "bare C1 byte counts as content" test_bare_c1_counts_as_content
 run_test "review containing a URL still passes" test_review_containing_a_url_still_passes
 run_test "colon-form SGR counts as empty" test_colon_sgr_only_response_is_empty
 run_test "non-Latin review is not empty" test_non_latin_review_is_not_empty
+run_test "non-Latin review with C1-colliding bytes is not mangled" test_non_latin_with_c1_colliding_bytes_not_mangled
 run_test "punctuation-only response counts as empty" test_punctuation_only_response_is_empty
 run_test "whitespace-only response counts as empty" test_whitespace_only_response_is_empty
 run_test "newline-only response counts as empty" test_newline_only_response_is_empty
