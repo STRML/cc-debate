@@ -1105,9 +1105,17 @@ test_invalid_poll_max_wait_ignored() {
 test_orphaned_adapter_reaped() {
   local tmp_dir review_id work_dir orphan_file orphan_pid i
   # The sweep only has a group to kill when the seat's agent is in its own group,
-  # which needs a GNU `timeout`. Without one (e.g. macOS CI without coreutils) the
-  # runner's sweep still runs, but there is no orphan group to assert on — skip.
-  if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1; then
+  # which needs invoke-acpx.sh to pick GNU `timeout --foreground`. Mirror its
+  # selection logic (first of timeout/gtimeout that is executable, then require GNU
+  # coreutils for --foreground); on a host where the selected binary is not GNU
+  # coreutils the sweep does not apply, so skip rather than assert a guarantee that
+  # does not exist there.
+  local _tb_path=""
+  for _tb in timeout gtimeout; do
+    _tb_path=$(command -v "$_tb" 2> /dev/null) || continue
+    [ -x "$_tb_path" ] && break
+  done
+  if [ -z "$_tb_path" ] || ! "$_tb_path" --version 2>/dev/null | grep -qi "GNU coreutils"; then
     return 0
   fi
   tmp_dir=$(setup_env)
