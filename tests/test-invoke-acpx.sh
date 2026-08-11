@@ -897,6 +897,28 @@ test_osc_terminated_by_0x9c_counts_as_content() {
   rm -rf "$work_dir"
 }
 
+# An unterminated CSI followed by text counts as content. The intermediate
+# class must be [ -/] (0x20-0x2F), not [ -\/] (0x20-0x5C): the wide class would
+# eat 'ESC[1 QUICK CHECK' to blank, the narrow one strips only 'ESC[1 Q' (Q is a
+# valid final byte) and preserves 'UICK CHECK'.
+test_unterminated_csi_preserves_text() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_RESPONSE="$(printf '\033[1 QUICK CHECK')" \
+    bash "$INVOKE" "$config" "$work_dir" "no-retry-reviewer" 2>/dev/null
+
+  if [ "$(cat "$work_dir/no-retry-reviewer-exit.txt")" != "0" ]; then
+    echo "  an unterminated CSI ate the text after it"
+    rm -rf "$work_dir"; return 1
+  fi
+
+  rm -rf "$work_dir"
+}
+
 # A response that is only a bare C1 byte counts as content: C1 bytes are UTF-8
 # continuation bytes, are not stripped, and are not whitespace/punctuation. This
 # matches main, whose grammar stripped only complete escape sequences.
@@ -1017,7 +1039,7 @@ test_non_latin_review_is_not_empty() {
     # would change the bytes here.
     stripped="$(printf "$script" | LC_ALL=C sed -E "
         s/($(printf '\033')\])[^$(printf '\007')$(printf '\234')$(printf '\033')]*($(printf '\007')|$(printf '\033')\\\\)//g
-        s/($(printf '\033')\[)[0-9;:?<=>]*[ -\/]*[@-~]//g
+        s/($(printf '\033')\[)[0-9;:?<=>]*[ -/]*[@-~]//g
         s/$(printf '\033')[()][A-Za-z0-9]//g
         s/$(printf '\342\200\213')//g; s/$(printf '\342\200\214')//g; s/$(printf '\342\200\215')//g
         s/$(printf '\342\201\240')//g; s/$(printf '\357\273\277')//g
@@ -1736,6 +1758,7 @@ run_test "default allows one retry" test_default_allows_one_retry
 run_test "control-bytes-only response counts as empty" test_control_bytes_only_response_is_empty
 run_test "OSC in every encoding counts as empty" test_osc_all_encodings_count_as_empty
 run_test "OSC terminated by 0x9C counts as content" test_osc_terminated_by_0x9c_counts_as_content
+run_test "unterminated CSI preserves text" test_unterminated_csi_preserves_text
 run_test "bare C1 byte counts as content" test_bare_c1_counts_as_content
 run_test "review containing a URL still passes" test_review_containing_a_url_still_passes
 run_test "colon-form SGR counts as empty" test_colon_sgr_only_response_is_empty
