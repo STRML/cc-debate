@@ -1011,17 +1011,30 @@ EOF
 # finish. Both directions are asserted, because "no marker" on its own also
 # describes a seat that never launched — the run with the long budget is the
 # positive control that proves the marker can appear at all.
+#
+# $3 agent, $4 effort select the transport. Every mock logs its invocation
+# (`acpx ...`, `codex exec ...`, `claude --print ...`, `agy ...`) when MOCK_ACPX_LOG
+# is set, so the caller can assert that the seat took the expected transport
+# rather than silently routing through a path it did not intend to test.
+# $5 expected transport marker to grep the log for.
 seat_survival_marker() {
-  local budget="$1" ignore_term="${2:-0}" tmp_dir review_id work_dir survived waited
+  local budget="$1" ignore_term="${2:-0}" agent="${3:-codex}" effort="${4:-}" expected="${5:-}" tmp_dir review_id work_dir survived waited invoke_log
   tmp_dir=$(setup_env)
-  review_id="test-$(date +%s)-kill$budget$ignore_term"
+  review_id="test-$(date +%s)-kill$budget$ignore_term$agent$effort"
   work_dir=".tmp/ai-review-${review_id}"
   survived="$tmp_dir/survived.txt"
+  invoke_log="$tmp_dir/invoke.log"
 
-  cat > "$tmp_dir/config.json" << 'EOF'
+  # codex with effort goes DIRECT (codex exec), not through acpx; codex without effort
+  # is the acpx path. opus runs claude --print direct; antigravity runs agy.
+  local effort_json=""
+  if [ -n "$effort" ]; then
+    effort_json=", \"effort\": \"$effort\""
+  fi
+  cat > "$tmp_dir/config.json" << EOF
 {
   "reviewers": {
-    "alpha": { "agent": "codex", "timeout": 120, "retries": 0 }
+    "alpha": { "agent": "$agent", "timeout": 120, "retries": 0 $effort_json }
   }
 }
 EOF
@@ -1032,10 +1045,11 @@ EOF
   # ignore_term=1 models a wedged agent that ignores SIGTERM. The seat's guard TERMs
   # the group and the runner's post-wait sweep KILLs it; whether the agent dies is
   # decided by whether it is IN the seat's group — which is exactly the `timeout
-  # --foreground` question.
+  # --foreground` question. Every mock (acpx/agy/claude/codex) falls back to
+  # MOCK_ACPX_* for delay and the survival marker, so one env set covers all four.
   PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT="$budget" \
     MOCK_ACPX_DELAY=8 MOCK_ACPX_IGNORE_TERM="${ignore_term:-0}" \
-    MOCK_ACPX_SURVIVED_FILE="$survived" \
+    MOCK_ACPX_SURVIVED_FILE="$survived" MOCK_ACPX_LOG="$invoke_log" \
     bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" > /dev/null 2>&1
 
   # Outlive the mock's delay, so a survivor has time to write its marker.
@@ -1045,27 +1059,59 @@ EOF
     waited=$(( waited + 2 ))
   done
 
+  # Assert the transport BEFORE emitting the verdict: the caller runs this in a
+  # subshell, so a failure after the verdict is echoed would only exit the subshell
+  # and the caller would treat the (correct-looking) verdict as a pass.
+  if [ -n "$expected" ]; then
+    grep -q "$expected" "$invoke_log" || {
+      echo "DIAG kill: $agent/$effort did not run via '$expected' -- log: $(cat "$invoke_log" 2>&1)" >&2
+      rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  fi
+
   [ -f "$survived" ] && echo survived || echo killed
   rm -rf "$work_dir" "$tmp_dir"
 }
 
+# The wedge invariant, per transport. codex-with-effort, opus, and antigravity go
+# DIRECT (codex exec / claude --print / agy), codex-without-effort goes through acpx.
+# All four share the `timeout --foreground` prefix, so all four must keep the agent in
+# the seat's group — a regression on any one branch would pass the suite if only the
+# acpx path were tested. (Issue #63.)
+#
+# The test runs on every host, GNU or not. With no GNU timeout (stock macOS has no
+# timeout binary) the agent sits directly in the seat group, so the negative case
+# asserts the runner's post-wait group-KILL sweep — real coverage in its own right,
+# and the same test was green on the macos-latest CI leg before the four-transport
+# extension. On a GNU host `--foreground` additionally stops timeout from setpgid'ing
+# the agent into its own group, which is the escape the sweep could not reach. Either
+# way the TERM-ignoring mock must die with the seat.
 test_seat_kill_reaches_the_agent_process() {
   local killed lived
-  # Positive control first: with room to finish, the marker MUST appear. Without
-  # this the negative case below passes just as happily when nothing ever ran.
-  lived=$(seat_survival_marker 60)
-  [ "$lived" = "survived" ] || {
-    echo "DIAG kill: positive control failed - marker absent with a 60s budget ($lived)" >&2
-    return 1; }
+  # transport → (agent, effort, expected invocation). The direct CLI transports are
+  # opus (claude --print), antigravity (agy), and codex-with-effort (codex exec);
+  # codex without effort is the acpx path. Each mock logs `argv0 $*` to MOCK_ACPX_LOG;
+  # the markers are anchored to the argv0 so an acpx line (which itself contains
+  # `codex exec`) cannot satisfy the direct-codex assertion. For agy the marker is
+  # the print invocation, not the `agy models` auth pre-flight.
+  for spec in "codex::^acpx " "codex:high:^codex exec " "opus::^claude --print " "antigravity::^agy -p "; do
+    local agent="${spec%%:*}" rest="${spec#*:}"
+    local effort="${rest%%:*}" expected="${rest#*:}"
+    # Positive control first: with room to finish, the marker MUST appear. Without
+    # this the negative case below passes just as happily when nothing ever ran.
+    lived=$(seat_survival_marker 60 0 "$agent" "$effort" "$expected")
+    [ "$lived" = "survived" ] || {
+      echo "DIAG kill: positive control failed for $agent/$effort - marker absent with a 60s budget ($lived)" >&2
+      return 1; }
 
-  # The wedge case: a TERM-ignoring agent must still die with the seat. Under plain
-  # `timeout` the agent leads its own group and escapes the seat-group kill — this is
-  # the defect `timeout --foreground` fixes. The mock ignores TERM so only a group KILL
-  # can stop it, and that only reaches it when it shares the seat's group.
-  killed=$(seat_survival_marker 3 1)
-  [ "$killed" = "killed" ] || {
-    echo "DIAG kill: TERM-ignoring agent outlived the seat kill ($killed) — agent escaped the seat group" >&2
-    return 1; }
+    # The wedge case: a TERM-ignoring agent must still die with the seat. Under plain
+    # `timeout` the agent leads its own group and escapes the seat-group kill — this is
+    # the defect `timeout --foreground` fixes. The mock ignores TERM so only a group
+    # KILL can stop it, and that only reaches it when it shares the seat's group.
+    killed=$(seat_survival_marker 3 1 "$agent" "$effort" "$expected")
+    [ "$killed" = "killed" ] || {
+      echo "DIAG kill: TERM-ignoring $agent/$effort outlived the seat kill ($killed) — escaped the seat group" >&2
+      return 1; }
+  done
 }
 
 # POLL_MAX_WAIT is a `timeout` argument now, and `timeout` refuses to run at all on

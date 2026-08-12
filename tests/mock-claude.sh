@@ -26,9 +26,24 @@ fi
 # Drain stdin so callers don't block
 cat > /dev/null
 
+# Simulate a wedged agent that ignores SIGTERM — the case the runner's process-group
+# sweep exists for. A group TERM cannot stop it; only a KILL of the seat's group does,
+# and that requires the agent to be IN that group (which needs `timeout --foreground`).
+# Absence of the survival marker is the passing condition.
+if [ "${MOCK_CLAUDE_IGNORE_TERM:-${MOCK_ACPX_IGNORE_TERM:-0}}" = "1" ]; then
+  trap '' TERM
+fi
+
 # Simulate delay
 if [ "$DELAY" -gt 0 ] 2>/dev/null; then
   sleep "$DELAY"
+fi
+
+# Survival marker. Written only if this process outlived its delay, which is how a
+# test tells "the runner killed the whole seat" from "the runner killed the wrapper
+# and left the agent running". Absence is the passing condition.
+if [ -n "${MOCK_CLAUDE_SURVIVED_FILE:-${MOCK_ACPX_SURVIVED_FILE:-}}" ]; then
+  echo "survived" > "${MOCK_CLAUDE_SURVIVED_FILE:-${MOCK_ACPX_SURVIVED_FILE:-}}"
 fi
 
 if [ -n "$STDERR" ]; then
