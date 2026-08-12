@@ -586,7 +586,7 @@ this review."
 
   TIMEOUT_PREFIX=()
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-    TIMEOUT_PREFIX=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]}" "$TIMEOUT")
+    TIMEOUT_PREFIX=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]+"${TIMEOUT_FOREGROUND[@]}"}" "$TIMEOUT")
   fi
 
   # Strip the PTY's ANSI escapes (literal ESC via printf — portable across BSD/GNU sed),
@@ -686,7 +686,7 @@ if [ "$AGENT" = "opus" ]; then
 
   OPUS_CMD=()
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-    OPUS_CMD+=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]}" "$TIMEOUT")
+    OPUS_CMD+=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]+"${TIMEOUT_FOREGROUND[@]}"}" "$TIMEOUT")
   fi
   # --permission-mode plan: read-only mode — the reviewer cannot edit/write files.
   if [ -n "$PROXY_ROUTE" ]; then
@@ -779,7 +779,7 @@ if [ "$AGENT" = "codex" ] && [ -n "$EFFORT" ]; then
   # never need repo trust. Skip the check rather than leave the seat dead.
   CODEX_CMD+=(--skip-git-repo-check)
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-    CODEX_CMD=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]}" "$TIMEOUT" "${CODEX_CMD[@]}")
+    CODEX_CMD=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]+"${TIMEOUT_FOREGROUND[@]}"}" "$TIMEOUT" "${CODEX_CMD[@]}")
   fi
 
   attempt_codex() {
@@ -796,7 +796,7 @@ fi
 
 ACPX_CMD=()
 if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-  ACPX_CMD+=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]}" "$TIMEOUT")
+  ACPX_CMD+=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]+"${TIMEOUT_FOREGROUND[@]}"}" "$TIMEOUT")
 fi
 # `exec` must land directly after the agent name — it is that agent's subcommand,
 # not a global acpx flag, and acpx rejects it anywhere else.
@@ -848,8 +848,17 @@ attempt_acpx() {
   wait "$ACPX_PID"
   EXIT_CODE=$?
   set -e
-  # Whatever acpx left behind stays in this seat's group and is reaped by the
-  # runner's post-wait sweep — not here, which would kill this seat too.
+  # Sweep whatever acpx left behind. Under GNU `timeout --foreground` the agent shares
+  # THIS seat's group, so the runner's post-wait sweep reaps it - sweeping here would
+  # kill the seat. But when the timeout binary is not GNU (no `--foreground`), the agent
+  # leads a group of its own that the seat-group kill never reaches, so sweep it here -
+  # it is a different group, so this is safe.
+  # `${#TF[@]}` is the bash-3.2-safe emptiness test: `"${TF[*]:-}"` of a NON-empty
+  # array throws "unbound variable" under `set -u` on bash 3.2, and `"${TF[@]}"` of an
+  # empty one does. Length works for both.
+  if [ "${#TIMEOUT_FOREGROUND[@]}" -eq 0 ]; then
+    kill -TERM -- "-$ACPX_PID" 2> /dev/null || true
+  fi
 
   # acpx exit 5 is PERMISSION_DENIED, and on this panel it is not a failed review.
   #

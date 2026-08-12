@@ -128,6 +128,43 @@ test_happy_path() {
   rm -rf "$work_dir"
 }
 
+# Without timeout/gtimeout on PATH, TIMEOUT_FOREGROUND stays empty and invoke-acpx
+# runs the agent bare. On bash 3.2 the `"${EMPTY[@]}"` expansion of an empty array
+# under `set -u` throws "unbound variable", which would abort the seat before the
+# agent launched — and the abort exits 0, so the runner records a success with no
+# review. The `+"${...[@]}"` guard (already used for TIMEOUT_PREFIX) fixes it; this
+# test pins the empty-array path so it stays fixed.
+test_no_timeout_binary_still_runs() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  # Strip timeout/gtimeout from PATH so the probe finds nothing. Keep the mock on
+  # PATH so the seat can still invoke `acpx`.
+  local clean_path
+  clean_path=$(printf '%s' "$SCRIPT_DIR")
+  for _p in ${PATH//:/ }; do
+    case "$_p" in
+      "$SCRIPT_DIR") ;;
+      */timeout|*/gtimeout) ;;
+      *) clean_path="$clean_path:$_p" ;;
+    esac
+  done
+
+  PATH="$clean_path" SKIP_SESSION_CHECK=1 \
+  MOCK_ACPX_RESPONSE="Great plan! VERDICT: APPROVED" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  local rc=$?
+  [ "$rc" -eq 0 ] || { echo "  seat aborted with no timeout binary (exit $rc) — empty-array guard missing?"; rm -rf "$work_dir"; return 1; }
+  [ -f "$work_dir/test-reviewer-output.md" ] || { echo "  no output file"; rm -rf "$work_dir"; return 1; }
+  grep -q "VERDICT: APPROVED" "$work_dir/test-reviewer-output.md" || { echo "  no review in output"; rm -rf "$work_dir"; return 1; }
+  [ -f "$work_dir/test-reviewer-exit.txt" ] || { echo "  no exit file"; rm -rf "$work_dir"; return 1; }
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || { echo "  wrong exit: $(cat "$work_dir/test-reviewer-exit.txt")"; rm -rf "$work_dir"; return 1; }
+
+  rm -rf "$work_dir"
+}
+
 test_prompt_file_used_for_debate() {
   local work_dir config
   work_dir=$(setup_work_dir)
@@ -1776,6 +1813,7 @@ run_test "unknown mode warns and uses session" test_unknown_mode_warns_and_uses_
 run_test "changeset reviewed when no plan" test_changeset_reviewed_when_no_plan
 run_test "plan wins over changeset" test_plan_wins_over_changeset
 run_test "happy path" test_happy_path
+run_test "no timeout binary still runs" test_no_timeout_binary_still_runs
 run_test "debate prompt file" test_prompt_file_used_for_debate
 run_test "initial prompt includes plan" test_initial_prompt_includes_plan
 run_test "fallback system prompt" test_fallback_system_prompt

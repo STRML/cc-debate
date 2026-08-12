@@ -276,10 +276,16 @@ fi
 
 # One teardown path, armed before the first seat exists. Cancelling mid-spawn used
 # to leave everything already launched running: the seats are in their own process
-# groups now, so a signal to this runner never reaches them on its own.
+# groups now, so a signal to this runner never reaches them on their own.
 cleanup() {
   kill_all_seats TERM
   for g in "${GUARDS[@]}"; do kill_seat TERM "$g"; done
+  # A TERM-ignoring agent survives the group TERM and the guards are dead, so
+  # nothing else would ever stop it. Give the seats a beat to exit, then KILL the
+  # groups that are still alive - same TERM-then-KILL escalation the wait-loop and
+  # the per-seat guard use.
+  sleep 1
+  kill_all_seats KILL
   rm -f "$WORK_DIR"/*-prompt.txt
   return 0
 }
@@ -448,6 +454,9 @@ for NAME in "${REVIEWERS[@]}"; do
     bash "$SCRIPT_DIR/invoke-acpx.sh" "$CONFIG_FILE" "$WORK_DIR" "$NAME" "$TIMEOUT" \
     < /dev/null > /dev/null 2>"$WORK_DIR/${NAME}-invoke.log" &
   SEAT_PID=$!
+  # Register the seat the moment it exists so an INT/TERM in the window between
+  # spawn and the tail of this loop iteration still has a handle to kill it.
+  PIDS+=("$SEAT_PID")
 
   # This seat's clock. It signals the group, so it reaches the agent and not just
   # the wrapper; TERM first, then KILL for anything that ignores it. The KILL is the
@@ -470,7 +479,6 @@ for NAME in "${REVIEWERS[@]}"; do
   GUARDS+=("$!")
   set +m
 
-  PIDS+=("$SEAT_PID")
   NAMES+=("$NAME")
   BUDGETS+=("$CHILD_BUDGET")
   EXIT_FILES+=("$WORK_DIR/${NAME}-exit.txt")
