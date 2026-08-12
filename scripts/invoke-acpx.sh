@@ -850,13 +850,16 @@ attempt_acpx() {
   set -e
   # Sweep whatever acpx left behind. Under GNU `timeout --foreground` the agent shares
   # THIS seat's group, so the runner's post-wait sweep reaps it - sweeping here would
-  # kill the seat. But when the timeout binary is not GNU (no `--foreground`), the agent
-  # leads a group of its own that the seat-group kill never reaches, so sweep it here -
-  # it is a different group, so this is safe.
+  # kill the seat, so it is skipped. A GNU `timeout` without `--foreground` would be the
+  # one case that needs a sweep here, but the probe only selects GNU timeout and always
+  # pairs it with `--foreground`, so that case does not arise. A non-GNU `timeout`
+  # (group behaviour unknown) and no timeout at all (agent shares the seat's group, so
+  # `-ACPX_PID` is not a group) both leave `kill -- -$ACPX_PID` as a harmless no-op -
+  # the runner's post-wait sweep is the backstop either way.
   # `${#TF[@]}` is the bash-3.2-safe emptiness test: `"${TF[*]:-}"` of a NON-empty
   # array throws "unbound variable" under `set -u` on bash 3.2, and `"${TF[@]}"` of an
   # empty one does. Length works for both.
-  if [ "${#TIMEOUT_FOREGROUND[@]}" -eq 0 ]; then
+  if [ -n "$TIMEOUT_BIN" ] && [ "${#TIMEOUT_FOREGROUND[@]}" -eq 0 ]; then
     kill -TERM -- "-$ACPX_PID" 2> /dev/null || true
   fi
 
