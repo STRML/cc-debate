@@ -18,7 +18,7 @@
 
 EXIT_CODE="${MOCK_CODEX_EXIT:-0}"
 RESPONSE="${MOCK_CODEX_RESPONSE-Mock codex review. VERDICT: APPROVED}"
-DELAY="${MOCK_CODEX_DELAY:-0}"
+DELAY="${MOCK_CODEX_DELAY:-${MOCK_ACPX_DELAY:-0}}"
 STDERR="${MOCK_CODEX_STDERR:-}"
 CODEX_LOG="${MOCK_CODEX_LOG:-}"
 
@@ -49,8 +49,23 @@ elif [ -n "${MOCK_CODEX_PROMPT_OUT:-}" ]; then
   cat > "$MOCK_CODEX_PROMPT_OUT"
 fi
 
+# Simulate a wedged agent that ignores SIGTERM — the case the runner's process-group
+# sweep exists for. A group TERM cannot stop it; only a KILL of the seat's group does,
+# and that requires the agent to be IN that group (which needs `timeout --foreground`).
+# Absence of the survival marker is the passing condition.
+if [ "${MOCK_CODEX_IGNORE_TERM:-${MOCK_ACPX_IGNORE_TERM:-0}}" = "1" ]; then
+  trap '' TERM
+fi
+
 if [ "$DELAY" -gt 0 ] 2>/dev/null; then
   sleep "$DELAY"
+fi
+
+# Survival marker. Written only if this process outlived its delay, which is how a
+# test tells "the runner killed the whole seat" from "the runner killed the wrapper
+# and left the agent running". Absence is the passing condition.
+if [ -n "${MOCK_CODEX_SURVIVED_FILE:-${MOCK_ACPX_SURVIVED_FILE:-}}" ]; then
+  echo "survived" > "${MOCK_CODEX_SURVIVED_FILE:-${MOCK_ACPX_SURVIVED_FILE:-}}"
 fi
 
 [ -n "$STDERR" ] && echo "$STDERR" >&2
