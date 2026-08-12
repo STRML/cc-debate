@@ -1078,27 +1078,14 @@ EOF
 # the seat's group — a regression on any one branch would pass the suite if only the
 # acpx path were tested. (Issue #63.)
 #
-# The invariant only exists where GNU `timeout --foreground` is in play; on a host
-# without it the runner either runs the seat without a timeout wrapper (no
-# timeout/gtimeout binary — stock macOS) or with a non-GNU timeout that ignores
-# --foreground, so the wedge question is not meaningfully testable there — the
-# runner's own timeout fallback is covered by the invoke-acpx suite. Mirror
-# invoke-acpx.sh's selection (first of timeout/gtimeout that is executable, then
-# require GNU coreutils) and skip here when neither exists.
+# The test runs on every host, GNU or not. With no GNU timeout (stock macOS has no
+# timeout binary) the agent sits directly in the seat group, so the negative case
+# asserts the runner's post-wait group-KILL sweep — real coverage in its own right,
+# and the same test was green on the macos-latest CI leg before the four-transport
+# extension. On a GNU host `--foreground` additionally stops timeout from setpgid'ing
+# the agent into its own group, which is the escape the sweep could not reach. Either
+# way the TERM-ignoring mock must die with the seat.
 test_seat_kill_reaches_the_agent_process() {
-  # Mirror invoke-acpx.sh's selection (first of timeout/gtimeout that is
-  # executable, then require GNU coreutils for --foreground); skip rather than
-  # assert a guarantee that does not exist on the host. Same guard as
-  # test_orphaned_adapter_reaped.
-  local _tb_path="" _tb
-  for _tb in timeout gtimeout; do
-    _tb_path=$(command -v "$_tb" 2> /dev/null) || continue
-    [ -x "$_tb_path" ] && break
-  done
-  if [ -z "$_tb_path" ] || ! "$_tb_path" --version 2>/dev/null | grep -qi "GNU coreutils"; then
-    return 0
-  fi
-
   local killed lived
   # transport → (agent, effort, expected invocation). The direct CLI transports are
   # opus (claude --print), antigravity (agy), and codex-with-effort (codex exec);
