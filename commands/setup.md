@@ -374,7 +374,7 @@ If any entry was added, also print:
 acpx writes a per-job queue lock to `~/.acpx/queues/<id>.lock` on every
 invocation. Without `Write(~/.acpx/**)` in the settings allowlist, the
 Claude Code sandbox blocks the write and reviewer subprocesses exit 144.
-Because `run-parallel-acpx.sh` spawns reviewers via `nohup`/`disown`, the
+Because `run-parallel-acpx.sh` spawns reviewers via `nohup`, the
 sandbox-blocked-write error never surfaces as an interactive permission
 prompt — `/debate:all` just reports "all reviewers failed" with no obvious
 cause. Printing the snippet and trusting the user to copy it is how this

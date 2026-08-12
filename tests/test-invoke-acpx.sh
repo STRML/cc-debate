@@ -128,6 +128,66 @@ test_happy_path() {
   rm -rf "$work_dir"
 }
 
+# The empty-array guard, pinned. TIMEOUT_FOREGROUND is empty exactly when a timeout
+# binary exists but is not GNU coreutils (the probe pairs GNU timeout with
+# --foreground). In that state all four transport sites expand `"${TIMEOUT_FOREGROUND[@]}"`
+# — the pre-fix bare form of which aborts with "unbound variable" on bash 3.2 under
+# `set -u`, killing the seat before the agent launches (and the abort exits 0, so the
+# runner records a success with no review). The test puts a fake non-GNU `timeout` on
+# PATH (so the probe finds it but --foreground is never set) and asserts the seat still
+# delivers a review. A plain no-timeout PATH would NOT exercise this: with TIMEOUT_BIN
+# empty the guarded construction is never evaluated.
+test_no_timeout_binary_still_runs() {
+  local work_dir config fake_dir
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  fake_dir=$(mktemp -d)
+
+  # Fake timeout: answers --version with something that does NOT contain "GNU
+  # coreutils" (the probe greps for that substring, so the text must not include it or
+  # the probe would wrongly enable --foreground) and otherwise shifts the duration and
+  # execs the rest, so the seat's agent call still runs.
+  cat > "$fake_dir/timeout" << 'FAKETIMEOUT'
+#!/bin/bash
+if [ "$1" = "--version" ]; then
+  echo "mytimeout 1.0 (from a vendor, not coreutils)"
+  exit 0
+fi
+shift
+exec "$@"
+FAKETIMEOUT
+  chmod +x "$fake_dir/timeout"
+
+  # Prepend the fake dir so it shadows any real timeout on PATH; keep the mock on
+  # PATH so the seat can still invoke `acpx`.
+  local clean_path
+  clean_path="$fake_dir:$SCRIPT_DIR"
+  for _p in ${PATH//:/ }; do
+    case "$_p" in
+      "$SCRIPT_DIR") ;;
+      */timeout|*/gtimeout) ;;
+      *) clean_path="$clean_path:$_p" ;;
+    esac
+  done
+
+  # Invoke with the interpreter running this suite ($BASH), not a PATH `bash`: the
+  # empty-array abort is bash 3.2-specific (macOS /bin/bash), and PATH resolves to
+  # whatever bash is first, so a `bash "$INVOKE"` would run bash 5 here and never hit
+  # the bug the test pins.
+  PATH="$clean_path" SKIP_SESSION_CHECK=1 \
+  MOCK_ACPX_RESPONSE="Great plan! VERDICT: APPROVED" \
+    "$BASH" "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  local rc=$?
+  [ "$rc" -eq 0 ] || { echo "  seat aborted with non-GNU timeout (exit $rc) — empty-array guard missing?"; rm -rf "$work_dir" "$fake_dir"; return 1; }
+  [ -f "$work_dir/test-reviewer-output.md" ] || { echo "  no output file"; rm -rf "$work_dir" "$fake_dir"; return 1; }
+  grep -q "VERDICT: APPROVED" "$work_dir/test-reviewer-output.md" || { echo "  no review in output"; rm -rf "$work_dir" "$fake_dir"; return 1; }
+  [ -f "$work_dir/test-reviewer-exit.txt" ] || { echo "  no exit file"; rm -rf "$work_dir" "$fake_dir"; return 1; }
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || { echo "  wrong exit: $(cat "$work_dir/test-reviewer-exit.txt")"; rm -rf "$work_dir" "$fake_dir"; return 1; }
+
+  rm -rf "$work_dir" "$fake_dir"
+}
+
 test_prompt_file_used_for_debate() {
   local work_dir config
   work_dir=$(setup_work_dir)
@@ -1776,6 +1836,7 @@ run_test "unknown mode warns and uses session" test_unknown_mode_warns_and_uses_
 run_test "changeset reviewed when no plan" test_changeset_reviewed_when_no_plan
 run_test "plan wins over changeset" test_plan_wins_over_changeset
 run_test "happy path" test_happy_path
+run_test "no timeout binary still runs" test_no_timeout_binary_still_runs
 run_test "debate prompt file" test_prompt_file_used_for_debate
 run_test "initial prompt includes plan" test_initial_prompt_includes_plan
 run_test "fallback system prompt" test_fallback_system_prompt
@@ -1825,40 +1886,12 @@ run_test "missing-config guard message preserved in output" test_missing_config_
 # and therefore never signals the group. That is precisely the case that
 # leaked: acpx returns, its spawned adapter keeps running and reparents to
 # init. MOCK_ACPX_ORPHAN makes the mock leave exactly such a child behind.
-test_orphaned_adapter_reaped() {
-  local work_dir config orphan_file orphan_pid i
-  # The reap only works when the acpx call has its own process group, which
-  # `timeout`/`gtimeout` provides. Without one (e.g. macOS CI without
-  # coreutils) the mock shares this script's group and reap_process_group
-  # correctly declines — that is the designed fallback, so skip rather than
-  # fail. Verified on ubuntu (coreutils present) and local hosts.
-  if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1; then
-    return 0
-  fi
-  work_dir=$(setup_work_dir)
-  config=$(setup_config "$work_dir")
-  orphan_file="$work_dir/orphan.pid"
-
-  SKIP_SESSION_CHECK=1 \
-  PATH="$SCRIPT_DIR:$PATH" \
-  MOCK_ACPX_ORPHAN="$orphan_file" \
-    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2> /dev/null
-
-  [ -f "$orphan_file" ] || { rm -rf "$work_dir"; return 1; }
-  orphan_pid=$(cat "$orphan_file")
-  # Give the sweep a moment, then confirm the orphan is gone.
-  for i in 1 2 3 4 5; do
-    kill -0 "$orphan_pid" 2>/dev/null || break
-    sleep 0.2
-  done
-  if kill -0 "$orphan_pid" 2>/dev/null; then
-    echo "  orphan pid $orphan_pid still alive after reap"
-    rm -rf "$work_dir"; return 1
-  fi
-  rm -rf "$work_dir"
-}
-run_test "orphaned adapter is reaped after a success" test_orphaned_adapter_reaped
-
+#
+# NOTE: the sweep lives in run-parallel-acpx.sh now, not here. With `timeout
+# --foreground` the agent shares this seat's process group, so sweeping from
+# inside invoke-acpx.sh would kill the seat itself. The runner's post-wait
+# `kill -- -SEAT_PID` is the only safe place for it — the corresponding test is
+# `test_orphaned_adapter_reaped` in test-parallel-acpx.sh.
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="
 

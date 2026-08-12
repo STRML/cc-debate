@@ -959,6 +959,192 @@ EOF
   rm -rf "$work_dir" "$tmp_dir"
 }
 
+# A wedged seat must come back at its budget rather than at the agent's own much
+# larger timeout, and it must still be accounted for: the orchestrator reads
+# <name>-exit.txt, and a seat killed before its EXIT trap could run gets that file
+# written from the wait status instead.
+#
+test_hung_reviewer_dies_at_its_budget() {
+  local tmp_dir review_id work_dir out rc start elapsed
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-hang"
+  work_dir=".tmp/ai-review-${review_id}"
+
+  cat > "$tmp_dir/config.json" << 'EOF'
+{
+  "reviewers": {
+    "alpha": { "agent": "codex", "timeout": 120, "retries": 0 }
+  }
+}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  start=$SECONDS
+  rc=0
+  out=$(PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT=3 \
+    MOCK_ACPX_DELAY=60 \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" 2>&1) || rc=$?
+  elapsed=$(( SECONDS - start ))
+
+  local cleanup="$work_dir $tmp_dir"
+  # Back at the budget, not at the agent's own 120s timeout.
+  [ "$elapsed" -lt 30 ] || {
+    echo "DIAG hung: took ${elapsed}s -- $out" >&2; rm -rf $cleanup; return 1; }
+  [ "$rc" -ne 0 ] || { echo "DIAG hung: rc=0 -- $out" >&2; rm -rf $cleanup; return 1; }
+  echo "$out" | grep -q "alpha ran out of time (seat budget 3s)" || {
+    echo "DIAG hung: $out" >&2; rm -rf $cleanup; return 1; }
+  # A timeout is recorded as 124; run.md's contract has no signal codes in it.
+  [ "$(cat "$work_dir/alpha-exit.txt" 2>&1)" = "124" ] || {
+    echo "DIAG hung: exit=[$(cat "$work_dir/alpha-exit.txt" 2>&1)]" >&2
+    rm -rf $cleanup; return 1; }
+
+  rm -rf $cleanup
+}
+
+# Killing a seat has to kill the agent, not just the invoke-acpx.sh wrapper: a
+# wrapper-only kill leaves the agent with ppid 1, still burning tokens after the
+# panel reports it dead. The mock writes a marker only if it outlives its delay.
+#
+# $1 budget: short enough to kill the seat mid-delay, or long enough to let it
+# finish. Both directions are asserted, because "no marker" on its own also
+# describes a seat that never launched — the run with the long budget is the
+# positive control that proves the marker can appear at all.
+seat_survival_marker() {
+  local budget="$1" ignore_term="${2:-0}" tmp_dir review_id work_dir survived waited
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-kill$budget$ignore_term"
+  work_dir=".tmp/ai-review-${review_id}"
+  survived="$tmp_dir/survived.txt"
+
+  cat > "$tmp_dir/config.json" << 'EOF'
+{
+  "reviewers": {
+    "alpha": { "agent": "codex", "timeout": 120, "retries": 0 }
+  }
+}
+EOF
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  # ignore_term=1 models a wedged agent that ignores SIGTERM. The seat's guard TERMs
+  # the group and the runner's post-wait sweep KILLs it; whether the agent dies is
+  # decided by whether it is IN the seat's group — which is exactly the `timeout
+  # --foreground` question.
+  PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT="$budget" \
+    MOCK_ACPX_DELAY=8 MOCK_ACPX_IGNORE_TERM="${ignore_term:-0}" \
+    MOCK_ACPX_SURVIVED_FILE="$survived" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" > /dev/null 2>&1
+
+  # Outlive the mock's delay, so a survivor has time to write its marker.
+  waited=0
+  while [ "$waited" -lt 12 ] && [ ! -f "$survived" ]; do
+    sleep 2
+    waited=$(( waited + 2 ))
+  done
+
+  [ -f "$survived" ] && echo survived || echo killed
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
+test_seat_kill_reaches_the_agent_process() {
+  local killed lived
+  # Positive control first: with room to finish, the marker MUST appear. Without
+  # this the negative case below passes just as happily when nothing ever ran.
+  lived=$(seat_survival_marker 60)
+  [ "$lived" = "survived" ] || {
+    echo "DIAG kill: positive control failed - marker absent with a 60s budget ($lived)" >&2
+    return 1; }
+
+  # The wedge case: a TERM-ignoring agent must still die with the seat. Under plain
+  # `timeout` the agent leads its own group and escapes the seat-group kill — this is
+  # the defect `timeout --foreground` fixes. The mock ignores TERM so only a group KILL
+  # can stop it, and that only reaches it when it shares the seat's group.
+  killed=$(seat_survival_marker 3 1)
+  [ "$killed" = "killed" ] || {
+    echo "DIAG kill: TERM-ignoring agent outlived the seat kill ($killed) — agent escaped the seat group" >&2
+    return 1; }
+}
+
+# POLL_MAX_WAIT is a `timeout` argument now, and `timeout` refuses to run at all on
+# a malformed duration — which would kill every seat instantly instead of ignoring
+# one bad env var.
+test_invalid_poll_max_wait_ignored() {
+  local tmp_dir review_id work_dir out
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-badwait"
+  work_dir=".tmp/ai-review-${review_id}"
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  out=$(PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 POLL_MAX_WAIT="600s" \
+    MOCK_ACPX_RESPONSE="Mock review. VERDICT: APPROVED" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" "alpha" 2>&1)
+
+  echo "$out" | grep -q "invalid POLL_MAX_WAIT" || {
+    echo "DIAG no-warning: $out" >&2; rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  [ "$(cat "$work_dir/alpha-exit.txt" 2>&1)" = "0" ] || {
+    echo "DIAG exit=[$(cat "$work_dir/alpha-exit.txt" 2>&1)] output=[$(head -c 200 "$work_dir/alpha-output.md" 2>&1)] log=[$(head -c 300 "$work_dir/alpha-invoke.log" 2>&1)]" >&2
+    rm -rf "$work_dir" "$tmp_dir"; return 1; }
+
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
+# --- orphan reaping (moved here from test-invoke-acpx.sh, PR #62) ---
+
+# The mock exits 0, so this is the SUCCESS path — where `timeout` never fires and
+# therefore never signals the group. That is the case that leaked: acpx returns, its
+# spawned adapter keeps running and reparents to init. MOCK_ACPX_ORPHAN makes the mock
+# leave exactly such a child behind. The sweep used to live in invoke-acpx.sh, but with
+# `timeout --foreground` the agent shares the seat's process group, so sweeping from
+# inside the seat would kill it. The runner's post-wait `kill -- -SEAT_PID` is the only
+# safe place for it — asserted here, through the runner, not the invoke path.
+test_orphaned_adapter_reaped() {
+  local tmp_dir review_id work_dir orphan_file orphan_pid i
+  # The sweep only has a group to kill when the seat's agent is in its own group,
+  # which needs invoke-acpx.sh to pick GNU `timeout --foreground`. Mirror its
+  # selection logic (first of timeout/gtimeout that is executable, then require GNU
+  # coreutils for --foreground); on a host where the selected binary is not GNU
+  # coreutils the sweep does not apply, so skip rather than assert a guarantee that
+  # does not exist there.
+  local _tb_path=""
+  for _tb in timeout gtimeout; do
+    _tb_path=$(command -v "$_tb" 2> /dev/null) || continue
+    [ -x "$_tb_path" ] && break
+  done
+  if [ -z "$_tb_path" ] || ! "$_tb_path" --version 2>/dev/null | grep -qi "GNU coreutils"; then
+    return 0
+  fi
+  tmp_dir=$(setup_env)
+  review_id="test-$(date +%s)-orphan"
+  work_dir=".tmp/ai-review-${review_id}"
+  orphan_file="$work_dir/orphan.pid"
+
+  mkdir -p "$work_dir"
+  echo "Test plan" > "$work_dir/plan.md"
+
+  PATH="$SCRIPT_DIR:$PATH" SKIP_SESSION_CHECK=1 \
+    MOCK_ACPX_ORPHAN="$orphan_file" \
+    MOCK_ACPX_RESPONSE="Mock review. VERDICT: APPROVED" \
+    bash "$PARALLEL" "$tmp_dir/config.json" "$review_id" "alpha" > /dev/null 2>&1
+
+  [ -f "$orphan_file" ] || { rm -rf "$work_dir" "$tmp_dir"; return 1; }
+  orphan_pid=$(cat "$orphan_file")
+  # Give the sweep a moment, then confirm the orphan is gone.
+  for i in 1 2 3 4 5; do
+    kill -0 "$orphan_pid" 2>/dev/null || break
+    sleep 0.2
+  done
+  if kill -0 "$orphan_pid" 2>/dev/null; then
+    echo "  orphan pid $orphan_pid still alive after runner sweep"
+    rm -rf "$work_dir" "$tmp_dir"; return 1
+  fi
+  rm -rf "$work_dir" "$tmp_dir"
+}
+
 # --- Run ---
 
 echo ""
@@ -1009,6 +1195,10 @@ run_test "EFFORT cleared when no effective_effort entry" test_effort_cleared_whe
 run_test "subagent harness seat skipped by this runner" test_subagent_seat_skipped
 run_test "proxy opus seat not provider-locked" test_proxy_opus_provider_not_locked
 run_test "provider mismatch runs config default" test_provider_mismatch_runs_config_default
+run_test "hung reviewer dies at its budget" test_hung_reviewer_dies_at_its_budget
+run_test "orphaned adapter is reaped after a success" test_orphaned_adapter_reaped
+run_test "seat kill reaches the agent process" test_seat_kill_reaches_the_agent_process
+run_test "invalid POLL_MAX_WAIT ignored" test_invalid_poll_max_wait_ignored
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="

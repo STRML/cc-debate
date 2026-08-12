@@ -346,14 +346,37 @@ fi
 
 # --- Resolve timeout binary ---
 
+# `command -v` reports the first PATH match without checking the execute bit (bash
+# 3.2 and bash 5 alike), so prefixing the agent call with what it returns can fail
+# the seat at exec with code 126 and read as a dead agent. Same guard as
+# run-parallel-acpx.sh.
 TIMEOUT_BIN=""
-if command -v timeout > /dev/null 2>&1; then
-  TIMEOUT_BIN="timeout"
-elif command -v gtimeout > /dev/null 2>&1; then
-  TIMEOUT_BIN="gtimeout"
-else
-  echo "[$REVIEWER] WARNING: neither timeout nor gtimeout found — running without timeout enforcement" >&2
+for _tb in timeout gtimeout; do
+  _tb_path=$(command -v "$_tb" 2> /dev/null) || continue
+  if [ -x "$_tb_path" ]; then
+    TIMEOUT_BIN="$_tb_path"
+    break
+  fi
+done
+unset _tb _tb_path
+if [ -z "$TIMEOUT_BIN" ]; then
+  echo "[$REVIEWER] WARNING: no usable timeout or gtimeout — running without timeout enforcement" >&2
   echo "  Install: brew install coreutils (macOS) / apt install coreutils (Linux)" >&2
+fi
+
+# The seat is a process group, and the runner kills it by that group. A GNU `timeout`
+# normally calls setpgid on itself and becomes a NEW group leader, so the agent runs in
+# a group of its own that a seat-group kill never reaches — the orphan the process-group
+# design exists to prevent. `--foreground` stops timeout from doing that: the agent stays
+# in the seat's group, so the pid the runner waits on IS the group that holds the whole
+# chain. Only meaningful for a GNU timeout (the flag is a coreutils extension), so probe
+# the resolved binary before relying on it; a non-GNU `timeout` is left as-is and the
+# agent keeps its own (unreachable) group — the seat still gets its per-agent bound.
+TIMEOUT_FOREGROUND=()
+if [ -n "$TIMEOUT_BIN" ]; then
+  if "$TIMEOUT_BIN" --version 2>/dev/null | grep -qi "GNU coreutils"; then
+    TIMEOUT_FOREGROUND=(--foreground)
+  fi
 fi
 
 # --- Shared result handler ---
@@ -563,7 +586,7 @@ this review."
 
   TIMEOUT_PREFIX=()
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-    TIMEOUT_PREFIX=("$TIMEOUT_BIN" "$TIMEOUT")
+    TIMEOUT_PREFIX=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]+"${TIMEOUT_FOREGROUND[@]}"}" "$TIMEOUT")
   fi
 
   # Strip the PTY's ANSI escapes (literal ESC via printf — portable across BSD/GNU sed),
@@ -663,7 +686,7 @@ if [ "$AGENT" = "opus" ]; then
 
   OPUS_CMD=()
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-    OPUS_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
+    OPUS_CMD+=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]+"${TIMEOUT_FOREGROUND[@]}"}" "$TIMEOUT")
   fi
   # --permission-mode plan: read-only mode — the reviewer cannot edit/write files.
   # --no-session-persistence: the reviewer's deliverable is stdout, captured into
@@ -761,7 +784,7 @@ if [ "$AGENT" = "codex" ] && [ -n "$EFFORT" ]; then
   # never need repo trust. Skip the check rather than leave the seat dead.
   CODEX_CMD+=(--skip-git-repo-check)
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-    CODEX_CMD=("$TIMEOUT_BIN" "$TIMEOUT" "${CODEX_CMD[@]}")
+    CODEX_CMD=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]+"${TIMEOUT_FOREGROUND[@]}"}" "$TIMEOUT" "${CODEX_CMD[@]}")
   fi
 
   attempt_codex() {
@@ -778,7 +801,7 @@ fi
 
 ACPX_CMD=()
 if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" -gt 0 ]; then
-  ACPX_CMD+=("$TIMEOUT_BIN" "$TIMEOUT")
+  ACPX_CMD+=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]+"${TIMEOUT_FOREGROUND[@]}"}" "$TIMEOUT")
 fi
 # `exec` must land directly after the agent name — it is that agent's subcommand,
 # not a global acpx flag, and acpx rejects it anywhere else.
@@ -813,33 +836,11 @@ ACPX_CMD+=("${AGENT_ARGS[@]}" --file "$PROMPT_FILE")
 # orphaned adapter trees, every one of them in a process group whose leader had
 # long since exited.
 #
-# `timeout` makes ITSELF the process-group leader — its pid equals its pgid, and
-# the command it runs joins that group — so $! is both the pid to wait on and
-# the group to sweep afterwards. Once it exits the survivors are orphans with
-# ppid=1, but they are still in that now-leaderless group, and the group is the
-# only remaining handle on them.
-#
-# Without a timeout binary the command shares THIS script's process group, and
-# sweeping it would kill the script mid-run. reap_process_group declines that
-# case, so a timeout-less host keeps exactly its current behaviour.
-reap_process_group() {
-  local pgid="${1:-}"
-  [ -n "$pgid" ] || return 0
-
-  local self_pgid
-  # A `ps` failure (unusual sandbox/PATH) must not abort the seat under set -e:
-  # an empty pgid means "can't determine my own group", which declines the sweep
-  # exactly like the shared-group case below.
-  self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" || true
-  if [ -z "$self_pgid" ] || [ "$pgid" = "$self_pgid" ]; then
-    return 0
-  fi
-
-  # A negative pid means "every process in this group". An empty group is the
-  # normal, healthy outcome, so a failure here is expected and not worth
-  # reporting — hence the discard.
-  kill -TERM -- "-$pgid" 2> /dev/null || true
-}
+# With `timeout --foreground` the agent stays in THIS seat's process group, so
+# those survivors are reaped by the runner's post-wait group sweep — the same
+# `kill -- -SEAT_PID` that stops a wedged agent. Sweeping from here instead would
+# kill this script (it shares that group), so the runner is the only safe place
+# for it.
 
 attempt_acpx() {
   set +e
@@ -852,10 +853,22 @@ attempt_acpx() {
   wait "$ACPX_PID"
   EXIT_CODE=$?
   set -e
-  # Sweep whatever acpx left behind, on both the timeout and the success path.
-  # Under `timeout` this pid IS the process-group id (see above); without one it
-  # is just acpx's pid in our own group, which reap_process_group declines.
-  reap_process_group "$ACPX_PID"
+  # Sweep whatever acpx left behind. Under GNU `timeout --foreground` the agent shares
+  # THIS seat's group, so the runner's post-wait sweep reaps it - sweeping here would
+  # kill the seat, so it is skipped. A GNU `timeout` without `--foreground` would be the
+  # one case that needs a sweep here, but the probe only selects GNU timeout and always
+  # pairs it with `--foreground`, so that case does not arise. A non-GNU `timeout` may
+  # create its own process group, in which case this kill reaps it and the runner's
+  # seat-group sweep could not; if it does not, the kill is a harmless no-op (no such
+  # group). With no timeout at all the agent shares the seat's group, so `-ACPX_PID` is
+  # not a group and the kill is likewise a no-op - the runner's post-wait sweep is the
+  # backstop either way.
+  # `${#TF[@]}` is the bash-3.2-safe emptiness test: `"${TF[*]:-}"` of a NON-empty
+  # array throws "unbound variable" under `set -u` on bash 3.2, and `"${TF[@]}"` of an
+  # empty one does. Length works for both.
+  if [ -n "$TIMEOUT_BIN" ] && [ "${#TIMEOUT_FOREGROUND[@]}" -eq 0 ]; then
+    kill -TERM -- "-$ACPX_PID" 2> /dev/null || true
+  fi
 
   # acpx exit 5 is PERMISSION_DENIED, and on this panel it is not a failed review.
   #

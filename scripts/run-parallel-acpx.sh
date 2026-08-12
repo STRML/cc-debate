@@ -1,6 +1,7 @@
 #!/bin/bash
 # Parallel runner for acpx-based debate reviews.
-# Reads reviewer list from config, spawns invoke-acpx.sh for each, polls for completion.
+# Reads reviewer list from config, spawns invoke-acpx.sh for each under `timeout`,
+# and waits on them.
 #
 # Usage: run-parallel-acpx.sh <config_file> <REVIEW_ID> [reviewer1,reviewer2,...]
 #   config_file — path to JSON config (e.g. ~/.claude/debate-acpx.json)
@@ -42,7 +43,7 @@ else
 fi
 
 # Note: $() triggers permission prompts in Claude Code, but this script runs
-# via nohup/disown outside the sandbox, so it's fine here.
+# via nohup outside the sandbox, so it's fine here.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Per-seat model selection (F1). The panel selector picks a model per seat;
@@ -218,7 +219,46 @@ fi
 
 EXIT_FILES=()
 PIDS=()
+NAMES=()
+BUDGETS=()
+GUARDS=()
 MAX_REVIEWER_BUDGET=0
+
+# A seat is a process group, not a process. Each one is spawned under `set -m`, so
+# bash makes it a group leader and its pid IS its process-group id — the same number
+# we wait on is the one we signal. `kill -- -PID` then reaches the whole chain
+# (env, bash invoke-acpx.sh, acpx, the agent) in one atomic kernel operation.
+#
+# The alternative, walking children with `pgrep -P`, reimplements in userspace what
+# the kernel already tracks: it races processes that spawn during the walk, needs a
+# readable /proc (blind under a PID-namespaced sandbox), and leaves stale pids to
+# signal after a reap. A group persists as long as any member lives, so this also
+# reaches survivors after the leader has exited — which is exactly the orphaned-agent
+# case. Verified on this platform, including the leaderless-group case.
+kill_seat() {
+  kill "-$1" -- "-$2" 2> /dev/null
+}
+
+kill_all_seats() {
+  local sig="$1" p
+  for p in "${PIDS[@]}"; do
+    kill_seat "$sig" "$p"
+  done
+}
+
+# POLL_MAX_WAIT overrides the computed per-reviewer budget. It must be a positive
+# integer no larger than macOS /bin/sleep accepts (2^31-1); the guard sleeps this
+# value directly, and /bin/sleep rejects anything larger, which would kill every seat
+# instantly when the guard's sleep fails. The range check goes through awk, not
+# `[ -le 0 ]`: on a value beyond bash's 64-bit arithmetic the test errors out and the
+# validation is silently bypassed (observed with POLL_MAX_WAIT=99999999999).
+if [ -n "${POLL_MAX_WAIT:-}" ]; then
+  if ! [[ "$POLL_MAX_WAIT" =~ ^[0-9]+$ ]] || \
+     ! awk -v n="$POLL_MAX_WAIT" 'BEGIN { exit !(n >= 1 && n <= 2147483647) }'; then
+    echo "[debate] Ignoring invalid POLL_MAX_WAIT '$POLL_MAX_WAIT' — using the computed budget." >&2
+    POLL_MAX_WAIT=""
+  fi
+fi
 
 # The model map is load-bearing: a truncated or hand-edited file silently falling
 # back to defaults is how a panel loses its model selection without anyone
@@ -233,6 +273,24 @@ if [ -n "$SEAT_MODELS" ]; then
     exit 1
   fi
 fi
+
+# One teardown path, armed before the first seat exists. Cancelling mid-spawn used
+# to leave everything already launched running: the seats are in their own process
+# groups now, so a signal to this runner never reaches them on their own.
+cleanup() {
+  kill_all_seats TERM
+  for g in "${GUARDS[@]}"; do kill_seat TERM "$g"; done
+  # A TERM-ignoring agent survives the group TERM and the guards are dead, so
+  # nothing else would ever stop it. Give the seats a beat to exit, then KILL the
+  # groups that are still alive - same TERM-then-KILL escalation the wait-loop and
+  # the per-seat guard use.
+  sleep 1
+  kill_all_seats KILL
+  rm -f "$WORK_DIR"/*-prompt.txt
+  return 0
+}
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 for NAME in "${REVIEWERS[@]}"; do
   # Sanitize reviewer name — must be alphanumeric/dash/underscore only
@@ -268,6 +326,10 @@ for NAME in "${REVIEWERS[@]}"; do
   if [ "$WORST" -gt "$MAX_REVIEWER_BUDGET" ]; then
     MAX_REVIEWER_BUDGET="$WORST"
   fi
+  # The seat's own bound: its worst case plus a startup buffer. invoke-acpx.sh puts
+  # `timeout` around each agent call, but not around everything it does — an
+  # `acpx sessions ensure` that hangs is outside that. This bounds the whole seat.
+  CHILD_BUDGET="${POLL_MAX_WAIT:-$(( WORST + 60 ))}"
 
   echo "[debate] Spawning $NAME ($AGENT, timeout: ${TIMEOUT}s)..." >&2
   rm -f "$WORK_DIR/${NAME}-exit.txt"
@@ -378,11 +440,47 @@ for NAME in "${REVIEWERS[@]}"; do
       INVOKE_ENV+=("PROXY_ROUTE=")
     fi
   fi
+  # `set -m` for the spawn only: it makes this job a process-group leader, so $! is
+  # both the pid to wait on and the group to signal. Turning it back off afterwards
+  # keeps job control out of everything else — the group assignment is already made.
+  # stdin from /dev/null because a background process group that reads the terminal
+  # takes SIGTTIN and stops; no seat reads stdin (prompts arrive by file).
+  #
+  # No `disown`. The kernel already reports when a child finishes and how it exited;
+  # disowning threw that away and left the runner to rebuild it out of files and a
+  # poll loop.
+  set -m
   nohup env "${INVOKE_ENV[@]}" \
     bash "$SCRIPT_DIR/invoke-acpx.sh" "$CONFIG_FILE" "$WORK_DIR" "$NAME" "$TIMEOUT" \
-    > /dev/null 2>"$WORK_DIR/${NAME}-invoke.log" &
-  PIDS+=("$!")
-  disown "${PIDS[$((${#PIDS[@]}-1))]}"
+    < /dev/null > /dev/null 2>"$WORK_DIR/${NAME}-invoke.log" &
+  SEAT_PID=$!
+  # Register the seat the moment it exists so an INT/TERM in the window between
+  # spawn and the tail of this loop iteration still has a handle to kill it.
+  PIDS+=("$SEAT_PID")
+
+  # This seat's clock. It signals the group, so it reaches the agent and not just
+  # the wrapper; TERM first, then KILL for anything that ignores it. The KILL is the
+  # backstop for a TERM-unresponsive seat — the runner is blocked in `wait` on it,
+  # so nothing else will ever terminate it. (The runner's post-wait KILL sweep is the
+  # escalation on the normal path, where the seat exits on TERM.) One sleeping
+  # process per seat, no polling, and no dependency on a `timeout` binary.
+  #
+  # Its own stdio goes to /dev/null, and this matters more than it looks: a guard
+  # holding the runner's stdout keeps a caller's `$(...)` open until the guard's
+  # sleep ends, so a seat with a 460s budget hung any test that captured output for
+  # 460s after the panel was done. It is also spawned inside `set -m` so it leads
+  # its own group, and disarming it takes the sleep with it instead of orphaning it.
+  (
+    sleep "$CHILD_BUDGET"
+    kill -TERM -- "-$SEAT_PID" 2> /dev/null
+    sleep 5
+    kill -KILL -- "-$SEAT_PID" 2> /dev/null
+  ) < /dev/null > /dev/null 2>&1 &
+  GUARDS+=("$!")
+  set +m
+
+  NAMES+=("$NAME")
+  BUDGETS+=("$CHILD_BUDGET")
   EXIT_FILES+=("$WORK_DIR/${NAME}-exit.txt")
 done
 
@@ -391,15 +489,10 @@ if [ ${#EXIT_FILES[@]} -eq 0 ]; then
   exit 1
 fi
 
-echo "[debate] Waiting for ${#EXIT_FILES[@]} reviewer(s)..." >&2
-
-POLL_INTERVAL=2
-ELAPSED=0
-# MAX_WAIT must be >= the worst-case budget of the slowest reviewer + a startup
-# buffer. Worst case is timeout × (retries + 1), not timeout: a reviewer that
-# retries a blank turn spends the full timeout on every attempt, and budgeting for
-# one attempt would SIGTERM it mid-retry.
-# Override with POLL_MAX_WAIT env var.
+# The longest any seat may now run: the slowest seat's own budget. Worst case is
+# timeout × (retries + 1), not timeout — a reviewer that retries a blank turn spends
+# the full timeout on every attempt, and budgeting one attempt kills it mid-retry.
+# Override per seat with POLL_MAX_WAIT.
 if [ -n "${POLL_MAX_WAIT:-}" ]; then
   MAX_WAIT="$POLL_MAX_WAIT"
 elif [ "$MAX_REVIEWER_BUDGET" -gt 0 ]; then
@@ -408,62 +501,53 @@ else
   MAX_WAIT=450
 fi
 
-echo "[debate] Waiting for reviewers (max wait: ${MAX_WAIT}s)..." >&2
+echo "[debate] Waiting for ${#PIDS[@]} reviewer(s) (max wait: ${MAX_WAIT}s)..." >&2
 
-while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
-  DONE=0
-  for f in "${EXIT_FILES[@]}"; do
-    [ -f "$f" ] && DONE=$((DONE + 1))
-  done
-  if [ "$DONE" -ge "${#EXIT_FILES[@]}" ]; then
-    break
-  fi
-  sleep "$POLL_INTERVAL"
-  ELAPSED=$((ELAPSED + POLL_INTERVAL))
-done
-
-if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
-  echo "[debate] Timed out waiting for reviewers after ${MAX_WAIT}s. Sending SIGTERM..." >&2
-  for pid in "${PIDS[@]}"; do
-    kill "$pid" 2>/dev/null || true
-  done
-  # Give child EXIT traps ~3s to write exit files before escalating
-  local_wait=0
-  while [ "$local_wait" -lt 3 ]; do
-    alive=0
-    for pid in "${PIDS[@]}"; do
-      kill -0 "$pid" 2>/dev/null && alive=1
-    done
-    [ "$alive" -eq 0 ] && break
-    sleep 1
-    local_wait=$(( local_wait + 1 ))
-  done
-  # Escalate any survivors to SIGKILL
-  for pid in "${PIDS[@]}"; do
-    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-  done
-  rm -f "$WORK_DIR"/*-prompt.txt
-  exit 1
-else
-  echo "[debate] All reviewers complete (${ELAPSED}s elapsed)." >&2
-fi
-
-# Aggregate exit codes
+START=$SECONDS
 WORST_EXIT=0
-for f in "${EXIT_FILES[@]}"; do
-  if [ -f "$f" ]; then
-    CODE=$(cat "$f" 2>/dev/null)
-    if [[ "$CODE" =~ ^[0-9]+$ ]]; then
-      [ "$CODE" -gt "$WORST_EXIT" ] && WORST_EXIT="$CODE"
-    else
-      echo "[debate] Warning: non-numeric exit code in $f: '$CODE'" >&2
-      [ "$WORST_EXIT" -eq 0 ] && WORST_EXIT=1
-    fi
-  else
-    WORST_EXIT=1
-  fi
+
+for i in "${!PIDS[@]}"; do
+  wait "${PIDS[$i]}"
+  CODE=$?
+  NAME="${NAMES[$i]}"
+
+  # The seat's guard has done its job either way; stop its clock before it can fire
+  # against a pid this shell has already reaped, then reap it — a TERM'd guard that
+  # is never `wait`ed zombies until this runner exits, one per seat.
+  kill_seat TERM "${GUARDS[$i]}"
+  wait "${GUARDS[$i]}" 2> /dev/null
+
+  # Sweep the group now that the leader is reaped. A group outlives its leader, so
+  # this is what collects an agent that ignored TERM — and doing it here rather than
+  # in the guard means there is no grace period for the two to race over.
+  kill_seat KILL "${PIDS[$i]}"
+
+  # 124 is the agent's own `timeout` inside invoke-acpx.sh; a signal code is this
+  # runner's guard. Both mean the seat ran out of time, so both are reported the same
+  # way and recorded as 124 — run.md documents 0/4/124/other, and a raw signal code
+  # would land a timeout in "other" and send the orchestrator hunting a stderr error
+  # that never happened.
+  case "$CODE" in
+    124|137|143)
+      echo "[debate] $NAME ran out of time (seat budget ${BUDGETS[$i]}s)." >&2
+      CODE=124
+      ;;
+  esac
+
+  # invoke-acpx.sh publishes its own code and exits with the same one, so the file
+  # and the wait status agree on every normal path. They diverge when the seat was
+  # killed — its trap may have written a raw signal code, or never run at all — and
+  # the wait status is the better account either way, so it wins. Write it the same
+  # atomic way invoke-acpx.sh does (temp + rename) so a concurrent reader never sees
+  # a partially-written file.
+  printf '%s\n' "$CODE" > "${EXIT_FILES[$i]}.tmp.$$" && \
+    mv -f "${EXIT_FILES[$i]}.tmp.$$" "${EXIT_FILES[$i]}"
+
+  [ "$CODE" -gt "$WORST_EXIT" ] && WORST_EXIT="$CODE"
 done
 
+trap - INT TERM
 rm -f "$WORK_DIR"/*-prompt.txt
 
+echo "[debate] All reviewers finished ($(( SECONDS - START ))s elapsed)." >&2
 exit "$WORST_EXIT"

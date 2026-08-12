@@ -1,5 +1,5 @@
 # Backend — debate plugin
-_Updated: 2026-08-05_
+_Updated: 2026-08-10_
 
 ## Commands (`commands/`)
 
@@ -28,7 +28,7 @@ _Updated: 2026-08-05_
 | `select-panel.py` | Picks one model per seat from the registry maximizing distinct labs, strongest-reasoning on the deepest seat, cheapest for the rest; per-seat effort auto-scaling by depth tier. Accepts `--private-repo` (hard ZDR constraint: route 31501 pool, and a private seat no ZDR model can fill fails the panel — no non-ZDR fallback), `--min-effort` (floor for deepest seat), and `--agents <seat=agent,...>` — a per-seat provider-feasibility constraint so a codex seat is never handed claude-opus-5 / gemini / glm (2026-08-06, 4-of-6 dead panel). A seat no agent can fill is left unfilled (degrades to its config default on non-private runs only), not fatal. Hard `--max-cost` budget was removed — effort-tiering is the sole cost lever. |
 | `refresh-models.py` | Syncs the local registry from upstream datasources; auto-adds new model IDs, preserves user keys. |
 | `invoke-acpx.sh` | Invokes any acpx agent — plus the direct-CLI branches: `antigravity`/`agy`, `opus`/`claude --print` (now proxy-aware via `transport:proxy` + `route`), and effort-scaled `codex` (`codex exec -c model_reasoning_effort`). Reads config, builds prompt, wraps with system `timeout`, captures output |
-| `run-parallel-acpx.sh` | Spawns `invoke-acpx.sh` per reviewer with nohup+disown, polls `*-exit.txt` until done; reads `effective_effort`, `harness`, `transport`, and `route` per seat from `panel.json` and forwards them. Skips `subagent`-harness seats (delegated to the caller). |
+| `run-parallel-acpx.sh` | **A seat is a process group.** Each reviewer is spawned under `set -m`, so its pid is also its process-group id: the runner `wait`s on that number for the exit status and signals `-PID` to kill the whole chain (env → `invoke-acpx.sh` → acpx → agent) in one kernel operation. No `disown`, no poll loop, no `pgrep` tree walk, and no dependency on a `timeout` binary. Each seat gets a sleeper guard at `timeout × (retries + 1) + 60` (override: `POLL_MAX_WAIT`) that TERMs then KILLs the group; the runner sweeps the group once more after `wait` returns, since a group outlives its leader. Timeouts are recorded as `124` — `run.md`'s contract has no signal codes. One INT/TERM trap, armed before the first spawn, tears down every seat. Reads `effective_effort`, `harness`, `transport`, and `route` per seat from `panel.json` and forwards them. Skips `subagent`-harness seats (delegated to the caller). |
 
 ## Script I/O Contract
 
@@ -93,4 +93,4 @@ said nothing, so a contentless run is 1 byte, not 0.
 - `plugin.json` — name, version, description, author, license
 - `marketplace.json` — marketplace listing with install instructions
 
-Current version: **3.1.3**
+Current version: **3.2.0**
