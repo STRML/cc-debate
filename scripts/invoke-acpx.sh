@@ -589,6 +589,23 @@ this review."
     TIMEOUT_PREFIX=("$TIMEOUT_BIN" "${TIMEOUT_FOREGROUND[@]+"${TIMEOUT_FOREGROUND[@]}"}" "$TIMEOUT")
   fi
 
+  # Auth pre-flight. agy has no `login` subcommand and no API-key fallback worth
+  # using: sign-in is interactive browser OAuth once, then a keychain token that
+  # `agy -p` reuses (ChainedAuth: authenticated via keyring). When that token is
+  # missing or the keychain read times out (5s), `agy -p` pops a browser and can
+  # hang the seat — or worse, dump a login error as the "review" with exit 0.
+  # Probe auth with `agy models` (returns the model list only when authenticated)
+  # before spending a review on it, and fail the seat with a clear instruction
+  # instead of the browser pop. The runner launches us detached (nohup), so the
+  # user-facing fix is: run `agy` once in a real terminal, then relaunch.
+  if ! "${TIMEOUT_PREFIX[@]+"${TIMEOUT_PREFIX[@]}"}" agy models > /dev/null 2>&1; then
+    echo "[$REVIEWER] agy is not signed in — run 'agy' once in a terminal to authenticate, then relaunch." >&2
+    echo "agy is not signed in. Antigravity signs in via browser OAuth the first time you run 'agy'; there is no 'agy login' subcommand. Run 'agy' in a terminal, complete the sign-in, verify with 'agy models', then relaunch this review." > "$WORK_DIR/${REVIEWER}-output.md"
+    publish_exit 1
+    trap - EXIT
+    exit 1
+  fi
+
   # Strip the PTY's ANSI escapes (literal ESC via printf — portable across BSD/GNU sed),
   # carriage returns, and EOT (^D) bytes from the captured output.
   ESC=$(printf '\033')

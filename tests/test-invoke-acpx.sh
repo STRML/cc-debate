@@ -641,6 +641,48 @@ test_antigravity_uses_direct_cli() {
   rm -rf "$work_dir"
 }
 
+# The auth pre-flight probes `agy models` before the review. Authenticated (mock
+# default): passes through to the review. Not signed in (MOCK_AGY_AUTH_FAIL=1):
+# fails the seat with a clear "run agy once to sign in" message instead of the
+# browser pop or a login error dumped as a "review" with exit 0.
+test_antigravity_auth_preflight_ok() {
+  local work_dir config agy_log
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+  agy_log="$work_dir/agy-log.txt"
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_AGY_LOG="$agy_log" \
+    bash "$INVOKE" "$config" "$work_dir" "no-prompt" 2>/dev/null
+
+  # Probes auth, then delivers the review.
+  [ "$(cat "$work_dir/no-prompt-exit.txt")" = "0" ] || return 1
+  grep -q "Mock agy review" "$work_dir/no-prompt-output.md" || return 1
+  grep -q "models" "$agy_log" 2>/dev/null || return 1
+  grep -q "\-p" "$agy_log" 2>/dev/null || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_antigravity_auth_preflight_fails() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_AGY_AUTH_FAIL=1 \
+    bash "$INVOKE" "$config" "$work_dir" "no-prompt" 2>/dev/null
+
+  # Seat fails with the sign-in instruction, not a fake review.
+  [ "$(cat "$work_dir/no-prompt-exit.txt")" = "1" ] || return 1
+  grep -q "agy is not signed in" "$work_dir/no-prompt-output.md" || return 1
+  ! grep -q "Mock agy review" "$work_dir/no-prompt-output.md" 2>/dev/null || return 1
+
+  rm -rf "$work_dir"
+}
+
 test_antigravity_skips_session_ensure() {
   # sessions ensure should NOT be called for the antigravity agent
   local work_dir config log_file
@@ -1856,6 +1898,8 @@ run_test "session exists no extra calls" test_session_exists_no_extra_calls
 run_test "skip session check env" test_skip_session_check_env
 run_test "stderr surfaced on failure" test_stderr_surfaced_on_failure
 run_test "antigravity uses direct CLI" test_antigravity_uses_direct_cli
+run_test "antigravity auth preflight ok" test_antigravity_auth_preflight_ok
+run_test "antigravity auth preflight fails not signed in" test_antigravity_auth_preflight_fails
 run_test "antigravity skips session ensure" test_antigravity_skips_session_ensure
 run_test "opus uses direct CLI" test_opus_uses_direct_cli
 run_test "opus skips session ensure" test_opus_skips_session_ensure

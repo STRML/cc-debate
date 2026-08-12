@@ -7,6 +7,8 @@
 #   MOCK_AGY_DELAY    — seconds to sleep (default: 0)
 #   MOCK_AGY_STDERR   — text to write to stderr (default: "")
 #   MOCK_AGY_LOG      — file to append invocation args to (default: "")
+#   MOCK_AGY_AUTH_FAIL — if 1, `agy models` exits non-zero (simulates "not signed
+#                        in") so the auth pre-flight fails the seat (default: 0)
 #
 # Invoked as: agy -p "<prompt>" --sandbox --print-timeout <dur> [--model <m>]
 # The prompt is a POSITIONAL ARGUMENT (agy does not read stdin in print mode).
@@ -18,6 +20,17 @@ STDERR="${MOCK_AGY_STDERR:-${MOCK_ACPX_STDERR:-}}"
 AGY_LOG="${MOCK_AGY_LOG:-${MOCK_ACPX_LOG:-}}"
 if [ -n "$AGY_LOG" ]; then
   echo "agy $*" >> "$AGY_LOG"
+fi
+
+# Auth pre-flight probe: `agy models` lists models when authenticated. Simulate
+# failure to exercise invoke-acpx.sh's "not signed in" path.
+if [ "$1" = "models" ]; then
+  if [ "${MOCK_AGY_AUTH_FAIL:-0}" = "1" ]; then
+    echo "You are not logged into Antigravity." >&2
+    exit 1
+  fi
+  echo "mock-model-1"
+  exit 0
 fi
 
 # Simulate delay
