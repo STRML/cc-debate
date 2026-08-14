@@ -595,6 +595,11 @@ Agent:
     [shared reviewer footer — [OUTPUT_PATH] = <WORK_DIR>/claude-<persona>-r1-output.md]
 ```
 
+`subagent_type` stays `general-purpose`. Do **not** switch reviewer seats to
+`subagent_type: "fork"` — a fork inherits the parent model and ignores `model:`, collapsing
+every persona onto the main-loop model and silently deleting the panel's model diversity.
+Inlining the plan into each spawn is the cost of keeping distinct reviewers.
+
 **Rounds 2+:** Do **NOT** SendMessage the Round-1 teammates. An idle background
 teammate is never re-scheduled to read its inbox — the SendMessage returns success
 ("Message sent to X's inbox") but the teammate never wakes, and you wait forever on a

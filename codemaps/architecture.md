@@ -108,6 +108,13 @@ outputs uniformly and never depends on a mailbox message surfacing:
   `SendMessage` to `main` is retained only as a one-line liveness ping — its body is not
   parsed, so a dropped ping loses nothing.
 
+**Never spawn a reviewer seat with `subagent_type: "fork"`.** A fork inherits the parent
+model and ignores the `model` parameter, so every seat would collapse onto the main-loop
+model — deleting the per-seat model diversity (fable / opus / sonnet) that is the entire
+product of a panel. Seats stay `general-purpose` with the plan inlined; re-inlining is the
+price of a real panel. Fork's context inheritance also does not fix the Rounds-2+ wedge,
+which is a scheduling problem, not an addressing one — keep spawning fresh teammates.
+
 Before v2.6.0 the Claude side was mailbox-based and lossy: a teammate's SendMessage'd
 review could drop silently, shrinking the panel. A reconciliation gate now asserts every
 spawned teammate produced a non-empty output file before a round is recorded, and wedge

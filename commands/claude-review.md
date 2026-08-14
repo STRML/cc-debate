@@ -185,6 +185,10 @@ For each personality, spawn an Agent **in a single message** (parallel if multip
 Substitute `[OUTPUT_PATH]` in the footer with this reviewer's Round-1 output file,
 `<WORK_DIR>/<reviewer>-r1-output.md` (`<reviewer>` = the teammate's `name`):
 
+`subagent_type` stays `general-purpose`. Do **not** use `subagent_type: "fork"` for a
+reviewer seat — a fork inherits the parent model and ignores `model:`, collapsing every
+personality onto the main-loop model and deleting the panel's model diversity.
+
 ```
 Agent:
   name: [personality name from Personalities section]
