@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Alias for /debate:fable — single Fable Skeptic review.
 allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable)
 ---

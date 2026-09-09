@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Shortcut for claude-review with the Skeptic pair (Fable + Opus) plus the Architect. Accepts --model sonnet to override the Architect's default opus.
 allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet), Read(~/.claude/debate-acpx.json)
 ---

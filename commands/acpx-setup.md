@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Check acpx CLI installation, validate debate-acpx.json config, probe each configured agent, and print permission allowlist for unattended operation.
 allowed-tools: Bash(bash ~/.claude/debate-scripts/acpx-env-snapshot.sh:*), Bash(which npx:*), Bash(acpx:*), Bash(npx acpx@latest:*), Bash(agy:*), Bash(agy models:*), Bash(which agy:*), Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/create-litellm-agent.sh:*), Bash(ls:*), Bash(chmod:*), Bash(mkdir:*), Bash(jq:*), Bash(cp:*), Write(~/.claude/debate-acpx.json), Write(~/.acpx/*), Write(~/.acpx/**), Read(~/.acpx/**), Edit(~/.acpx/**), Write(~/.opencode.json), Read(~/.claude/settings.json), Edit(~/.claude/settings.json), Write(~/.claude/settings.json)
 ---
@@ -287,13 +288,62 @@ For system prompts, suggest unique review personas for each reviewer. Examples:
 
 ## Step 3: Probe each agent
 
-For each configured reviewer:
+First scan the acpx registry — a registered-but-unspawnable agent can exist in
+`~/.acpx/config.json` without being a panel reviewer (a stale entry left behind
+when a seat was retired), and the panel probe below would never see it. Enumerate
+every registered agent with its command path, and flag any whose command is
+missing or not executable:
+
+```bash
+jq -r '.agents | to_entries[] | "\(.key)\t\(.value.command)"' ~/.acpx/config.json
+```
+
+Then run the existence check over every registered agent (not just panel
+reviewers):
+
+```bash
+for a in $(jq -r '.agents | keys[]' ~/.acpx/config.json); do
+  CMD="$(jq -r --arg a "$a" '.agents[$a].command' ~/.acpx/config.json)"
+  if [ -z "$CMD" ] || [ ! -x "$CMD" ]; then
+    echo "❌ $a: registered but command '$CMD' is missing/not executable"
+  fi
+done
+```
+
+Report a missing/not-executable wrapper as `❌ <name>: registered but unspawnable
+(command missing)` and recommend removing the entry from `~/.acpx/config.json` —
+this covers registered agents that are NOT panel reviewers, so a retired seat's
+stale entry is caught rather than silently passing.
+
+Then, for each configured reviewer:
 
 - **Session-mode acpx agents** (anything that is not `antigravity` or `opus`, and
-  whose reviewer does not set `mode: "exec"`): ensure a session
-  exists and run a quick test via acpx:
+  whose reviewer does not set `mode: "exec"`): verify the wrapper command exists,
+  then run a quick test via acpx. `sessions ensure` alone is not a health check —
+  it exits 0 and reuses a stale session id even when the agent's `command` points
+  at a missing file, so a registered-but-unspawnable agent passes the ensure step.
+  The prompt is the real check: it surfaces `Failed to spawn agent command: <path>`
+  on a broken wrapper whether or not a stale session exists. Keep `ensure` for its
+  idempotency (a probe must not accumulate sessions on every setup run):
   ```bash
+  # 1. The command file must exist — a config entry pointing at a missing wrapper
+  #    is the exact "registered but unspawnable" case, and it fails fast here with
+  #    a precise message instead of the generic "No acpx session found".
+  CMD="$(jq -r --arg a "<agent>" '.agents[$a].command' ~/.acpx/config.json)"
+  if [ -z "$CMD" ] || [ ! -x "$CMD" ]; then
+    echo "❌ <name>: <agent> registered but command '$CMD' is missing/not executable"
+    continue
+  fi
+  # 2. Idempotent session ensure — creates on fresh spawn (where it DOES fail on a
+  #    broken wrapper), reuses a stale id otherwise.
   $ACPX_CMD <agent> sessions ensure 2>&1
+  # 3. The prompt is the health check. Classify the output by eye, not by an
+  #    automated grep: under a merged 2>&1 capture the completion and the token
+  #    summary interleave and the PONG can come back truncated (observed as a lone
+  #    "P" or an empty turn while the token summary still counts output=4), so a
+  #    grep -q PONG on a merged stream can mislabel a healthy seat as broken.
+  #    A genuinely broken wrapper prints "Failed to spawn agent command: <path>"
+  #    and matches no token count.
   echo "Reply with only the word PONG." | $ACPX_CMD --format quiet --approve-reads <agent>
   ```
 - **`mode: "exec"` reviewers:** skip `sessions ensure` — a one-shot never opens a
@@ -302,6 +352,13 @@ For each configured reviewer:
   ```bash
   echo "Reply with only the word PONG." | $ACPX_CMD --format quiet --approve-reads <agent> exec
   ```
+  Use `mode: "exec"` for opencode-backed seats that answer the first prompt into a
+  session and then go blank on every later one (observed with `kimi-k3` and
+  `deepseek-v4-flash` through opencode: the session-form probe returns
+  `input=0 output=0` while the one-shot form returns PONG every time). A seat wired
+  as session-mode that blanks like this is a misconfiguration, not a broken wrapper
+  — the probe's session branch will report it as unspawnable; fix the mode, not the
+  wrapper.
 - **antigravity agent:** probe using the Antigravity CLI directly (see below):
   ```bash
   agy models 2>&1 | head -1
@@ -313,6 +370,9 @@ For each configured reviewer:
 
 Report:
 - Response contains "PONG" (or `agy models` lists a model) → `✅ <name>: <agent> responds`
+- Wrapper command missing/not executable → `❌ <name>: <agent> registered but unspawnable (command missing)` — fix or remove the entry from `~/.acpx/config.json`
+- `sessions ensure` or the prompt prints `Failed to spawn agent command: <path>` → `❌ <name>: <agent> registered but unspawnable — <path>` — the wrapper exists but fails to exec (bad interpreter, missing dependency, wrong path)
+- A blank completion (no PONG) where the token summary reports `input=0 output=0` and there was no spawn error → `❌ <name>: <agent> blank turn` — for an opencode-backed seat this usually means it should be `mode: "exec"`, not a broken wrapper
 - Session creation fails or probe times out → `❌ <name>: <agent> failed`
 
 ### Antigravity agent — direct CLI invocation

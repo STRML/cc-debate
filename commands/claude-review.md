@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Run Claude reviewer(s) on the current plan. Defaults to a Skeptic pair (Fable + Opus, model-tuned prompts). Use claude-double-review to add the Architect, claude-custom-review for interactive picker.
 allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), Agent(subagent_type: general-purpose, model: sonnet), Read(~/.claude/debate-acpx.json), Read(~/.claude/settings.json), Read(~/.claude/debate-scripts/reviewer-prompts.md), Bash(git rev-parse --show-toplevel:*), Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Read(.tmp/ai-review*)
 ---

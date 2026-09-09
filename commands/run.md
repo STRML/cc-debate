@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Review a plan or changeset with a self-tuning panel — seats, models, and reasoning effort picked for the job — synthesize feedback, debate contradictions, and produce a consensus verdict. Configure reviewers and presets in ~/.claude/debate-acpx.json. Alias: /debate:all.
 allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/record-round.sh:*), Bash(bash ~/.claude/debate-scripts/safe-cleanup.sh:*), Bash(sha256sum:*), Bash(shasum:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Write(~/.acpx/**), Read(~/.acpx/**), Read(~/.claude/debate-scripts/reviewer-prompts.md), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
 ---

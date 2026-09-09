@@ -1,4 +1,7 @@
 # Changelog
+## [3.2.1] — 2026-09-08
+
+- Every command is explicit-only via `disable-model-invocation: true`; invocation behavior is unchanged after a command is selected.
 
 ## [3.2.0] — 2026-08-10 (the parallel runner waits on its own children)
 
