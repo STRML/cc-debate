@@ -206,13 +206,16 @@ A lens the selector rarely picks may stay under 5 by design. No thresholds, no r
 
 ## Structure
 
-A plugin allows one hooks module (`plugin-authoring/reference.md:13`: "one path"), so a new `hooks/register.tsx` is
-a composer calling `hooks/seats/register.tsx` and the new `hooks/report/register.tsx`; `hooks/hooks.json` `modules`
-(today `./seats/register.tsx`) points at it.
+A plugin allows one hooks module (`plugin-authoring/reference.md:13`: "one path"). Implementation found two more host
+rules (the host's static check of a module): `$` is followed only into functions declared in the same file, never across
+an import, and `session.start` may be registered once per module. So **all hook code is one file, `hooks/register.tsx`**
+(the seat pane and the board; `hooks/hooks.json` `modules` points at it), and only pure code is split out. A composer
+over two registering parts, as revision 4 described, does not load.
 
 - `hooks/report/lib.ts`: pure functions: the shape guard, `cleanText`, `safeFile`, the finding key, board
   counts, nonce framing, normalization and aggregation.
-- `hooks/report/register.tsx`: the band, the two panes, the commands, the root atom, the `tool.call` hook.
+- `hooks/register.tsx`: the seat pane and band, and the board's band, panes, commands, root atom and `tool.call` hook
+  (registered with `{ tool: 'Bash' }`, since the seats part's `tool.call` has no matcher).
 - `scripts/seat-report.sh`: the `--archive` mode (python) and its header usage.
 - Hardening of the seats part: `findWorkDir` accepts only a path whose last segment matches
   `ai-review-[0-9a-f]{8}`, under a `.tmp` segment, with no `..`, the same pattern `--archive` requires.

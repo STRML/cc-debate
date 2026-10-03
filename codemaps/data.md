@@ -1,5 +1,5 @@
 # Data Models — debate plugin
-_Updated: 2026-08-05_
+_Updated: 2026-10-02_
 
 ## Temp Work Directory
 
@@ -12,6 +12,7 @@ ai-review-<ID>/
 ├── changeset-base.txt          # Base SHA the diff was generated against
 ├── panel.json                  # Selector output: per-seat model/effort/route/harness/transport
 ├── panel-state.json            # Classify output: {diff, seats, seatsSkipped}
+├── report.json                 # Report stage's object, verbatim (changeset mode); input to seat-report.sh --archive
 ├── round-active-plan-sha.txt   # SHA of plan.md at last reviewer round (Step 6a gate)
 ├── last-approved-sha.txt       # SHA at last APPROVED round (cleanup gate)
 ├── review-target.txt           # "plan.md" or "changeset.diff" (cleanup target gate)
@@ -110,3 +111,20 @@ the selector gets `--private-repo` → prefers route 31501 models.
 `operator`, `pentester`, `grounder`, or a custom persona file path. Model values:
 `"opus"`/`"sonnet"`/`"fable"` (spawn), `false` (skip), `"auto"` (spawn if in-domain), or an
 array of models. `pentester` never runs on `sonnet` (weak at security by design; force opus).
+
+## Saved Panel Reports
+
+`~/.acpx/debate-reports/<id>-r<N>.json` — written by `seat-report.sh --archive` (mode 0600 in a 0700 folder, newest 300 kept, one file per review id and round; the temp file is `.saving-*.json`). Read by the `debate` mod only.
+
+```text
+{ "v": 1,
+  "meta":      { "id": "<8 hex>", "round": N, "ts": "<UTC ISO>", "root": "<repo root>" },
+  "seatState": { "<seat>": "reported" | "failed" | "not-configured" | "unreadable" },
+  "seatMeta":  { "<seat>": { "model": str|null, "effort": str|null, "est_cost": number|null } },
+  "report":    { "diff", "seatsRun", "seatsFailed", "seatsNotConfigured", "seatsNotTranscribed", "seatsSkipped": [{seat, why}],
+                 "counts", "findings", "refuted", "unverified" } }
+```
+
+Each finding: `{ file, line, severity: critical|major|minor|nit, claim, failure, fix?, foundBy[] }` (`why` on a refuted one). `file` is repo-relative or one of `(outside repo)`, `(unsafe path)`, `(unknown file)`. `est_cost` is the selector's estimate scaled by effort, not measured spend. Seat state precedence: not transcribed, then not configured, then failed (or not in `seatsRun`), then a missing or empty `<seat>-output.md` is `unreadable`, else `reported`.
+
+The mod keeps its own state in the plugin store: `board:<id>` = `{ "<fingerprint>#<n>": "done" | "dismissed" }`.

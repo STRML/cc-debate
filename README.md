@@ -575,7 +575,7 @@ teammates cost main-loop tokens, so they are opt-in. A preset that names its own
 
 ---
 
-### Watching a panel run (the `debate-seats` mod)
+### The `debate` mod: watching a panel, working its findings, scoring its seats
 
 A panel is quiet for minutes. In an interactive Claude Code session (2.1.287+, where
 plugins can ship "mods", live panes and bands drawn by function hooks), `debate` also
@@ -596,8 +596,33 @@ not recognised by its name, so a custom persona or a renamed seat shows up like 
 | Claude teammate / subagent-harness seat | the Agent's spawn prompt names the panel's `.tmp/ai-review-<id>` folder | the Agent's own status |
 
 The mod finds the panel from the first tool call that mentions a `.tmp/ai-review-<id>`
-path, so it needs no configuration. Its tests run with `claude plugin test .` (they are
-also wired into `tests/run-all.sh` as the `seats mod` suite).
+path (exactly 8 lowercase hex characters, no `..`), so it needs no configuration.
+
+#### Findings board and seat scorecard
+
+A changeset-mode panel ends with a verified list of findings. Step 3 of `/debate:run` saves it with
+`seat-report.sh --archive`, which validates and sanitizes the report and writes one file per round to
+`~/.acpx/debate-reports/<id>-r<N>.json` (a folder under `~/.acpx`, which `/debate:setup` already lets the sandbox write
+to; the newest 300 are kept). The mod only reads those files:
+
+- **`/debate-board`** opens the newest report for the repo you are in (found with `git rev-parse --show-toplevel`, so a
+  linked worktree sees its own panel): findings by severity, each with the claim, how it fails and a suggested fix.
+  **Fix this** asks Claude to check the claim, make the smallest change and run the tests. **Draft issue** drafts one
+  and waits for your go-ahead before filing anything. **Mark done** and **Dismiss** record your decision, which
+  survives later rounds of the same panel even when a line moves. A band above the prompt shows how many are still open
+  after a panel finishes in this session.
+- **`/debate-scorecard`** adds up the round-1 results of the last 20 saved reports per seat: runs, sole findings,
+  corroborated ones, refuted claims, the estimated cost (a registry estimate scaled by effort, not measured spend) and
+  the model most used. A seat with fewer than 5 runs says "too few runs". It shows data, not verdicts.
+
+Reviewers read your code, so their text is untrusted: the writer strips control, bidi and zero-width characters and
+checks paths, the mod cleans text again where it draws it, and a button wraps every reviewer-written field in markers
+with a fresh random nonce under a line saying it is data, not instructions. The archive folder is writable by the
+reviewers (they run as you), so that second pass matters. Every action is a button press.
+
+All of the mod's hook code is one file, `hooks/register.tsx`: the host follows `$` only inside the file that receives
+it and allows `session.start` to be registered once per module. The mod's tests run with `claude plugin test .`; they
+are wired into `tests/run-all.sh` as the `debate mod` suite, and the writer has its own `seat-report archive` suite.
 
 ## Unattended use (no approval prompts)
 

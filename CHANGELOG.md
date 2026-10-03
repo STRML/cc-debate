@@ -11,6 +11,16 @@
   name. Ships as a function-hooks module next to the existing SessionStart hook
   (`hooks/hooks.json` `modules`), with a `types/` state contract and tests under
   `tests/seats/`. Needs Claude Code 2.1.287+; older builds and `claude -p` ignore it.
+- **A findings board and a seat scorecard in the same mod, fed by `seat-report.sh --archive`.**
+  `commands/run.md` Step 3 now names Claude teammates by the file that delivered them, saves the report stage's
+  object to `<work dir>/report.json`, and runs `seat-report.sh --archive`, which validates it (counts equal the
+  arrays, seat names and paths checked, nothing over 200 entries), sanitizes it (control, bidi and zero-width
+  characters, paths made repo-relative) and writes `~/.acpx/debate-reports/<id>-r<N>.json` atomically at 0600,
+  keeping the newest 300. `/debate-board` lists the newest report for the repo you are in with Fix this, Draft
+  issue, Mark done and Dismiss; a band shows what is open after a panel finishes. `/debate-scorecard` adds up
+  round-1 results per seat across saved reports. A seat whose review file is missing or empty is recorded as
+  unreadable rather than as finding nothing. `findWorkDir` now accepts only `ai-review-<8 hex>` folders. The mod's
+  hook code is one file, `hooks/register.tsx`, because the host follows `$` only inside the file that receives it.
 
 ## [3.2.0] — 2026-08-10 (the parallel runner waits on its own children)
 
