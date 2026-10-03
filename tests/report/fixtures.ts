@@ -1,5 +1,6 @@
 export const ROOT = '/Users/x/proj'
 
+/** A finding as the writer saves it; `over` replaces fields. */
 export const finding = (over: Record<string, unknown> = {}) => ({
   file: 'src/a.ts',
   line: 12,

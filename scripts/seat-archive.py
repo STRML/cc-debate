@@ -25,26 +25,32 @@ ARCHIVE = re.compile(r"^[0-9a-f]{8}-r[1-9][0-9]{0,2}\.json$")
 
 
 def die(message):
+    """Exit with a message (stderr, status 1)."""
     sys.exit("seat-report --archive: " + message)
 
 
 def refuse_constant(name):
+    """json parse_constant hook: NaN and Infinity are not valid report values."""
     raise ValueError("%s is not valid JSON" % name)
 
 
 def parse(data):
+    """Decode UTF-8 JSON bytes, rejecting NaN and Infinity."""
     return json.loads(data.decode("utf-8"), parse_constant=refuse_constant)
 
 
 def read_json(path, limit=MAX_INPUT):
+    """Read and parse a regular file of this user, at most `limit` bytes."""
     return parse(read_regular(path, limit))
 
 
 def reject(message):
+    """Stop, writing nothing, because the report is not acceptable."""
     die("rejected: " + message)
 
 
 def seat_lists(report):
+    """The four seat lists of a report as plain lists; a missing one is empty."""
     return {key: list(report.get(key) or []) for key in ("seatsRun", "seatsFailed", "seatsNotConfigured", "seatsNotTranscribed")}
 
 
@@ -129,6 +135,7 @@ def clean_file(value, root):
 
 
 def clean_entry(entry, root, with_why):
+    """One finding or refuted claim with every reviewer-written field cleaned."""
     out = {
         "file": clean_file(entry["file"], root),
         "line": entry.get("line", 0),
@@ -160,16 +167,19 @@ def clean_diff(value):
 
 
 def short(value, cap):
+    """Cleaned text capped at `cap`, or None when it is empty or not text."""
     return clean(value, cap) or None if isinstance(value, str) else None
 
 
 def money(value):
+    """A finite cost of zero or more rounded to four places, else None."""
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
         return None
     return round(float(value), 4)
 
 
 def sanitized(report, lists, root):
+    """The report as saved: lists validated, every reviewer-written field cleaned, only known counts kept."""
     return {
         "diff": clean_diff(report.get("diff")),
         "seatsRun": lists["seatsRun"],
@@ -218,6 +228,7 @@ def regular_size(path):
 
 
 def has_review(work, seat):
+    """Whether a seat's `<seat>-output.md` is a non-empty regular file."""
     return (regular_size(os.path.join(work, seat + "-output.md")) or 0) > 0
 
 
@@ -271,6 +282,7 @@ def seat_meta(work, names):
 
 
 def write_failed(path, error):
+    """Stop with a message for a failed write, naming the permission to add when the cause is a denied write."""
     if error.errno in (errno.EPERM, errno.EACCES, errno.EROFS):
         die("cannot write %s (%s). The sandbox must allow writes to ~/.acpx: add Write(~/.acpx/**) as /debate:setup describes."
             % (path, error.strerror))
@@ -336,6 +348,7 @@ def prune(dest):
 
 
 def main(argv):
+    """Entry point: check the arguments and the report's location, validate and sanitize it, then save it and prune."""
     if len(argv) != 3 or argv[1] != "--round":
         die("usage: seat-report.sh --archive <WORK_DIR>/report.json --round <N>")
     if not ROUND.match(argv[2]):

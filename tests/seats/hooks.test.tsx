@@ -9,6 +9,7 @@ const DIR = '/Users/x/proj/.tmp/ai-review-ab12cd34'
 
 type Status = 'running' | 'completed'
 
+/** A machine with a panel's folder, its seats' exit and output files, and two Agents (only one is the panel's). */
 const world = (on: On) => {
   const clock = mock.clock(on, { now: new Date(2026, 9, 2, 15, 0, 0).getTime() })
   const toasts: string[] = []
@@ -68,8 +69,11 @@ const world = (on: On) => {
   return { clock, toasts, state }
 }
 
+/** Starts a session. */
 const start = ($: any) => $.session.start({ cwd: '/Users/x/proj', surface: 'terminal', isInteractive: true })
+/** Mounts the seat band above the prompt. */
 const band = ($: any) => $.ui.mount({ plugin: 'debate', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+/** A tool call that names the panel's folder, as the orchestrator's first write does. */
 const sawPlan = ($: any) => $.tool.call({ tool: 'Write', file_path: `${DIR}/plan.md`, content: 'plan' })
 
 /** The panel's folder appears, then its teammate spawns (told to write into it) beside an unrelated Agent. */
@@ -84,6 +88,7 @@ const panelStarts = async ($: any, w: ReturnType<typeof world>) => {
   await $.agent.spawn({ prompt: 'an unrelated stray task', description: 'unrelated', subagentType: 'general-purpose', name: 'stray' })
   await w.clock.advance(5_000)
 }
+/** Runs /debate-seats as typed in the composer. */
 const run = ($: any) =>
   $.command.run({ command: 'debate-seats', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
 

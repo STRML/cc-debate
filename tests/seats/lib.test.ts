@@ -72,6 +72,7 @@ describe('panelSeats', () => {
 })
 
 describe('acpxSeats', () => {
+  /** A listed file of this name and size. */
   const file = (name: string, size = 100) => ({ name, size })
 
   test('the manifest names the seats; a seat the runner left an invoke log for joins them', async () => {
@@ -87,6 +88,7 @@ describe('acpxSeats', () => {
 })
 
 describe('seatsFrom', () => {
+  /** A listed file of this name and size. */
   const file = (name: string, size = 100) => ({ name, size })
 
   // An acpx seat's files carry no round and no pattern beyond its own name: <seat>-exit.txt, <seat>-output.md.
@@ -106,6 +108,7 @@ describe('seatsFrom', () => {
   ]
 
   const seats = seatsFrom(['codex', 'gemini', 'kimi', 'mute'], files, exits, agents)
+  /** The seat with this name, if there is one. */
   const by = (name: string) => seats.find(seat => seat.name === name)
 
   test('an acpx seat is done on exit 0 with a review, failed on any other exit, running with no exit yet', async () => {

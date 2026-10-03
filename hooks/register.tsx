@@ -34,6 +34,7 @@ const isHidden = atom({ plugin: 'debate', key: 'seatsHidden' } as const, false)
 
 let wasRunning = false
 
+/** A file's text, or null when it cannot be read (missing, unreadable or not text). */
 const readText = async ($: EngineInterface, path: string): Promise<string | null> => {
   try {
     const text = await $.fs.read(path)
@@ -44,6 +45,7 @@ const readText = async ($: EngineInterface, path: string): Promise<string | null
   }
 }
 
+/** The panel's seats right now: the acpx seats from its manifest and exit files, plus the Agents spawned for it. */
 const scan = async ($: EngineInterface) => {
   const [dir, mine, agents] = await Promise.all([read($, workDir), read($, spawned), $.agent.list()])
 
@@ -80,6 +82,7 @@ const scan = async ($: EngineInterface) => {
   return seatsFrom(names, files, exits, teammates)
 }
 
+/** Re-scans the panel into the seats atom, and toasts once when the last running seat finishes. */
 const refresh = async ($: EngineInterface) => {
   const next = await scan($)
   const { total, done, running, failed } = progress(next)
@@ -93,6 +96,7 @@ const refresh = async ($: EngineInterface) => {
   wasRunning = running > 0
 }
 
+/** Opens the seat pane. */
 const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: 'Debate seats', focus: true, closeOnEscape: true })
 
 const COLOR = { running: 'yellow', done: 'green', failed: 'red' } as const
@@ -249,10 +253,12 @@ const mark = async ($: EngineInterface, key: string, status: Status) => {
   else await $.store.set(`board:${view.id}`, statuses)
 }
 
+/** Opens the findings board pane. */
 const openBoard = ($: EngineInterface) => $.ui.open({ id: BOARD, title: 'Findings board', focus: true, closeOnEscape: true })
 
 /** The panel's own save: the orchestrator runs `bash …/seat-report.sh --archive '<path>'`. A command that only mentions it (an echo, a grep) is not one. */
 const ARCHIVE_RUN = /^\s*(?:bash|sh)\s+\S*seat-report\.sh\s+--archive\s/
+/** Whether a Bash command is the panel saving its report (it starts with the script), not one that only mentions it. */
 const isArchiveRun = (input: { command?: unknown }) => typeof input.command === 'string' && ARCHIVE_RUN.test(input.command)
 
 /** Sends a board prompt from a timer: a call begun inside a press is dropped when the press ends. */
@@ -279,8 +285,10 @@ const send = async ($: EngineInterface, kind: 'fix' | 'draft', finding: Finding,
   })
 }
 
+/** A finding's location as shown: the file, with `:line` when the reviewer gave one. */
 const where = (file: string, line: number) => `${file}${line > 0 ? `:${line}` : ''}`
 
+/** Registers the mod's hooks: the seat pane and band, the findings board and band, the scorecard, and their commands. */
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'debate-seats', description: 'Which debate seats are running, done or failed' })
@@ -503,6 +511,7 @@ export const register: Register = on => {
 
     if (view === null) return <Text dimColor>No findings to show.</Text>
 
+    /** One finding's row: where it is, what is wrong, and the buttons that act on it. */
     const row = (one: BoardItem) => {
       const { finding, key } = one
       const status = statusOf(view, key)

@@ -19,6 +19,7 @@ import {
 } from '../../hooks/report/lib'
 import { ROOT, archive, finding } from './fixtures'
 
+/** A saved report parsed, failing the test if it does not parse. */
 const read = (options: Parameters<typeof archive>[0] = {}) => {
   const parsed = readArchive(archive(options))
 

@@ -9,6 +9,7 @@ export type SeatAgent = { name: string; status: string }
 // prompt names the folder. The id must end there, so `ai-review-ab12cd34ef` and `ai-review-AB12CD34` are not panels.
 const MENTION = /[^\s"'`=;|&()<>]*\.tmp\/ai-review-[0-9a-f]{8}(?![A-Za-z0-9_-])/g
 
+/** Every string in a value, to a depth of 4, so a path is found wherever a tool call put it. */
 const strings = (value: unknown, depth = 0): string[] => {
   if (typeof value === 'string') return [value]
 
@@ -21,6 +22,7 @@ const strings = (value: unknown, depth = 0): string[] => {
 const SPACED = /^(?:\.\/|\/)[^\n]*?\.tmp\/ai-review-[0-9a-f]{8}(?![A-Za-z0-9_-])/
 const QUOTED = /"([^"\n]*)"|'([^'\n]*)'/g
 
+/** The `.tmp/ai-review-<id>` paths in one string: a path with spaces first, then the plain words. */
 const mentions = (text: string): string[] => {
   const pieces = [text, ...[...text.matchAll(QUOTED)].map(one => one[1] ?? one[2] ?? '')]
 
@@ -75,6 +77,7 @@ export const acpxSeats = (manifest: readonly string[], files: readonly FileLike[
   return [...names]
 }
 
+/** Orders seats by name. */
 const byName = (a: Seat, b: Seat) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
 
 /**
@@ -88,6 +91,7 @@ export const seatsFrom = (
   exits: Readonly<Record<string, string>>,
   agents: readonly SeatAgent[],
 ): Seat[] => {
+  /** Whether a seat left a non-empty `<seat>-output.md`. */
   const hasReview = (seat: string) => files.some(file => file.name === `${seat}-output.md` && file.size > 0)
 
   const processes = acpx.map((name): Seat => {
@@ -114,6 +118,7 @@ export const seatsFrom = (
   return [...processes.sort(byName), ...teammates.sort(byName)]
 }
 
+/** How many seats are done, running and failed. */
 export const progress = (seats: readonly Seat[]) => ({
   total: seats.length,
   done: seats.filter(seat => seat.state === 'done').length,

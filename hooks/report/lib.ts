@@ -37,6 +37,7 @@ export type Archive = {
   unverified: Finding[]
 }
 
+/** Whether a value is a plain object (not null, not an array). */
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 /** Reviewer text without control, format, surrogate or line-separator characters (newline and tab stay), capped. */
@@ -49,6 +50,7 @@ export const cleanText = (value: unknown): string => {
     .join('')
 }
 
+/** A path's parts with `.` and empty parts removed and `..` folded; a relative path keeps any leading `..`. */
 const normalize = (path: string): { absolute: boolean; parts: string[] } => {
   const absolute = path.startsWith('/')
   const parts: string[] = []
@@ -93,6 +95,7 @@ export const safeFile = (value: unknown, root: string): string => {
   return parts.includes('..') ? '(unsafe path)' : parts.join('/')
 }
 
+/** One finding from an archive, cleaned for display, or null when it is malformed. */
 const finding = (value: unknown, root: string): Finding | null => {
   if (!isRecord(value)) return null
 
@@ -120,6 +123,7 @@ const finding = (value: unknown, root: string): Finding | null => {
   return out
 }
 
+/** A list of findings (at most 200), or null when it is not a list or holds a malformed finding. */
 const findings = (value: unknown, root: string): Finding[] | null => {
   if (!Array.isArray(value)) return null
 
@@ -136,6 +140,7 @@ const findings = (value: unknown, root: string): Finding[] | null => {
   return out
 }
 
+/** The archive's seats with their states and metadata; names the writer would have refused are dropped. */
 const seatList = (state: unknown, meta: unknown): ArchivedSeat[] => {
   if (!isRecord(state)) return []
 
@@ -201,6 +206,7 @@ export const readStatuses = (value: unknown): Record<string, Status> => {
   return out
 }
 
+/** One 32-bit FNV-1a pass over a string's code units, from the given seed. */
 const lane = (text: string, seed: number): number => {
   let hash = seed >>> 0
 
@@ -212,6 +218,7 @@ const lane = (text: string, seed: number): number => {
   return hash
 }
 
+/** A number as 8 hex digits. */
 const hex = (value: number): string => value.toString(16).padStart(8, '0')
 
 /** 64 bits of FNV-1a (two lanes with different seeds) over the file and the claim as the workflow's `claimId` normalizes it. */
@@ -257,12 +264,14 @@ export const boardOf = (archive: Archive, statuses: Record<string, Status>): Boa
   return { id: archive.id, round: archive.round, root: archive.root, items, refuted: archive.refuted, statuses }
 }
 
+/** A finding's decision; one with no entry is open. */
 export const statusOf = (board: Pick<BoardView, 'statuses'>, key: string): Status => {
   const value = Object.prototype.hasOwnProperty.call(board.statuses, key) ? board.statuses[key] : undefined
 
   return value === 'done' || value === 'dismissed' ? value : 'open'
 }
 
+/** How many findings are still open, and how many of those are critical and major. */
 export const openCounts = (board: BoardView): { open: number; critical: number; major: number } => {
   const open = board.items.filter(item => statusOf(board, item.key) === 'open')
 
@@ -273,6 +282,7 @@ export const openCounts = (board: BoardView): { open: number; critical: number; 
   }
 }
 
+/** The band's line: the open count, with the critical and major counts when there are any. */
 export const bandText = (counts: { open: number; critical: number; major: number }): string => {
   const detail = [counts.critical > 0 ? `${counts.critical} critical` : '', counts.major > 0 ? `${counts.major} major` : '']
     .filter(part => part !== '')
@@ -323,6 +333,7 @@ export const lensOf = (name: string): string => /^(.*?)-r\d+(-?b)?$/.exec(name)?
 
 type Tally = { runs: number; sole: number; corroborated: number; refuted: number; costRuns: number; costTotal: number; models: Map<string, number> }
 
+/** The model used most often (a tie goes to the name that sorts first), or null when none is known. */
 const topModel = (models: ReadonlyMap<string, number>): string | null => {
   let best: string | null = null
 
@@ -406,6 +417,7 @@ export const scoreRows = (archives: readonly Archive[]): ScoreRow[] => {
     .sort((a, b) => b.sole - a.sole || b.corroborated - a.corroborated || (a.seat < b.seat ? -1 : a.seat > b.seat ? 1 : 0))
 }
 
+/** One scorecard row as a line of text, with "too few runs" under the minimum. */
 export const scoreLine = (row: ScoreRow): string => {
   const cost = row.costRuns === 0 ? 'est. n/a' : `est. ${(row.costTotal / row.costRuns).toFixed(3)} (${row.costRuns}/${row.runs} runs)`
   const line = `${row.seat}  runs ${row.runs}  sole ${row.sole}  corroborated ${row.corroborated}  refuted ${row.refuted}  ${cost}  ${row.model ?? 'model unknown'}`

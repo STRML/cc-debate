@@ -110,15 +110,23 @@ const world = (on: On, disk: Disk, { cwd = ROOT, toplevel = ROOT, archiveFails =
   return { clock, sent, opened, runs, lists, reads, store, toasts, machine, landed: () => clock.advance(100) }
 }
 
+/** Starts a session in `cwd`. */
 const start = ($: any, cwd = ROOT) => $.session.start({ cwd, surface: 'terminal', isInteractive: true })
+/** Mounts the band above the prompt. */
 const band = ($: any) => $.ui.mount({ plugin: 'debate', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+/** Mounts the findings board pane. */
 const pane = ($: any) => $.ui.mount({ plugin: 'debate', surface: 'terminal', component: 'Pane', requestId: 'debate-board', props: PANE })
+/** Mounts the scorecard pane. */
 const scorePane = ($: any) => $.ui.mount({ plugin: 'debate', surface: 'terminal', component: 'Pane', requestId: 'debate-scorecard', props: SCORE })
+/** Runs a slash command as typed in the composer. */
 const run = ($: any, command: string) =>
   $.command.run({ command, args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
+/** The panel's Bash call that saves its report. */
 const reportWritten = ($: any) => $.tool.call({ tool: 'Bash', command: ARCHIVE_CALL })
+/** The query for one finding's row in the board. */
 const item = (key: string) => ({ key: `finding:${key}` })
 
+/** A saved report on disk: its text and modification time. */
 const saved = (options: Parameters<typeof archive>[0] = {}, mtimeMs = 1000) => ({ text: archive(options), mtimeMs })
 
 test('the root comes from git, so a session started in a subdirectory finds its panel', async ($, on) => {
@@ -509,6 +517,7 @@ test('a planted finding reaches the prompt cleaned and inside the markers', asyn
   expect(text.replace(inside, '')).not.toContain('rm -rf')
 })
 
+/** `count` round-1 reports with distinct ids and dates, merged with `over`. */
 const reports = (count: number, over: Parameters<typeof archive>[0] = {}): Disk =>
   Object.fromEntries(
     Array.from({ length: count }, (_, i) => {
@@ -623,6 +632,7 @@ test('a report that grew after it was listed is not read', async ($, on) => {
 })
 
 test('the scorecard reads at most the newest 300 reports, however many files are in the folder', async ($, on) => {
+  /** The i-th archive id: 8 hex digits. */
   const id = (i: number) => i.toString(16).padStart(8, '0')
   const disk: Disk = Object.fromEntries(
     Array.from({ length: 305 }, (_, i) => [`${id(i)}-r1.json`, saved({ id: id(i), root: '/Users/x/other', ts: `2026-09-01T00:00:${String(i % 60).padStart(2, '0')}Z` }, 1000 + i)]),
