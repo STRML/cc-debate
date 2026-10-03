@@ -4,8 +4,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { BoardItem, BoardView, Status } from '../types'
-import { ARCHIVE_NAME, MAX_ARCHIVE_BYTES, bandText, boardOf, openCounts, readArchive, readStatuses, statusOf } from './report/lib'
+import type { BoardItem, BoardView, Finding, Status } from '../types'
+import { ARCHIVE_NAME, MAX_ARCHIVE_BYTES, bandText, boardOf, framedPrompt, makeNonce, openCounts, readArchive, readStatuses, statusOf } from './report/lib'
 import { acpxSeats, findWorkDir, panelSeats, progress, seatsFrom } from './seats/lib'
 
 // --- Watching a panel: the seat pane and progress band ---
@@ -200,6 +200,21 @@ const openBoard = ($: EngineInterface) => $.ui.open({ id: BOARD, title: 'Finding
 /** The panel's own save: the orchestrator runs `seat-report.sh --archive` through Bash. */
 const isArchiveRun = (input: { command?: unknown }) => typeof input.command === 'string' && input.command.includes('seat-report.sh --archive')
 
+/** Sends a board prompt from a timer: a call begun inside a press is dropped when the press ends. */
+const send = ($: EngineInterface, kind: 'fix' | 'draft', finding: Finding, top: string) => {
+  const text = framedPrompt(kind, finding, top, makeNonce())
+
+  $.clock.after(100, () => {
+    $.prompt.submit({ text }).catch(() => {
+      try {
+        $.ui.toast('Could not send that prompt.')
+      } catch {
+        // the hooks were unloaded while the call was in flight
+      }
+    })
+  })
+}
+
 const where = (file: string, line: number) => `${file}${line > 0 ? `:${line}` : ''}`
 
 export const register: Register = on => {
@@ -374,6 +389,8 @@ export const register: Register = on => {
           <Text dimColor>{`It fails: ${finding.failure}`}</Text>
           {finding.fix !== undefined && <Text dimColor>{`Fix: ${finding.fix}`}</Text>}
           <Box gap={1}>
+            <Button key={`fix:${key}`} label="Fix this" onPress={() => send($, 'fix', finding, view.root)} />
+            <Button key={`issue:${key}`} label="Draft issue" onPress={() => send($, 'draft', finding, view.root)} />
             {status === 'open' && <Button key={`done:${key}`} label="Mark done" onPress={() => mark($, key, 'done')} />}
             {status === 'open' && <Button key={`dismiss:${key}`} label="Dismiss" dimColor onPress={() => mark($, key, 'dismissed')} />}
             {status !== 'open' && <Button key={`reopen:${key}`} label="Reopen" onPress={() => mark($, key, 'open')} />}
