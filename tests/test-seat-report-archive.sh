@@ -196,6 +196,29 @@ reject_round() {
   [ ! -d "$ARCHIVES" ] || [ -z "$(ls -A "$ARCHIVES")" ] || { echo "  something was written"; return 1; }
 }
 
+# --- Tests: sanitizing ---
+
+# sanitize_case '<python statements>' '<python expression over a, the saved archive>': saved, and the expression holds.
+sanitize_case() {
+  new_world
+  write_report "$1"
+  run_archive 1
+  [ "$STATUS" -eq 0 ] || { echo "$OUT"; return 1; }
+  check_json "$ARCHIVES/ab12cd34-r1.json" "$2" || { echo "  archive did not satisfy: $2"; return 1; }
+}
+
+test_hostile_panel_json_is_capped_and_type_checked() {
+  new_world
+  python3 -c 'import json,sys; json.dump({"seats": {
+    "executor": {"model_id": "gpt‮" + "m" * 100, "effective_effort": "e" * 40, "effective_cost": "free"},
+    "auditor": {"model_id": "ok", "effective_effort": "high", "effective_cost": -1},
+    "antigravity": {"model_id": "g", "effective_effort": "high", "effective_cost": 0.123456789}}}, open(sys.argv[1], "w"))' "$REVIEW/panel.json"
+  run_archive 1
+  [ "$STATUS" -eq 0 ] || { echo "$OUT"; return 1; }
+  check_json "$ARCHIVES/ab12cd34-r1.json" "len(a['seatMeta']['executor']['model']) == 64 and '‮' not in a['seatMeta']['executor']['model'] and len(a['seatMeta']['executor']['effort']) == 16 and a['seatMeta']['executor']['est_cost'] is None" || return 1
+  check_json "$ARCHIVES/ab12cd34-r1.json" "a['seatMeta']['auditor']['est_cost'] is None and a['seatMeta']['antigravity']['est_cost'] == 0.1235"
+}
+
 # --- Run ---
 
 echo ""
@@ -227,6 +250,23 @@ run_test "rejects a round that is not a number" reject_round "abc"
 run_test "rejects round 0" reject_round "0"
 run_test "rejects round 1000" reject_round "1000"
 run_test "rejects a traversal round" reject_round "1/../../x"
+run_test "makes an absolute path under the root relative" sanitize_case "" "a['report']['findings'][0]['file'] == 'src/a.ts'"
+run_test "marks an absolute path outside the root" sanitize_case "r['findings'][0]['file'] = '/etc/passwd'" "a['report']['findings'][0]['file'] == '(outside repo)'"
+run_test "normalizes ../ before the root test" sanitize_case "r['findings'][0]['file'] = root + '/../../etc/x'" "a['report']['findings'][0]['file'] == '(outside repo)'"
+run_test "does not take a sibling folder for the root" sanitize_case "r['findings'][0]['file'] = root + '-evil/x'" "a['report']['findings'][0]['file'] == '(outside repo)'"
+run_test "marks a relative path that climbs" sanitize_case "r['findings'][0]['file'] = '../../x'" "a['report']['findings'][0]['file'] == '(unsafe path)'"
+run_test "labels an empty file" sanitize_case "r['findings'][0]['file'] = ''" "a['report']['findings'][0]['file'] == '(unknown file)'"
+run_test "strips bidi, zero-width, surrogate and separator characters" sanitize_case 'r["findings"][0]["claim"] = "a‮b​c\ud800d e\x85f"' "a['report']['findings'][0]['claim'] == 'abcdef'"
+run_test "keeps newline and tab" sanitize_case 'r["findings"][0]["failure"] = "one\ntwo\tthree"' "a['report']['findings'][0]['failure'] == 'one\ntwo\tthree'"
+run_test "caps text at 2000 characters" sanitize_case "r['findings'][0]['claim'] = 'x' * 2500" "len(a['report']['findings'][0]['claim']) == 2000"
+run_test "caps text at 2000 code points, not bytes" sanitize_case "r['findings'][0]['claim'] = '\U0001F600' * 2500" "len(a['report']['findings'][0]['claim']) == 2000"
+run_test "keeps one level of scalar diff fields" sanitize_case "r['diff'] = {'summary': 'ok‮', 'filesChanged': 2, 'docsOnly': True, 'nested': {'a': 1}}" "a['report']['diff'] == {'summary': 'ok', 'filesChanged': 2, 'docsOnly': True}"
+run_test "accepts a null diff" sanitize_case "r['diff'] = None" "a['report']['diff'] is None"
+run_test "accepts a nit, line 0 and no fix" sanitize_case "" "a['report']['findings'][1]['severity'] == 'nit' and a['report']['findings'][1]['line'] == 0 and 'fix' not in a['report']['findings'][1]"
+run_test "keeps skipped seats as objects" sanitize_case "" "a['report']['seatsSkipped'] == [{'seat': 'pentester', 'why': 'no security-sensitive change'}]"
+run_test "keeps the refuted why" sanitize_case "" "a['report']['refuted'][0]['why'] == 'It is freed on exit'"
+run_test "keeps the counts" sanitize_case "" "a['report']['counts']['survived'] == 2 and a['report']['counts']['unverified'] == 1"
+run_test "caps and type-checks panel.json fields" test_hostile_panel_json_is_capped_and_type_checked
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="

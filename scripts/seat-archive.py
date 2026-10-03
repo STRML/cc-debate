@@ -2,16 +2,20 @@
 """seat-report.sh --archive: validate, sanitize and save a panel report. Usage is in seat-report.sh."""
 
 import json
+import math
 import os
 import re
 import sys
 import time
+import unicodedata
 
 HEX_DIR = re.compile(r"^ai-review-([0-9a-f]{8})$")
 ROUND = re.compile(r"^[1-9][0-9]{0,2}$")
 SEAT = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 SEVERITIES = ("critical", "major", "minor", "nit")
 MAX_ARRAY = 200
+MAX_TEXT = 2000
+DROPPED = {"Cc", "Cf", "Cs", "Zl", "Zp"}
 
 
 def die(message):
@@ -90,6 +94,84 @@ def validate(report):
     return lists
 
 
+def clean(value, cap=MAX_TEXT):
+    """Reviewer text without control, format, surrogate or line-separator characters (newline and tab stay), capped."""
+    text = value if isinstance(value, str) else ""
+    kept = "".join(ch for ch in text if ch in "\n\t" or unicodedata.category(ch) not in DROPPED)
+    return kept[:cap]
+
+
+def clean_file(value, root):
+    """A path a reviewer wrote, as a repo-relative path, or a label that says why it is not one."""
+    text = clean(value)
+    if text == "":
+        return "(unknown file)"
+    path = os.path.normpath(text)
+    if os.path.isabs(path):
+        if os.path.commonpath([root, path]) != root:
+            return "(outside repo)"
+        path = os.path.relpath(path, root)
+        return "(unknown file)" if path == "." else path
+    return "(unsafe path)" if ".." in path.split(os.sep) else path
+
+
+def clean_entry(entry, root, with_why):
+    out = {
+        "file": clean_file(entry["file"], root),
+        "line": entry.get("line", 0),
+        "severity": entry["severity"],
+        "claim": clean(entry["claim"]),
+        "failure": clean(entry["failure"]),
+        "foundBy": list(entry["foundBy"]),
+    }
+    if isinstance(entry.get("fix"), str):
+        out["fix"] = clean(entry["fix"])
+    if with_why:
+        out["why"] = clean(entry.get("why"))
+    return out
+
+
+def clean_diff(value):
+    """The classify stage's diff shape, one level deep: numbers, booleans, null and short text."""
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for key, item in list(value.items())[:20]:
+        if item is None or isinstance(item, bool):
+            out[clean(key, 64)] = item
+        elif isinstance(item, (int, float)) and math.isfinite(item):
+            out[clean(key, 64)] = item
+        elif isinstance(item, str):
+            out[clean(key, 64)] = clean(item)
+    return out
+
+
+def short(value, cap):
+    return clean(value, cap) or None if isinstance(value, str) else None
+
+
+def money(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        return None
+    return round(float(value), 4)
+
+
+def sanitized(report, lists, root):
+    return {
+        "diff": clean_diff(report.get("diff")),
+        "seatsRun": lists["seatsRun"],
+        "seatsFailed": lists["seatsFailed"],
+        "seatsNotConfigured": lists["seatsNotConfigured"],
+        "seatsNotTranscribed": lists["seatsNotTranscribed"],
+        "seatsSkipped": [{"seat": entry["seat"], "why": clean(entry.get("why"))} for entry in report.get("seatsSkipped") or []],
+        "counts": {key: value for key, value in report["counts"].items()
+                   if key in ("raw", "locations", "distinct", "survived", "refuted", "unverified") and type(value) is int},
+        "findings": [clean_entry(entry, root, False) for entry in report["findings"]],
+        "refuted": [clean_entry(entry, root, True) for entry in report["refuted"]],
+        "unverified": [clean_entry(entry, root, False) for entry in report["unverified"]],
+    }
+
+
 def has_review(work, seat):
     try:
         return os.path.getsize(os.path.join(work, seat + "-output.md")) > 0
@@ -128,9 +210,9 @@ def seat_meta(work, names):
             entry = seats.get(name)
             if isinstance(entry, dict):
                 meta[name] = {
-                    "model": entry.get("model_id"),
-                    "effort": entry.get("effective_effort"),
-                    "est_cost": entry.get("effective_cost"),
+                    "model": short(entry.get("model_id"), 64),
+                    "effort": short(entry.get("effective_effort"), 16),
+                    "est_cost": money(entry.get("effective_cost")),
                 }
     return meta
 
@@ -163,7 +245,7 @@ def main(argv):
         "meta": {"id": review_id, "round": int(argv[2]), "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "root": root},
         "seatState": states,
         "seatMeta": seat_meta(work, list(states)),
-        "report": report,
+        "report": sanitized(report, lists, root),
     }
 
     dest = os.path.join(os.path.expanduser("~"), ".acpx", "debate-reports")
