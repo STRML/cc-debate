@@ -22,6 +22,20 @@ describe('findWorkDir', () => {
   test('answers null when the call names no review folder', async () => {
     expect(findWorkDir({ command: 'npm test', file_path: '/Users/x/proj/src/a.ts' }, '/Users/x/proj')).toBeNull()
   })
+
+  test('accepts only a folder named like the ones debate-setup.sh makes: 8 lowercase hex characters', async () => {
+    expect(findWorkDir({ command: 'ls .tmp/ai-review-ab12cd3' }, '/Users/x/proj')).toBeNull()
+    expect(findWorkDir({ command: 'ls .tmp/ai-review-ab12cd34ef' }, '/Users/x/proj')).toBeNull()
+    expect(findWorkDir({ command: 'ls .tmp/ai-review-AB12CD34' }, '/Users/x/proj')).toBeNull()
+    expect(findWorkDir({ file_path: '/Users/x/proj/.tmp/ai-review-ab12cd34/plan.md' }, '/Users/x/proj')).toBe('/Users/x/proj/.tmp/ai-review-ab12cd34')
+  })
+
+  test('skips a path that climbs with .. and keeps looking', async () => {
+    expect(findWorkDir({ command: 'cat ../../.tmp/ai-review-ab12cd34/x' }, '/Users/x/proj')).toBeNull()
+    expect(findWorkDir({ a: '../.tmp/ai-review-ab12cd34', b: '/Users/x/proj/.tmp/ai-review-cd34ef56' }, '/Users/x/proj')).toBe(
+      '/Users/x/proj/.tmp/ai-review-cd34ef56',
+    )
+  })
 })
 
 describe('panelSeats', () => {

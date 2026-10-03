@@ -5,8 +5,9 @@ type FileLike = { name: string; size: number }
 /** An agent the panel spawned: matched by what it was asked to do, not by what it is called. */
 export type SeatAgent = { name: string; status: string }
 
-// The panel's folder is `.tmp/ai-review-<id>`; debate-setup.sh creates it and every script and prompt names it.
-const MENTION = /[^\s"'`=;|&()<>]*\.tmp\/ai-review-[A-Za-z0-9_-]+/
+// The panel's folder is `.tmp/ai-review-<id>`; debate-setup.sh makes the id 8 lowercase hex characters, and every script and
+// prompt names the folder. The id must end there, so `ai-review-ab12cd34ef` and `ai-review-AB12CD34` are not panels.
+const MENTION = /[^\s"'`=;|&()<>]*\.tmp\/ai-review-[0-9a-f]{8}(?![A-Za-z0-9_-])/g
 
 const strings = (value: unknown, depth = 0): string[] => {
   if (typeof value === 'string') return [value]
@@ -16,12 +17,14 @@ const strings = (value: unknown, depth = 0): string[] => {
   return Object.values(value).flatMap(inner => strings(inner, depth + 1))
 }
 
-/** The panel's work folder, when a tool call names a `.tmp/ai-review-<id>` path anywhere in its input. */
+/** The panel's work folder, when a tool call names a `.tmp/ai-review-<id>` path (with no `..` in it) anywhere in its input. */
 export const findWorkDir = (input: Record<string, unknown>, cwd: string): string | null => {
   for (const text of strings(input)) {
-    const hit = MENTION.exec(text)?.[0]
+    for (const hit of text.matchAll(MENTION)) {
+      const path = hit[0]
 
-    if (hit !== undefined) return hit.startsWith('/') ? hit : `${cwd}/${hit.replace(/^\.\//, '')}`
+      if (!path.split('/').includes('..')) return path.startsWith('/') ? path : `${cwd}/${path.replace(/^\.\//, '')}`
+    }
   }
 
   return null

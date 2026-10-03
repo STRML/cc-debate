@@ -1,6 +1,6 @@
 {
-  "description": "Refresh the ~/.claude/debate-scripts symlink so it always points at the installed plugin version; and the debate-seats mod (a live seat pane and progress band).",
-  "modules": ["./seats/register.tsx"],
+  "description": "Refresh the ~/.claude/debate-scripts symlink so it always points at the installed plugin version; and the debate mod (a live seat pane and progress band, a findings board, a seat scorecard).",
+  "modules": ["./register.tsx"],
   "hooks": {
     "SessionStart": [
       {
