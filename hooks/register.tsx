@@ -8,6 +8,7 @@ import type { BoardItem, BoardView, Finding, Status } from '../types'
 import type { Archive } from './report/lib'
 import {
   ARCHIVE_NAME,
+  MAX_ARCHIVES,
   MAX_ARCHIVE_BYTES,
   bandText,
   boardOf,
@@ -161,7 +162,10 @@ const listed = async ($: EngineInterface, dir: string): Promise<Listed[] | null>
     }),
   )
 
-  return found.flat().sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return found
+    .flat()
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(0, MAX_ARCHIVES)
 }
 
 /** The newest saved report for `top`, with the decisions saved for its panel. A file that cannot be read is counted and skipped. */
@@ -176,12 +180,30 @@ const loadBoard = async ($: EngineInterface, top: string): Promise<Omit<Loaded, 
 
   for (const file of files) {
     const text = file.size > MAX_ARCHIVE_BYTES ? null : await readText($, `${dir}/${file.name}`)
-    const archive = text === null ? null : readArchive(text)
+    // The listing's size can be stale: check what was actually read.
+    const archive = text === null || text.length > MAX_ARCHIVE_BYTES ? null : readArchive(text)
 
     if (archive === null) {
       unreadable += 1
     } else if (archive.root === top) {
-      return { view: boardOf(archive, readStatuses(await $.store.get(`board:${archive.id}`))), unreadable, ids }
+      const key = `board:${archive.id}`
+      const stored = readStatuses(await $.store.get(key))
+      const board = boardOf(archive, stored)
+      // A decision belongs to a finding that is in this report. Keys of findings that are gone are dropped, so a later round
+      // that gives one of those keys to another finding (a duplicate left alone) starts open instead of inheriting it.
+      const live = new Set(board.items.map(one => one.key))
+      const kept: Record<string, Status> = {}
+
+      for (const [name, status] of Object.entries(stored)) {
+        if (live.has(name)) kept[name] = status
+      }
+
+      if (Object.keys(kept).length !== Object.keys(stored).length) {
+        if (Object.keys(kept).length === 0) await $.store.delete(key)
+        else await $.store.set(key, kept)
+      }
+
+      return { view: { ...board, statuses: kept }, unreadable, ids }
     }
   }
 
@@ -229,8 +251,9 @@ const mark = async ($: EngineInterface, key: string, status: Status) => {
 
 const openBoard = ($: EngineInterface) => $.ui.open({ id: BOARD, title: 'Findings board', focus: true, closeOnEscape: true })
 
-/** The panel's own save: the orchestrator runs `seat-report.sh --archive` through Bash. */
-const isArchiveRun = (input: { command?: unknown }) => typeof input.command === 'string' && input.command.includes('seat-report.sh --archive')
+/** The panel's own save: the orchestrator runs `bash …/seat-report.sh --archive '<path>'`. A command that only mentions it (an echo, a grep) is not one. */
+const ARCHIVE_RUN = /^\s*(?:bash|sh)\s+\S*seat-report\.sh\s+--archive\s/
+const isArchiveRun = (input: { command?: unknown }) => typeof input.command === 'string' && ARCHIVE_RUN.test(input.command)
 
 /** Sends a board prompt from a timer: a call begun inside a press is dropped when the press ends. */
 const send = async ($: EngineInterface, kind: 'fix' | 'draft', finding: Finding, top: string) => {
@@ -440,7 +463,7 @@ export const register: Register = on => {
 
     for (const file of files) {
       const text = file.size > MAX_ARCHIVE_BYTES ? null : await readText($, `${dir}/${file.name}`)
-      const archive = text === null ? null : readArchive(text)
+      const archive = text === null || text.length > MAX_ARCHIVE_BYTES ? null : readArchive(text)
 
       if (archive !== null) archives.push(archive)
     }

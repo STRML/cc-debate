@@ -187,7 +187,8 @@ def sanitized(report, lists, root):
 
 def read_regular(path, limit):
     """The bytes of a regular file of this user, opened without following a symlink; the checks run on the descriptor."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    # O_NONBLOCK: opening a named pipe with no writer would wait forever, before the regular-file check could refuse it.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
@@ -206,7 +207,7 @@ def read_regular(path, limit):
 def regular_size(path):
     """The size of a regular file, or None when it is missing, a symlink or not a regular file."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None
     try:

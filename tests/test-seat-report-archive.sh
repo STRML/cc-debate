@@ -96,6 +96,23 @@ run_archive() {
   OUT="$(bash "$SCRIPT" --archive "$REVIEW/report.json" --round "${1:-1}" 2>&1)" || STATUS=$?
 }
 
+# run_archive_timed: like run_archive, but gives up after 10 s (a script that blocks on a special file must not hang the suite).
+run_archive_timed() {
+  STATUS=0
+  OUT="$(python3 - "$SCRIPT" "$REVIEW/report.json" << 'PY' 2>&1
+import subprocess, sys
+
+try:
+    done = subprocess.run(["bash", sys.argv[1], "--archive", sys.argv[2], "--round", "1"], capture_output=True, text=True, timeout=10)
+    print((done.stdout + done.stderr).strip())
+    sys.exit(done.returncode)
+except subprocess.TimeoutExpired:
+    print("timed out: the script blocked")
+    sys.exit(124)
+PY
+)" || STATUS=$?
+}
+
 # check_json <file> '<python expression over a, the parsed archive>': succeeds when the expression is true.
 check_json() {
   python3 - "$1" "$2" << 'PY'
@@ -337,6 +354,32 @@ for key in ('findings', 'refuted', 'unverified'):
   check_json "$ARCHIVES/ab12cd34-r1.json" "a['seatMeta']['claude-opus-skeptic-r1'] == {'model': None, 'effort': None, 'est_cost': None}"
 }
 
+test_a_named_pipe_as_the_report_is_refused_not_waited_on() {
+  new_world
+  rm "$REVIEW/report.json"
+  mkfifo "$REVIEW/report.json"
+  run_archive_timed
+  [ "$STATUS" -ne 0 ] && [ "$STATUS" -ne 124 ] && echo "$OUT" | grep -q "cannot read report.json" && [ ! -d "$ARCHIVES" ]
+}
+
+test_a_named_pipe_as_panel_json_leaves_the_meta_empty() {
+  new_world
+  rm "$REVIEW/panel.json"
+  mkfifo "$REVIEW/panel.json"
+  run_archive_timed
+  [ "$STATUS" -eq 0 ] || { echo "status $STATUS: $OUT"; return 1; }
+  check_json "$ARCHIVES/ab12cd34-r1.json" "a['seatMeta']['executor'] == {'model': None, 'effort': None, 'est_cost': None}"
+}
+
+test_a_named_pipe_as_a_review_file_is_unreadable() {
+  new_world
+  rm "$REVIEW/auditor-output.md"
+  mkfifo "$REVIEW/auditor-output.md"
+  run_archive_timed
+  [ "$STATUS" -eq 0 ] || { echo "status $STATUS: $OUT"; return 1; }
+  check_json "$ARCHIVES/ab12cd34-r1.json" "a['seatState']['auditor'] == 'unreadable'"
+}
+
 # --- Run ---
 
 echo ""
@@ -398,6 +441,9 @@ run_test "the archive is 0600 in a 0700 folder" test_the_archive_is_private
 run_test "a symlinked archive folder is refused" test_a_symlinked_archive_folder_is_refused
 run_test "pruning keeps 300 and only touches archives" test_pruning_keeps_300_and_only_touches_archives
 run_test "a failed write names the entry to add" test_a_failed_write_names_the_entry_to_add
+run_test "a named pipe as the report is refused, not waited on" test_a_named_pipe_as_the_report_is_refused_not_waited_on
+run_test "a named pipe as panel.json leaves the meta empty" test_a_named_pipe_as_panel_json_leaves_the_meta_empty
+run_test "a named pipe as a review file is unreadable" test_a_named_pipe_as_a_review_file_is_unreadable
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="

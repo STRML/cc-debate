@@ -157,7 +157,7 @@ guards the places untrusted text reaches a person or a prompt. It does not re-va
   hook, on a `--archive` Bash call that returned exit 0, re-reads the newest archive for this root and records its
   id and round in an atom. A report from an earlier session does not nag; `/debate-board` still opens it. Hide lasts
   for the session. No toast, no timer.
-- **Finding key**: a 64-bit FNV-1a hex (BigInt) of `file|claim`, the claim normalized as the workflow's `claimId`
+- **Finding key**: a 64-bit FNV-1a-style hex of `file|claim` (two 32-bit lanes with different seeds, so the mod needs no BigInt), the claim normalized as the workflow's `claimId`
   does (trim, lowercase, collapse whitespace), plus `#1` for a finding alone with its file and claim, or `#<n>/<size>`
   when several share them (the n-th over the pair's entries in all three arrays, ordered by `line`). Carrying the
   size means a duplicate that goes away changes the key of the one left, which then starts open rather than inheriting

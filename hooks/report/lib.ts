@@ -9,6 +9,9 @@ export const SEAT_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/
 /** The mod does not read an archive file larger than this. */
 export const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024
 
+/** The writer keeps this many; the mod reads no more than the newest this many, whatever else is in the folder. */
+export const MAX_ARCHIVES = 300
+
 /** A seat with fewer round-1 runs than this shows "too few runs". */
 export const MIN_RUNS = 5
 

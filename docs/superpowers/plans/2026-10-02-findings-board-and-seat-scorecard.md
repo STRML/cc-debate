@@ -4,11 +4,19 @@
 
 **Goal:** Save each changeset-mode panel report as one validated archive file and add a findings board (`/debate-board`) and a seat scorecard (`/debate-scorecard`) to the `debate` mod that read those archives.
 
-**Architecture:** `seat-report.sh --archive` (a thin dispatcher to `scripts/seat-archive.py`) validates and sanitizes the report stage's object and writes `~/.acpx/debate-reports/<id>-r<N>.json`. `commands/run.md` Step 3 saves the object and calls it. A new `hooks/report/` part of the existing `debate` hooks module only reads those archives: a board for the repo you are in, a band after a panel finishes this session, and a scorecard across all archives. A new `hooks/register.tsx` composes the seats part and the report part, because a plugin allows one hooks module.
+**Architecture:** `seat-report.sh --archive` (a thin dispatcher to `scripts/seat-archive.py`) validates and sanitizes the report stage's object and writes `~/.acpx/debate-reports/<id>-r<N>.json`. `commands/run.md` Step 3 saves the object and calls it. A new `hooks/report/` part of the existing `debate` hooks module only reads those archives: a board for the repo you are in, a band after a panel finishes this session, and a scorecard across all archives. ~~A new `hooks/register.tsx` composes the seats part and the report part~~ **Superseded while building:** all hook code is one file, `hooks/register.tsx` (see "Execution notes" below).
 
 **Tech Stack:** bash and python3 (stdlib only) for the writer and its tests; TypeScript/TSX function hooks for Claude Code 2.1.287+ mods, tested with `claude plugin test` (`claude-code/testing`); `tests/run-all.sh` for the suite.
 
 **Spec:** `docs/superpowers/specs/2026-10-02-findings-board-and-seat-scorecard-design.md` (revision 4, approved by Sean). Read it with this plan.
+
+> ## Execution notes: where the built code differs from this plan
+>
+> The tasks below are kept as written, so read them with these corrections. The decisions are recorded as rulings in the execution ledger, and the spec's Structure section is amended to match.
+>
+> - **One hooks file, not a composer.** The host follows `$` only inside the file that receives it and allows `session.start` once per module, so the composer in Task 7 and the separate `hooks/report/register.tsx` of Tasks 8 to 11 do not load. All hook code is `hooks/register.tsx` (the seats part moved there; `hooks/seats/register.tsx` and `hooks/report/register.tsx` do not exist). Wherever a task says to edit `hooks/report/register.tsx`, the edit is in `hooks/register.tsx`.
+> - **Test-kit facts:** the test `$` has no `$.store` (tests keep their own `on("store.*")` handlers); a Pane `requestId` mounts once per test; `find({ key })` does not see a key on a bare `Text`.
+> - **Later fixes, from the panel review of PR #72:** duplicate findings carry their group size in the key (`#<n>/<size>`) and decisions for keys absent from the newest report are dropped; the board orders reports by `fs.stat` (the host's `fs.list` carries no modification time); `findWorkDir` handles paths with spaces; a seat's delivery stem (`<seat>-r<N>`) finds its manifest entry; every seat list is capped at 200; the repository path sits inside the prompt's data block; the writer opens with `O_NONBLOCK` so a named pipe cannot hang it; the band reacts only to a command that starts with `bash …/seat-report.sh --archive`; the mod reads at most the newest 300 reports.
 
 ## Global Constraints
 
@@ -18,7 +26,7 @@
 - Caps: 200 entries per array (reject, never truncate); text fields 2,000 code points; `model` 64; `effort` 16; `report.json` at most 1 MB; the mod skips archive files over 2 MB.
 - Strip Unicode categories Cc, Cf, Cs, Zl and Zp except newline and tab, in the writer and again in the mod where text is drawn or sent in a prompt.
 - `--archive` is never run unsandboxed; a failed write names the `Write(~/.acpx/**)` entry.
-- The plugin allows one hooks module (`plugin-authoring/reference.md:13`); `hooks/hooks.json` `modules` points at the composer.
+- The plugin allows one hooks module (`plugin-authoring/reference.md:13`); `hooks/hooks.json` `modules` points at it (all hook code is one file, `hooks/register.tsx`; see Execution notes).
 - The scorecard counts `meta.round` 1 only, the last 20 runs per seat, and shows "too few runs" under 5. Verification passes (Step 6.5) are not archived.
 - `commands/run.md` and `commands/all.md` `allowed-tools` lines stay identical (`tests/test-references.sh` enforces it).
 - Commit with explicit paths only. No attribution lines in commit messages. Nothing is pushed.
@@ -55,8 +63,8 @@ Failure modes the spec implies that a person using this will meet, most likely f
 | `tests/test-references.sh` (modify) | static check of the Step 3 contract |
 | `types/index.d.ts` (modify) | board and scorecard types; new `PluginState.debate` keys |
 | `hooks/report/lib.ts` (create) | pure functions: guards, keys, board, nonce framing, normalization, scoring |
-| `hooks/report/register.tsx` (create) | root, loading, board pane, band, buttons, scorecard pane, commands, `tool.call` hook |
-| `hooks/register.tsx` (create) | composer of the seats part and the report part |
+| ~~`hooks/report/register.tsx`~~ (superseded) | built inside `hooks/register.tsx`: root, loading, board pane, band, buttons, scorecard pane, commands, `tool.call` hook |
+| `hooks/register.tsx` (create) | all hook code: the seat pane and band, and the board (see Execution notes) |
 | `hooks/hooks.json` (modify) | `modules` and `description` |
 | `hooks/seats/lib.ts` (modify) | `findWorkDir` hardening |
 | `tests/report/fixtures.ts`, `lib.test.ts`, `hooks.test.tsx` (create) | plugin tests |
@@ -2168,6 +2176,8 @@ git commit -m "feat(debate-mod): pure functions for the findings board and seat 
 ---
 
 ### Task 7: Harden `findWorkDir` and compose the report part into the module
+
+> **Superseded in part:** the composer and the stub `hooks/report/register.tsx` below were not built (see Execution notes). The `findWorkDir` hardening and the `hooks.json` change were.
 
 **Files:**
 - Modify: `hooks/seats/lib.ts:9-28`, `tests/seats/lib.test.ts`, `hooks/hooks.json`

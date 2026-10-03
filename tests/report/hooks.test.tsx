@@ -9,7 +9,7 @@ const BAND = { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 100 
 const PANE = { title: 'Findings board', isFocused: true, bodyColumns: 100, placement: 'inline' } as never
 const SCORE = { title: 'Seat scorecard', isFocused: true, bodyColumns: 100, placement: 'inline' } as never
 const DIR = '/Users/x/.acpx/debate-reports'
-const ARCHIVE_CALL = `bash ~/.claude/debate-scripts/seat-report.sh --archive "${ROOT}/.tmp/ai-review-ab12cd34/report.json" --round 1`
+const ARCHIVE_CALL = `bash ~/.claude/debate-scripts/seat-report.sh --archive '${ROOT}/.tmp/ai-review-ab12cd34/report.json' --round 1`
 const KEY = `${fingerprint('src/a.ts', 'Reads before it writes')}#1`
 
 type Disk = Record<string, { text: string; mtimeMs: number; size?: number }>
@@ -573,4 +573,65 @@ test('the board shows the newest report by modification time, not by file name',
 
   expect(await ui.find(item(`${fingerprint('src/a.ts', 'Newer report')}#1`))).toBeDefined()
   expect(await ui.find(item(`${fingerprint('src/a.ts', 'Older report')}#1`))).toBeUndefined()
+})
+
+test('a command that only mentions the archive command is not a panel saving its report', async ($, on) => {
+  world(on, { 'ab12cd34-r1.json': saved() })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: `echo 'seat-report.sh --archive'` })
+  await $.tool.call({ tool: 'Bash', command: 'grep -rn "bash ~/.claude/debate-scripts/seat-report.sh --archive" commands' })
+
+  expect(await (await band($)).find({ key: 'findings-band' })).toBeUndefined()
+})
+
+test('a dismissal does not pass to a duplicate that takes over its key two rounds later', async ($, on) => {
+  const disk: Disk = { 'ab12cd34-r1.json': saved({ findings: [finding({ line: 10 })] }, 1000) }
+  const w = world(on, disk)
+
+  await start($)
+  await run($, 'debate-board')
+  await (await pane($)).press({ key: `dismiss:${KEY}` })
+
+  // Round 2 adds a duplicate: both are ambiguous now, so the old decision is dropped rather than kept.
+  disk['ab12cd34-r2.json'] = saved({ round: 2, findings: [finding({ line: 10 }), finding({ line: 30 })] }, 2000)
+  expect((await run($, 'debate-board')).text).toContain('2 open of 2')
+  expect(w.store['board:ab12cd34']).toBeUndefined()
+
+  // Round 3 fixes the first: the one left is a new finding with no decision, not the dismissed one.
+  disk['ab12cd34-r3.json'] = saved({ round: 3, findings: [finding({ line: 30 })] }, 3000)
+
+  const reply = await run($, 'debate-board')
+
+  expect(reply.text).toContain('1 open of 1')
+  expect(reply.text).toContain('round 3')
+})
+
+test('a report that grew after it was listed is not read', async ($, on) => {
+  const planted = archive({ id: 'eeeeeeee', findings: [finding({ claim: 'Planted' })] }) + ' '.repeat(2.2 * 1024 * 1024)
+
+  world(on, {
+    'eeeeeeee-r1.json': { text: planted, mtimeMs: 3000, size: 100 },
+    'ab12cd34-r1.json': saved({}, 1000),
+  })
+  await start($)
+  await run($, 'debate-board')
+
+  const ui = await pane($)
+
+  expect(await ui.find(item(KEY))).toBeDefined()
+  expect(await ui.find(item(`${fingerprint('src/a.ts', 'Planted')}#1`))).toBeUndefined()
+})
+
+test('the scorecard reads at most the newest 300 reports, however many files are in the folder', async ($, on) => {
+  const id = (i: number) => i.toString(16).padStart(8, '0')
+  const disk: Disk = Object.fromEntries(
+    Array.from({ length: 305 }, (_, i) => [`${id(i)}-r1.json`, saved({ id: id(i), root: '/Users/x/other', ts: `2026-09-01T00:00:${String(i % 60).padStart(2, '0')}Z` }, 1000 + i)]),
+  )
+  const w = world(on, disk)
+
+  await start($)
+  w.reads.length = 0
+  await run($, 'debate-scorecard')
+
+  expect(w.reads.length).toBe(300)
 })
