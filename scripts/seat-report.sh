@@ -27,6 +27,12 @@
 
 set -euo pipefail
 
+# `--archive` saves a panel report for the debate mod's findings board and seat scorecard; see seat-archive.py.
+if [ "${1:-}" = "--archive" ]; then
+  shift
+  exec python3 "$(dirname "$0")/seat-archive.py" "$@"
+fi
+
 SRC="${1:-}"
 if [ -z "$SRC" ]; then
   echo "Usage: $0 <panel-result.json>|-" >&2
