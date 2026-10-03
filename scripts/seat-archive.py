@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """seat-report.sh --archive: validate, sanitize and save a panel report. Usage is in seat-report.sh."""
 
+import errno
 import json
 import math
 import os
 import re
+import stat
 import sys
+import tempfile
 import time
 import unicodedata
 
@@ -16,6 +19,9 @@ SEVERITIES = ("critical", "major", "minor", "nit")
 MAX_ARRAY = 200
 MAX_TEXT = 2000
 DROPPED = {"Cc", "Cf", "Cs", "Zl", "Zp"}
+MAX_INPUT = 1024 * 1024
+KEEP = 300
+ARCHIVE = re.compile(r"^[0-9a-f]{8}-r[1-9][0-9]{0,2}\.json$")
 
 
 def die(message):
@@ -26,9 +32,12 @@ def refuse_constant(name):
     raise ValueError("%s is not valid JSON" % name)
 
 
-def read_json(path):
-    with open(path, "rb") as fh:
-        return json.loads(fh.read().decode("utf-8"), parse_constant=refuse_constant)
+def parse(data):
+    return json.loads(data.decode("utf-8"), parse_constant=refuse_constant)
+
+
+def read_json(path, limit=MAX_INPUT):
+    return parse(read_regular(path, limit))
 
 
 def reject(message):
@@ -172,11 +181,39 @@ def sanitized(report, lists, root):
     }
 
 
-def has_review(work, seat):
+def read_regular(path, limit):
+    """The bytes of a regular file of this user, opened without following a symlink; the checks run on the descriptor."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
-        return os.path.getsize(os.path.join(work, seat + "-output.md")) > 0
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise OSError(errno.EPERM, "not a regular file of yours")
+        if info.st_size > limit:
+            raise OSError(errno.EFBIG, "larger than the limit")
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            data = fh.read(limit + 1)
+    finally:
+        os.close(fd)
+    if len(data) > limit:
+        raise OSError(errno.EFBIG, "larger than the limit")
+    return data
+
+
+def regular_size(path):
+    """The size of a regular file, or None when it is missing, a symlink or not a regular file."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:
-        return False
+        return None
+    try:
+        info = os.fstat(fd)
+        return info.st_size if stat.S_ISREG(info.st_mode) else None
+    finally:
+        os.close(fd)
+
+
+def has_review(work, seat):
+    return (regular_size(os.path.join(work, seat + "-output.md")) or 0) > 0
 
 
 def seat_states(lists, work):
@@ -217,6 +254,71 @@ def seat_meta(work, names):
     return meta
 
 
+def write_failed(path, error):
+    if error.errno in (errno.EPERM, errno.EACCES, errno.EROFS):
+        die("cannot write %s (%s). The sandbox must allow writes to ~/.acpx: add Write(~/.acpx/**) as /debate:setup describes."
+            % (path, error.strerror))
+    die("cannot write %s (%s)" % (path, error))
+
+
+def ensure_dir(path):
+    """The archive folder: not a symlink, ours, mode 0700."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            pass
+        info = os.lstat(path)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            die("%s is a symlink, not a folder, or not yours; refusing to write there" % path)
+        os.chmod(path, 0o700)
+    except OSError as error:
+        write_failed(path, error)
+
+
+def write_archive(dest, name, archive):
+    """One file appears whole or not at all: a private temp file in the same folder, then a rename over the name."""
+    ensure_dir(dest)
+    try:
+        fd, temp = tempfile.mkstemp(prefix=".saving-", suffix=".json", dir=dest)
+    except OSError as error:
+        write_failed(dest, error)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(json.dumps(archive, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(temp, os.path.join(dest, name))
+    except (OSError, ValueError) as error:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+        if isinstance(error, OSError):
+            write_failed(dest, error)
+        die("cannot save the archive (%s)" % error)
+
+
+def prune(dest):
+    """Keep the newest KEEP archives. Only regular, non-symlink files with an archive name are ever removed."""
+    found = []
+    for name in os.listdir(dest):
+        if ARCHIVE.match(name):
+            try:
+                info = os.lstat(os.path.join(dest, name))
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                found.append((info.st_mtime, name))
+    found.sort(reverse=True)
+    for _, name in found[KEEP:]:
+        try:
+            os.unlink(os.path.join(dest, name))
+        except OSError:
+            pass
+
+
 def main(argv):
     if len(argv) != 3 or argv[1] != "--round":
         die("usage: seat-report.sh --archive <WORK_DIR>/report.json --round <N>")
@@ -232,8 +334,19 @@ def main(argv):
     review_id, root = match.group(1), os.path.dirname(dot_tmp)
 
     try:
+        info = os.lstat(work)
+    except OSError as error:
+        die("cannot read the review folder (%s)" % error)
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        die("the review folder is a symlink or not yours")
+
+    try:
         report = read_json(report_path)
     except OSError as error:
+        if error.errno == errno.ELOOP:
+            die("report.json is a symlink; refusing to read it")
+        if error.errno == errno.EFBIG:
+            die("report.json is larger than 1 MB")
         die("cannot read report.json (%s)" % error)
     except ValueError as error:
         die("report.json is not valid JSON (%s)" % error)
@@ -249,11 +362,9 @@ def main(argv):
     }
 
     dest = os.path.join(os.path.expanduser("~"), ".acpx", "debate-reports")
-    os.makedirs(dest, exist_ok=True)
-    final = os.path.join(dest, "%s-r%d.json" % (review_id, int(argv[2])))
-    with open(final, "w") as fh:
-        json.dump(archive, fh)
-    print("seat-report --archive: saved %s" % final)
+    write_archive(dest, "%s-r%d.json" % (review_id, int(argv[2])), archive)
+    prune(dest)
+    print("seat-report --archive: saved %s" % os.path.join(dest, "%s-r%d.json" % (review_id, int(argv[2]))))
 
 
 main(sys.argv[1:])

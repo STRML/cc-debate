@@ -219,6 +219,111 @@ test_hostile_panel_json_is_capped_and_type_checked() {
   check_json "$ARCHIVES/ab12cd34-r1.json" "a['seatMeta']['auditor']['est_cost'] is None and a['seatMeta']['antigravity']['est_cost'] == 0.1235"
 }
 
+# --- Tests: location guards and archive hygiene ---
+
+# mode_of <path>: the permission bits, in octal, as python prints them.
+mode_of() {
+  python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$1"
+}
+
+test_refuses_a_report_outside_a_review_folder() {
+  new_world
+  mkdir -p "$ROOT/.tmp/other"
+  cp "$REVIEW/report.json" "$ROOT/.tmp/other/report.json"
+  STATUS=0
+  OUT="$(bash "$SCRIPT" --archive "$ROOT/.tmp/other/report.json" --round 1 2>&1)" || STATUS=$?
+  [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -q "ai-review-" && [ ! -d "$ARCHIVES" ]
+}
+
+test_refuses_a_review_folder_not_inside_dot_tmp() {
+  new_world
+  mkdir -p "$ROOT/ai-review-ab12cd34"
+  cp "$REVIEW/report.json" "$ROOT/ai-review-ab12cd34/report.json"
+  STATUS=0
+  OUT="$(bash "$SCRIPT" --archive "$ROOT/ai-review-ab12cd34/report.json" --round 1 2>&1)" || STATUS=$?
+  [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -q "ai-review-" && [ ! -d "$ARCHIVES" ]
+}
+
+test_refuses_a_symlinked_report() {
+  new_world
+  mv "$REVIEW/report.json" "$W/elsewhere.json"
+  ln -s "$W/elsewhere.json" "$REVIEW/report.json"
+  run_archive 1
+  [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -q "symlink" && [ ! -d "$ARCHIVES" ]
+}
+
+test_refuses_a_symlinked_review_folder() {
+  new_world
+  ln -s "$REVIEW" "$ROOT/.tmp/ai-review-cafe1234"
+  STATUS=0
+  OUT="$(bash "$SCRIPT" --archive "$ROOT/.tmp/ai-review-cafe1234/report.json" --round 1 2>&1)" || STATUS=$?
+  [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -q "symlink or not yours" && [ ! -d "$ARCHIVES" ]
+}
+
+test_refuses_a_report_over_1_mb() {
+  new_world
+  write_report "r['pad'] = 'x' * 1100000"
+  run_archive 1
+  [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -q "1 MB" && [ ! -d "$ARCHIVES" ]
+}
+
+test_a_symlinked_review_file_is_unreadable() {
+  new_world
+  rm "$REVIEW/auditor-output.md"
+  ln -s "$REVIEW/executor-output.md" "$REVIEW/auditor-output.md"
+  run_archive 1
+  [ "$STATUS" -eq 0 ] || { echo "$OUT"; return 1; }
+  check_json "$ARCHIVES/ab12cd34-r1.json" "a['seatState']['auditor'] == 'unreadable'"
+}
+
+test_the_archive_is_private() {
+  new_world
+  run_archive 1
+  [ "$STATUS" -eq 0 ] || { echo "$OUT"; return 1; }
+  [ "$(mode_of "$ARCHIVES")" = "0o700" ] && [ "$(mode_of "$ARCHIVES/ab12cd34-r1.json")" = "0o600" ]
+}
+
+test_a_symlinked_archive_folder_is_refused() {
+  new_world
+  mkdir -p "$HOME/.acpx" "$W/elsewhere"
+  ln -s "$W/elsewhere" "$ARCHIVES"
+  run_archive 1
+  [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -q "symlink" && [ -z "$(ls -A "$W/elsewhere")" ]
+}
+
+test_pruning_keeps_300_and_only_touches_archives() {
+  new_world
+  mkdir -p "$ARCHIVES"
+  python3 - "$ARCHIVES" << 'PY'
+import os, sys
+
+dest = sys.argv[1]
+for i in range(305):
+    path = os.path.join(dest, "%08x-r1.json" % (i + 1))
+    open(path, "w").close()
+    os.utime(path, (1000 + i, 1000 + i))
+os.symlink("/dev/null", os.path.join(dest, "00000000-r1.json"))
+os.utime(os.path.join(dest, "00000000-r1.json"), (1, 1), follow_symlinks=False)
+open(os.path.join(dest, "notes.txt"), "w").close()
+PY
+  run_archive 1
+  [ "$STATUS" -eq 0 ] || { echo "$OUT"; return 1; }
+  local kept
+  kept="$(find "$ARCHIVES" -maxdepth 1 -type f -name '*-r1.json' | wc -l | tr -d ' ')"
+  [ "$kept" = "300" ] || { echo "  kept $kept archives"; return 1; }
+  [ -f "$ARCHIVES/ab12cd34-r1.json" ] && [ -L "$ARCHIVES/00000000-r1.json" ] && [ -f "$ARCHIVES/notes.txt" ]
+}
+
+test_a_failed_write_names_the_entry_to_add() {
+  [ "$(id -u)" -ne 0 ] || return 0
+  new_world
+  mkdir -p "$HOME/.acpx"
+  chmod 500 "$HOME/.acpx"
+  run_archive 1
+  chmod 700 "$HOME/.acpx"
+  [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -q 'Write(~/.acpx/\*\*)'
+}
+
 # --- Run ---
 
 echo ""
@@ -267,6 +372,16 @@ run_test "keeps skipped seats as objects" sanitize_case "" "a['report']['seatsSk
 run_test "keeps the refuted why" sanitize_case "" "a['report']['refuted'][0]['why'] == 'It is freed on exit'"
 run_test "keeps the counts" sanitize_case "" "a['report']['counts']['survived'] == 2 and a['report']['counts']['unverified'] == 1"
 run_test "caps and type-checks panel.json fields" test_hostile_panel_json_is_capped_and_type_checked
+run_test "refuses a report outside a review folder" test_refuses_a_report_outside_a_review_folder
+run_test "refuses a review folder not inside .tmp" test_refuses_a_review_folder_not_inside_dot_tmp
+run_test "refuses a symlinked report" test_refuses_a_symlinked_report
+run_test "refuses a symlinked review folder" test_refuses_a_symlinked_review_folder
+run_test "refuses a report over 1 MB" test_refuses_a_report_over_1_mb
+run_test "a symlinked review file is unreadable" test_a_symlinked_review_file_is_unreadable
+run_test "the archive is 0600 in a 0700 folder" test_the_archive_is_private
+run_test "a symlinked archive folder is refused" test_a_symlinked_archive_folder_is_refused
+run_test "pruning keeps 300 and only touches archives" test_pruning_keeps_300_and_only_touches_archives
+run_test "a failed write names the entry to add" test_a_failed_write_names_the_entry_to_add
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="
