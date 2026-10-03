@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+- **A seat pane and progress band for interactive sessions (the `debate-seats` mod).**
+  While a panel runs, a band above the prompt counts seats done and running, and
+  `/debate-seats` lists each seat with its state. acpx seats come from the selector's
+  `panel.json` and their own `<seat>-exit.txt` / `<seat>-output.md` (exit 0 with no review
+  is a failed seat, as the runner's own check treats it); Claude teammates are the Agents
+  whose spawn prompt names the panel's work folder, so nothing is matched on a seat's
+  name. Ships as a function-hooks module next to the existing SessionStart hook
+  (`hooks/hooks.json` `modules`), with a `types/` state contract and tests under
+  `tests/seats/`. Needs Claude Code 2.1.287+; older builds and `claude -p` ignore it.
+
 ## [3.2.0] — 2026-08-10 (the parallel runner waits on its own children)
 
 - **`run-parallel-acpx.sh` stopped disowning the reviewers it spawns.** It spawned each

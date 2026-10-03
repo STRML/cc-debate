@@ -575,6 +575,30 @@ teammates cost main-loop tokens, so they are opt-in. A preset that names its own
 
 ---
 
+### Watching a panel run (the `debate-seats` mod)
+
+A panel is quiet for minutes. In an interactive Claude Code session (2.1.287+, where
+plugins can ship "mods", live panes and bands drawn by function hooks), `debate` also
+loads a small mod that shows which seats are running:
+
+- **A band above the prompt** while any seat is running: `⚖ Debate: 1/3 seats done · 2 running`,
+  with a **Seats** button. When the last seat ends it clears and a toast reports how many
+  were done and how many failed.
+- **`/debate-seats`** opens the full list: each seat with its state (running, done,
+  failed and why).
+
+It reads the panel, it never writes to it, and it does nothing under `claude -p`. A seat is
+not recognised by its name, so a custom persona or a renamed seat shows up like any other:
+
+| Seat kind | How the mod knows it | State |
+|-----------|----------------------|-------|
+| acpx reviewer | the seat is listed in `<work dir>/panel.json` (the selector's manifest) | running until `<seat>-exit.txt` exists; done on exit 0 **with** a non-empty `<seat>-output.md`; exit 0 with no review is reported as failed |
+| Claude teammate / subagent-harness seat | the Agent's spawn prompt names the panel's `.tmp/ai-review-<id>` folder | the Agent's own status |
+
+The mod finds the panel from the first tool call that mentions a `.tmp/ai-review-<id>`
+path, so it needs no configuration. Its tests run with `claude plugin test .` (they are
+also wired into `tests/run-all.sh` as the `seats mod` suite).
+
 ## Unattended use (no approval prompts)
 
 Add to `~/.claude/settings.json` to permanently approve all debate tool calls:
