@@ -5,7 +5,21 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { BoardItem, BoardView, Finding, Status } from '../types'
-import { ARCHIVE_NAME, MAX_ARCHIVE_BYTES, bandText, boardOf, framedPrompt, makeNonce, openCounts, readArchive, readStatuses, statusOf } from './report/lib'
+import type { Archive } from './report/lib'
+import {
+  ARCHIVE_NAME,
+  MAX_ARCHIVE_BYTES,
+  bandText,
+  boardOf,
+  framedPrompt,
+  makeNonce,
+  openCounts,
+  readArchive,
+  readStatuses,
+  scoreLine,
+  scoreRows,
+  statusOf,
+} from './report/lib'
 import { acpxSeats, findWorkDir, panelSeats, progress, seatsFrom } from './seats/lib'
 
 // --- Watching a panel: the seat pane and progress band ---
@@ -86,6 +100,7 @@ const MARK = { running: '●', done: '✓', failed: '✗' } as const
 // --- Working a panel's findings: the board ---
 
 const BOARD = 'debate-board'
+const SCORECARD = 'debate-scorecard'
 const SEVERITIES = ['critical', 'major', 'minor', 'nit'] as const
 const SEVERITY_COLOR = { critical: 'red', major: 'yellow', minor: 'cyan', nit: 'gray' } as const
 
@@ -94,6 +109,7 @@ const boardView = atom({ plugin: 'debate', key: 'reportBoard' } as const, null)
 const isRefutedOpen = atom({ plugin: 'debate', key: 'reportRefutedOpen' } as const, false)
 const bandFor = atom({ plugin: 'debate', key: 'reportBand' } as const, null)
 const isBandHidden = atom({ plugin: 'debate', key: 'reportHidden' } as const, false)
+const scoreboard = atom({ plugin: 'debate', key: 'reportScores' } as const, null)
 
 type Listed = { name: string; id: string; mtimeMs: number; size: number }
 type Loaded = { top: string | null; view: BoardView | null; unreadable: number; ids: ReadonlySet<string> | null }
@@ -221,6 +237,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'debate-seats', description: 'Which debate seats are running, done or failed' })
     await $.command.register({ name: 'debate-board', description: 'Findings from the last debate panel for this repo: work through them, or dismiss them' })
+    await $.command.register({ name: 'debate-scorecard', description: 'What each debate seat has contributed across saved panel reports' })
     await update($, workDir, () => null)
     await update($, spawned, () => [])
     wasRunning = false
@@ -369,6 +386,50 @@ export const register: Register = on => {
     await openBoard($)
 
     return { text: `Findings board: ${openCounts(view).open} open of ${view.items.length} (panel ${view.id}, round ${view.round}).` }
+  })
+
+  on('command.run', { command: 'debate-scorecard' }, async $ => {
+    const dir = await reportsDir($)
+    const files = dir === null ? null : await listed($, dir)
+
+    if (dir === null || files === null || files.length === 0) return { text: 'No saved panel reports yet; changeset-mode panels save one.' }
+
+    const archives: Archive[] = []
+
+    for (const file of files) {
+      const text = file.size > MAX_ARCHIVE_BYTES ? null : await readText($, `${dir}/${file.name}`)
+      const archive = text === null ? null : readArchive(text)
+
+      if (archive !== null) archives.push(archive)
+    }
+
+    const rows = scoreRows(archives)
+
+    await update($, scoreboard, () => rows)
+
+    if (rows.length === 0) return { text: 'Saved reports have no round-1 seat results to score yet.' }
+
+    await $.ui.open({ id: SCORECARD, title: 'Seat scorecard', focus: true, closeOnEscape: true })
+
+    return { text: `Seat scorecard: ${rows.length} seat(s) across ${archives.filter(one => one.round === 1).length} round-1 report(s).` }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: SCORECARD }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const rows = await read($, scoreboard)
+
+    return (
+      <Box flexDirection="column">
+        {(rows ?? []).map(row => (
+          <Box key={`score:${row.seat}`}>
+            <Text>{scoreLine(row)}</Text>
+          </Box>
+        ))}
+        <Box key="score-note">
+          <Text dimColor>Round 1 only, the last 20 runs per seat. One run is one data point: collect several before moving a lens.</Text>
+        </Box>
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'Pane', requestId: BOARD }, async ($, e) => {

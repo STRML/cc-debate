@@ -457,3 +457,54 @@ test('a planted finding reaches the prompt cleaned and inside the markers', asyn
   expect(text).not.toContain('‮')
   expect(text.replace(inside, '')).not.toContain('rm -rf')
 })
+
+const reports = (count: number, over: Parameters<typeof archive>[0] = {}): Disk =>
+  Object.fromEntries(
+    Array.from({ length: count }, (_, i) => {
+      const id = `a000000${i}`
+
+      return [`${id}-r1.json`, saved({ id, ts: `2026-09-0${i + 1}T00:00:00Z`, ...over }, 1000 + i)]
+    }),
+  )
+
+test('the scorecard adds up round-1 reports from every repo, and says when a seat has too few runs', async ($, on) => {
+  world(on, {
+    ...reports(3),
+    'b0000001-r1.json': saved({ id: 'b0000001', root: '/Users/x/other', ts: '2026-09-09T00:00:00Z' }, 5000),
+    'b0000002-r2.json': saved({ id: 'b0000002', round: 2, ts: '2026-09-10T00:00:00Z' }, 6000),
+  })
+  await start($)
+
+  const reply = await run($, 'debate-scorecard')
+  const ui = await scorePane($)
+
+  expect(reply.text).toContain('2 seat(s)')
+  expect((await ui.find({ key: 'score:executor' }))?.text).toContain('runs 4')
+  expect((await ui.find({ key: 'score:executor' }))?.text).toContain('too few runs')
+  expect(await ui.find({ key: 'score-note' })).toBeDefined()
+})
+
+test('a seat with 5 or more runs shows no "too few runs"', async ($, on) => {
+  world(on, reports(6))
+  await start($)
+  await run($, 'debate-scorecard')
+
+  const text = (await (await scorePane($)).find({ key: 'score:executor' }))?.text
+
+  expect(text).toContain('runs 6')
+  expect(text).not.toContain('too few runs')
+})
+
+test('with no saved reports the scorecard says so', async ($, on) => {
+  world(on, {})
+  await start($)
+
+  expect((await run($, 'debate-scorecard')).text).toContain('No saved panel reports yet')
+})
+
+test('saved reports with no round-1 seat results say so', async ($, on) => {
+  world(on, { 'ab12cd34-r2.json': saved({ round: 2 }) })
+  await start($)
+
+  expect((await run($, 'debate-scorecard')).text).toContain('no round-1 seat results')
+})
