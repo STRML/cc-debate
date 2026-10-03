@@ -68,6 +68,8 @@ const world = (on: On, disk: Disk, { cwd = ROOT, toplevel = ROOT, archiveFails =
 
     return <Text>engine band</Text>
   })
+  // The seats part checks that a folder named in a tool call exists; the work folder is not on this machine.
+  on('fs.exists', () => ({ value: false }))
   on('fs.list', (_$, e) => {
     lists.push(e.path)
 
@@ -299,3 +301,92 @@ test('a planted report is cleaned when drawn, and an oversized one is not even r
   expect(text).not.toContain('‮')
   expect(w.reads).not.toContain(`${DIR}/ffffffff-r1.json`)
 })
+
+test('a report from an earlier session does not nag: no band at session start, though the board opens it', async ($, on) => {
+  world(on, { 'ab12cd34-r1.json': saved() })
+  await start($)
+
+  const ui = await band($)
+
+  expect(await ui.find({ key: 'findings-band' })).toBeUndefined()
+  expect(await ui.find({ text: 'engine band' })).toBeDefined()
+  expect((await run($, 'debate-board')).text).toContain('1 open of 1')
+})
+
+test('after the panel\'s --archive call succeeds, the band counts what is open', async ($, on) => {
+  const disk: Disk = {}
+
+  world(on, disk)
+  await start($)
+
+  expect(await (await band($)).find({ key: 'findings-band' })).toBeUndefined()
+
+  disk['ab12cd34-r1.json'] = saved({
+    findings: [
+      finding({ severity: 'critical', claim: 'a' }),
+      finding({ severity: 'major', claim: 'b' }),
+      finding({ severity: 'major', claim: 'c' }),
+      finding({ severity: 'minor', claim: 'd' }),
+    ],
+  })
+  await reportWritten($)
+
+  expect((await (await band($)).find({ key: 'findings-band' }))?.text).toContain('⚖ Findings: 4 open (1 critical, 2 major)')
+})
+
+test('a failed --archive call shows no band', async ($, on) => {
+  world(on, { 'ab12cd34-r1.json': saved() }, { archiveFails: true })
+  await start($)
+  await reportWritten($)
+
+  expect(await (await band($)).find({ key: 'findings-band' })).toBeUndefined()
+})
+
+test('an unrelated Bash call that succeeds shows no band', async ($, on) => {
+  world(on, { 'ab12cd34-r1.json': saved() })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'ls -la' })
+
+  expect(await (await band($)).find({ key: 'findings-band' })).toBeUndefined()
+})
+
+test('Hide hides the band, and Board opens the board', async ($, on) => {
+  const w = world(on, { 'ab12cd34-r1.json': saved() })
+  await start($)
+  await reportWritten($)
+
+  await (await band($)).press({ key: 'findings-board' })
+
+  expect(w.opened).toContain('debate-board')
+
+  await (await band($)).press({ key: 'findings-hide' })
+
+  expect(await (await band($)).find({ key: 'findings-band' })).toBeUndefined()
+})
+
+test('the band clears once every finding has a decision', async ($, on) => {
+  world(on, { 'ab12cd34-r1.json': saved() })
+  await start($)
+  await reportWritten($)
+  await run($, 'debate-board')
+
+  expect(await (await band($)).find({ key: 'findings-band' })).toBeDefined()
+
+  await (await pane($)).press({ key: `done:${KEY}` })
+
+  expect(await (await band($)).find({ key: 'findings-band' })).toBeUndefined()
+})
+
+for (const tier of ['append', 'prepend'] as const) {
+  test(`the band shares the slot with another plugin's row, and keeps the engine's (${tier})`, { plugins: [standIn(tier)] }, async ($, on) => {
+    world(on, { 'ab12cd34-r1.json': saved() })
+    await start($)
+    await reportWritten($)
+
+    const ui = await band($)
+
+    expect(await ui.find({ key: 'findings-band' })).toBeDefined()
+    expect(await ui.find({ text: 'stand-in row' })).toBeDefined()
+    expect(await ui.find({ text: 'engine band' })).toBeDefined()
+  })
+}

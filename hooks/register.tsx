@@ -5,7 +5,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { BoardItem, BoardView, Status } from '../types'
-import { ARCHIVE_NAME, MAX_ARCHIVE_BYTES, boardOf, openCounts, readArchive, readStatuses, statusOf } from './report/lib'
+import { ARCHIVE_NAME, MAX_ARCHIVE_BYTES, bandText, boardOf, openCounts, readArchive, readStatuses, statusOf } from './report/lib'
 import { acpxSeats, findWorkDir, panelSeats, progress, seatsFrom } from './seats/lib'
 
 // --- Watching a panel: the seat pane and progress band ---
@@ -92,6 +92,8 @@ const SEVERITY_COLOR = { critical: 'red', major: 'yellow', minor: 'cyan', nit: '
 const rootDir = atom({ plugin: 'debate', key: 'reportRoot' } as const, null)
 const boardView = atom({ plugin: 'debate', key: 'reportBoard' } as const, null)
 const isRefutedOpen = atom({ plugin: 'debate', key: 'reportRefutedOpen' } as const, false)
+const bandFor = atom({ plugin: 'debate', key: 'reportBand' } as const, null)
+const isBandHidden = atom({ plugin: 'debate', key: 'reportHidden' } as const, false)
 
 type Listed = { name: string; id: string; mtimeMs: number; size: number }
 type Loaded = { top: string | null; view: BoardView | null; unreadable: number; ids: ReadonlySet<string> | null }
@@ -195,6 +197,9 @@ const mark = async ($: EngineInterface, key: string, status: Status) => {
 
 const openBoard = ($: EngineInterface) => $.ui.open({ id: BOARD, title: 'Findings board', focus: true, closeOnEscape: true })
 
+/** The panel's own save: the orchestrator runs `seat-report.sh --archive` through Bash. */
+const isArchiveRun = (input: { command?: unknown }) => typeof input.command === 'string' && input.command.includes('seat-report.sh --archive')
+
 const where = (file: string, line: number) => `${file}${line > 0 ? `:${line}` : ''}`
 
 export const register: Register = on => {
@@ -205,6 +210,8 @@ export const register: Register = on => {
     await update($, spawned, () => [])
     wasRunning = false
     $.clock.every(5_000, () => refresh($))
+    await update($, bandFor, () => null)
+    await update($, isBandHidden, () => false)
     await refreshBoard($)
 
     return next(e)
@@ -221,6 +228,24 @@ export const register: Register = on => {
     }
 
     return next(e)
+  })
+
+  // The panel saved its report: load it and let the band show. Only a Bash call that ran `seat-report.sh --archive` and
+  // succeeded counts, so a report from an earlier session never raises the band. The seats part registers `tool.call`
+  // without a matcher; this one carries `{ tool: 'Bash' }`, which the host treats as a separate registration.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const result = await next(e)
+
+    if (isArchiveRun(e as unknown as { command?: unknown }) && result.deny === undefined && result.isError !== true) {
+      const { view } = await refreshBoard($)
+
+      if (view !== null) {
+        await update($, bandFor, () => ({ id: view.id, round: view.round }))
+        await update($, isBandHidden, () => false)
+      }
+    }
+
+    return result
   })
 
   // The panel's Claude teammates and subagent-harness seats are told to write into the panel's folder, so
@@ -284,6 +309,31 @@ export const register: Register = on => {
           <Text dimColor>{`⚖ Debate: ${done}/${total} seats done · ${running} running${failed > 0 ? ` · ${failed} failed` : ''} `}</Text>
           <Button key="seats" label="Seats" variant="primary" onPress={() => open($)} />
           <Button key="hide" label="Hide" dimColor onPress={() => update($, isHidden, () => true)} />
+        </Box>
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const [view, band, hidden] = await Promise.all([read($, boardView), read($, bandFor), read($, isBandHidden)])
+
+    if (e.props.hasSurvey || hidden || view === null || band === null || band.id !== view.id || band.round !== view.round) return next(e)
+
+    const counts = openCounts(view)
+
+    if (counts.open === 0) return next(e)
+
+    const { Box, Button, Text } = $.ui.resolve(e)
+    // Other plugins and the engine draw in this slot too: stack under them rather than replace them.
+    const beneath = await next(e)
+
+    return (
+      <Box flexDirection="column">
+        {beneath}
+        <Box key="findings-band">
+          <Text dimColor>{`${bandText(counts)} `}</Text>
+          <Button key="findings-board" label="Board" variant="primary" onPress={() => openBoard($)} />
+          <Button key="findings-hide" label="Hide" dimColor onPress={() => update($, isBandHidden, () => true)} />
         </Box>
       </Box>
     )
