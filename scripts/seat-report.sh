@@ -3,6 +3,13 @@
 #
 # Usage: seat-report.sh <panel-result.json>
 #        /debate:panel ... | seat-report.sh -
+#        seat-report.sh --archive <WORK_DIR>/report.json --round <N>
+#
+# --archive validates and sanitizes the report stage's object, then saves it as one file,
+# ~/.acpx/debate-reports/<id>-r<N>.json, for the debate mod's findings board (/debate-board) and
+# seat scorecard (/debate-scorecard). The id and the repo root come from where report.json sits
+# (<root>/.tmp/ai-review-<id>/report.json); nothing is taken from arguments but the round. See
+# seat-archive.py. Run it with the sandbox on.
 #
 # Input is the object stage 'report' returns, with its findings/refuted/unverified
 # arrays and their foundBy lists.
@@ -26,6 +33,12 @@
 # same way and collect a few before moving a lens in or out.
 
 set -euo pipefail
+
+# `--archive` saves a panel report for the debate mod's findings board and seat scorecard; see seat-archive.py.
+if [ "${1:-}" = "--archive" ]; then
+  shift
+  exec python3 "$(dirname "$0")/seat-archive.py" "$@"
+fi
 
 SRC="${1:-}"
 if [ -z "$SRC" ]; then

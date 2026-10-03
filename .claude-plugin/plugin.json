@@ -6,6 +6,7 @@
     "name": "strml",
     "url": "https://github.com/strml"
   },
+  "types": "./types/index.d.ts",
   "homepage": "https://github.com/STRML/cc-debate",
   "repository": "https://github.com/STRML/cc-debate",
   "license": "MIT",
