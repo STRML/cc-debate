@@ -1,6 +1,6 @@
 ---
 description: Review a plan or changeset with a self-tuning panel — seats, models, and reasoning effort picked for the job — synthesize feedback, debate contradictions, and produce a consensus verdict. Configure reviewers and presets in ~/.claude/debate-acpx.json. Alias: /debate:all.
-allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/record-round.sh:*), Bash(bash ~/.claude/debate-scripts/safe-cleanup.sh:*), Bash(sha256sum:*), Bash(shasum:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Write(~/.acpx/**), Read(~/.acpx/**), Read(~/.claude/debate-scripts/reviewer-prompts.md), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
+allowed-tools: Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/invoke-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/run-parallel-acpx.sh:*), Bash(bash ~/.claude/debate-scripts/record-round.sh:*), Bash(bash ~/.claude/debate-scripts/seat-report.sh:*), Bash(bash ~/.claude/debate-scripts/safe-cleanup.sh:*), Bash(sha256sum:*), Bash(shasum:*), Bash(rm -rf .tmp/ai-review-:*), Write(.tmp/ai-review-*), Write(~/.acpx/**), Read(~/.acpx/**), Read(~/.claude/debate-scripts/reviewer-prompts.md), Agent(subagent_type: general-purpose, model: fable), Agent(subagent_type: general-purpose, model: opus), SendMessage(*)
 ---
 
 # AI Multi-Model Plan Review (acpx)
@@ -751,7 +751,7 @@ Workflow({
   scriptPath: "~/.claude/debate-workflows/review-panel.js",
   args: {
     stage: "report", workDir: "<WORK_DIR>", repoRoot: "<REPO_ROOT>",
-    seats: ["<the seats that reported>"], seatsFailed: ["..."],
+    seats: ["<the seats that reported, named as below>"], seatsFailed: ["..."],
     seatsNotConfigured: ["..."], diff: <diff shape from classify>,
     seatsSkipped: <seatsSkipped from classify>
   }
@@ -762,6 +762,21 @@ The report also returns `seatsNotTranscribed` — seats that reviewed but whose 
 not be read back. Their findings are missing from the counts, so report it alongside the
 findings and point at `<WORK_DIR>/<seat>-output.md`; a run with a non-empty
 `seatsNotTranscribed` is incomplete by exactly that much.
+
+**Seat names.** The stage reads `<WORK_DIR>/<seat>-output.md` for each name it is given, so a name must
+match the file on disk. Pass each acpx seat under its own name, and each Claude teammate under the stem of the
+file that delivered its review: `claude-<persona>-r<N>`, or `claude-<persona>-r<N>-b` for a respawn.
+
+**Archive the report.** Right after the stage returns, keep what it returned so the `debate` mod's findings board
+and seat scorecard can read it:
+
+1. Write the returned object, verbatim, to `<WORK_DIR>/report.json` (the Write tool).
+2. Run `bash ~/.claude/debate-scripts/seat-report.sh --archive "<WORK_DIR>/report.json" --round <N>`, where `<N>`
+   is the round counter. It validates and sanitizes the report and saves it to `~/.acpx/debate-reports/`. Run it
+   with the sandbox on: it parses reviewer-derived JSON. If it exits non-zero, relay its message and carry on; the
+   review itself is unaffected.
+
+This is changeset mode only. Plan mode has no report stage, so nothing is archived.
 
 Present the returned `findings` (survived, ranked; `refuted` with why; `unverified`
 labeled as unverified) in place of a hand-rolled dedupe. This does **not** replace the

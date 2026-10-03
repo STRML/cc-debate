@@ -249,7 +249,7 @@ test_new_scripts_executable() {
 
 test_scripts_parse() {
   local bad=0
-  for f in scripts/invoke-acpx.sh scripts/run-parallel-acpx.sh scripts/debate-setup.sh scripts/create-links.sh; do
+  for f in scripts/invoke-acpx.sh scripts/run-parallel-acpx.sh scripts/debate-setup.sh scripts/create-links.sh scripts/seat-report.sh; do
     if ! bash -n "$PROJECT_DIR/$f" 2>/dev/null; then
       echo "  Syntax error: $f"
       bad=1
@@ -341,6 +341,22 @@ test_alias_allowed_tools_parity() {
   [ "$run_line" = "$all_line" ] || { echo "  allowed-tools mismatch between all.md and run.md"; return 1; }
 }
 
+test_report_archive_contract() {
+  # Step 3 must tell the orchestrator to name Claude teammates by the file that delivered them (the report stage
+  # reads <WORK_DIR>/<seat>-output.md), save the stage's object, and archive it; run.md must be allowed to run the
+  # script (the parity test keeps all.md identical).
+  local f="$PROJECT_DIR/commands/run.md" flat
+  flat=$(sed -n '/^## Step 3:/,/^## Step 4:/p' "$f" | tr '\n' ' ' | tr -s ' ')
+  echo "$flat" | grep -q 'report\.json' \
+    || { echo "  run.md Step 3: does not save report.json"; return 1; }
+  echo "$flat" | grep -q 'seat-report\.sh --archive' \
+    || { echo "  run.md Step 3: does not run seat-report.sh --archive"; return 1; }
+  echo "$flat" | grep -q 'claude-<persona>-r<N>-b' \
+    || { echo "  run.md Step 3: Claude teammates are not named by file stem"; return 1; }
+  grep -m1 '^allowed-tools:' "$f" | grep -q 'seat-report\.sh:\*' \
+    || { echo "  run.md: allowed-tools does not allow seat-report.sh"; return 1; }
+}
+
 # --- Run ---
 
 echo ""
@@ -366,6 +382,7 @@ run_test "run.md is canonical orchestrator" test_run_is_canonical_orchestrator
 run_test "all.md is alias to run" test_all_is_alias_to_run
 run_test "run defaults to no Claude teammates" test_run_defaults_to_no_claude_teammates
 run_test "alias allowed-tools parity" test_alias_allowed_tools_parity
+run_test "report archive contract" test_report_archive_contract
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="
