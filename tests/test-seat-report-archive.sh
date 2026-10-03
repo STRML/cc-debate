@@ -380,6 +380,25 @@ test_a_named_pipe_as_a_review_file_is_unreadable() {
   check_json "$ARCHIVES/ab12cd34-r1.json" "a['seatState']['auditor'] == 'unreadable'"
 }
 
+test_the_archive_folder_is_fsynced_after_the_rename() {
+  new_world
+  python3 - "$PROJECT_DIR/scripts/seat-archive.py" "$ARCHIVES" << 'PY'
+import os, sys
+
+# Load the writer's functions without running its main(), and record which files and folders get fsynced.
+source = open(sys.argv[1]).read().replace("\nmain(sys.argv[1:])\n", "\n")
+namespace = {"__name__": "seat_archive"}
+exec(compile(source, sys.argv[1], "exec"), namespace)
+
+synced = []
+real_fsync = os.fsync
+os.fsync = lambda fd: (synced.append(os.fstat(fd).st_ino), real_fsync(fd))[1]
+
+namespace["write_archive"](sys.argv[2], "ab12cd34-r1.json", {"v": 1})
+sys.exit(0 if os.stat(sys.argv[2]).st_ino in synced else 1)
+PY
+}
+
 # --- Run ---
 
 echo ""
@@ -441,6 +460,7 @@ run_test "the archive is 0600 in a 0700 folder" test_the_archive_is_private
 run_test "a symlinked archive folder is refused" test_a_symlinked_archive_folder_is_refused
 run_test "pruning keeps 300 and only touches archives" test_pruning_keeps_300_and_only_touches_archives
 run_test "a failed write names the entry to add" test_a_failed_write_names_the_entry_to_add
+run_test "the archive folder is fsynced after the rename" test_the_archive_folder_is_fsynced_after_the_rename
 run_test "a named pipe as the report is refused, not waited on" test_a_named_pipe_as_the_report_is_refused_not_waited_on
 run_test "a named pipe as panel.json leaves the meta empty" test_a_named_pipe_as_panel_json_leaves_the_meta_empty
 run_test "a named pipe as a review file is unreadable" test_a_named_pipe_as_a_review_file_is_unreadable

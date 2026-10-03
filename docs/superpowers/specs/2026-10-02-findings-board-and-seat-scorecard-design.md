@@ -40,7 +40,7 @@ archiving Step 6.5 verification passes (Step 6.5 does not run the report stage, 
    classify stage uses for `panel-state.json`). The workflow has no filesystem access
    (`workflows/review-panel.js:270-272`), so the orchestrator's Write stays the source; the counts check below
    catches a re-emission slip.
-3. Then run `bash ~/.claude/debate-scripts/seat-report.sh --archive "<WORK_DIR>/report.json" --round <N>`, where N is
+3. Then run `bash ~/.claude/debate-scripts/seat-report.sh --archive '<WORK_DIR>/report.json' --round <N>`, where N is
    the revision-round counter. The `allowed-tools` of `run.md` and `all.md` (which `tests/test-references.sh`
    keeps identical) gain `Bash(bash ~/.claude/debate-scripts/seat-report.sh:*)`. On a non-zero exit the orchestrator
    relays the script's message and carries on.
@@ -271,6 +271,9 @@ reload: state lives in atoms and the store; the module keeps no timers or mtimes
   stay alive until Step 10. A forged or swapped file passes the writer's ownership check, since it is the same
   user. The writer's validation, the mod's read-time guard and the fact that every action is a deliberate button
   press bound the effect to forged text on screen.
+- Only the archive folder itself (`~/.acpx/debate-reports`) is checked for a symlink, owner and mode; its parents, `~/.acpx`
+  and your home folder, are assumed to be yours. A user who symlinks `~/.acpx` on purpose (a dotfiles repo, another volume)
+  is relocating it, and rejecting that would break a legitimate setup.
 - A button hands model-written text to the session. The nonce framing is a mitigation, not a guarantee, and the
   session's own permission mode still applies.
 - One run is one data point; the scorecard shows data, not verdicts. Round 1 only, by design.

@@ -645,3 +645,18 @@ test('the scorecard reads at most the newest 300 reports, however many files are
 
   expect(w.reads.length).toBe(300)
 })
+
+test('Fix this refuses when the session moves to another repo while the prompt waits to be sent', async ($, on) => {
+  const w = world(on, { 'ab12cd34-r1.json': saved() })
+  await start($)
+  await run($, 'debate-board')
+  await (await pane($)).press({ key: `fix:${KEY}` })
+
+  // The press passed the repo check; the prompt is still waiting on its timer when the session moves.
+  w.machine.cwd = '/Users/x/other'
+  w.machine.toplevel = '/Users/x/other'
+  await w.landed()
+
+  expect(w.sent).toHaveLength(0)
+  expect(w.toasts.some(text => text.includes('/Users/x/other'))).toBe(true)
+})

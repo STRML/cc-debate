@@ -261,27 +261,37 @@ const ARCHIVE_RUN = /^\s*(?:bash|sh)\s+\S*seat-report\.sh\s+--archive\s/
 /** Whether a Bash command is the panel saving its report (it starts with the script), not one that only mentions it. */
 const isArchiveRun = (input: { command?: unknown }) => typeof input.command === 'string' && ARCHIVE_RUN.test(input.command)
 
-/** Sends a board prompt from a timer: a call begun inside a press is dropped when the press ends. */
-const send = async ($: EngineInterface, kind: 'fix' | 'draft', finding: Finding, top: string) => {
-  // The board may have been drawn for another repo before the session moved: a finding's path means nothing in this one.
+/**
+ * Whether the session is still in the repo the board was drawn for. A finding's path means nothing in another repo, so when
+ * the session has moved, this says so (a toast) and answers false.
+ */
+const inRepo = async ($: EngineInterface, top: string): Promise<boolean> => {
   const now = await toplevel($)
 
-  if (now !== top) {
-    $.ui.toast(`This board is for ${top}, but the session is now in ${now ?? 'no git repository'}. Open /debate-board again.`)
+  if (now === top) return true
 
-    return
-  }
+  $.ui.toast(`This board is for ${top}, but the session is now in ${now ?? 'no git repository'}. Open /debate-board again.`)
+
+  return false
+}
+
+/** Sends a board prompt from a timer: a call begun inside a press is dropped when the press ends. */
+const send = async ($: EngineInterface, kind: 'fix' | 'draft', finding: Finding, top: string) => {
+  if (!(await inRepo($, top))) return
 
   const text = framedPrompt(kind, finding, top, makeNonce())
 
-  $.clock.after(100, () => {
-    $.prompt.submit({ text }).catch(() => {
+  $.clock.after(100, async () => {
+    try {
+      // The session may have moved while the timer waited: look again right before sending.
+      if (await inRepo($, top)) await $.prompt.submit({ text })
+    } catch {
       try {
         $.ui.toast('Could not send that prompt.')
       } catch {
         // the hooks were unloaded while the call was in flight
       }
-    })
+    }
   })
 }
 

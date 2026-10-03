@@ -305,6 +305,20 @@ def ensure_dir(path):
         write_failed(path, error)
 
 
+def sync_dir(path):
+    """Flush a folder's entry for a file just renamed into it. Some filesystems cannot fsync a folder; that is not an error."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def write_archive(dest, name, archive):
     """One file appears whole or not at all: a private temp file in the same folder, then a rename over the name."""
     ensure_dir(dest)
@@ -318,6 +332,7 @@ def write_archive(dest, name, archive):
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(temp, os.path.join(dest, name))
+        sync_dir(dest)
     except (OSError, ValueError) as error:
         try:
             os.unlink(temp)
