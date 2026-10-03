@@ -160,3 +160,11 @@ for (const tier of ['append', 'prepend'] as const) {
     expect(await ui.find({ text: 'engine band' })).toBeDefined()
   })
 }
+
+test('a command that starts with an absolute path still finds the panel folder it names', async ($, on) => {
+  world(on)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: `/usr/bin/env bash ${DIR}/run.sh` })
+
+  expect((await run($)).text).not.toContain('No debate panel')
+})

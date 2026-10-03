@@ -87,8 +87,16 @@ const world = (on: On, disk: Disk, { cwd = ROOT, toplevel = ROOT, archiveFails =
     lists.push(e.path)
 
     return e.path === DIR
-      ? { value: Object.entries(disk).map(([name, file]) => ({ name, kind: 'file', size: file.size ?? file.text.length, mtimeMs: file.mtimeMs, isLink: false })) }
+      ? { value: Object.entries(disk).map(([name, file]) => ({ name, kind: 'file', size: file.size ?? file.text.length, isLink: false })) }
       : { deny: `ENOENT ${e.path}` }
+  })
+  // `fs.list` answers { name, kind, size, isLink } only; a modification time comes from `fs.stat`.
+  on('fs.stat', (_$, e) => {
+    const file = e.path.startsWith(`${DIR}/`) ? disk[e.path.slice(DIR.length + 1)] : undefined
+
+    return file === undefined
+      ? { deny: `ENOENT ${e.path}` }
+      : { value: { kind: 'file', size: file.size ?? file.text.length, mtimeMs: file.mtimeMs, isLink: false } }
   })
   on('fs.read', (_$, e) => {
     reads.push(e.path)
@@ -431,7 +439,7 @@ test('Fix this sends a framed prompt from a timer, and changes no status', async
   expect(w.sent[0]).toContain('Reads before it writes')
   expect(w.sent[0]).toContain('smallest change')
   expect(w.sent[0]).toMatch(/<<finding-[0-9a-f]{16}>>/)
-  expect(w.sent[0]).toContain(`repository at ${ROOT}`)
+  expect(w.sent[0]).toContain(`repository: ${ROOT}`)
   expect(w.store['board:ab12cd34']).toBeUndefined()
 })
 
@@ -550,4 +558,19 @@ test('saved reports with no round-1 seat results say so', async ($, on) => {
   await start($)
 
   expect((await run($, 'debate-scorecard')).text).toContain('no round-1 seat results')
+})
+
+test('the board shows the newest report by modification time, not by file name', async ($, on) => {
+  world(on, {
+    'ab12cd34-r1.json': saved({ findings: [finding({ claim: 'Older report' })] }, 1000),
+    'aa000000-r1.json': saved({ id: 'aa000000', findings: [finding({ claim: 'Newer report' })] }, 3000),
+    'ab12cd35-r1.json': saved({ id: 'ab12cd35', findings: [finding({ claim: 'Middle report' })] }, 2000),
+  })
+  await start($)
+  await run($, 'debate-board')
+
+  const ui = await pane($)
+
+  expect(await ui.find(item(`${fingerprint('src/a.ts', 'Newer report')}#1`))).toBeDefined()
+  expect(await ui.find(item(`${fingerprint('src/a.ts', 'Older report')}#1`))).toBeUndefined()
 })

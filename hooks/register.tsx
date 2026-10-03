@@ -20,7 +20,7 @@ import {
   scoreRows,
   statusOf,
 } from './report/lib'
-import { acpxSeats, findWorkDir, panelSeats, progress, seatsFrom } from './seats/lib'
+import { acpxSeats, findWorkDirs, panelSeats, progress, seatsFrom } from './seats/lib'
 
 // --- Watching a panel: the seat pane and progress band ---
 
@@ -57,7 +57,7 @@ const scan = async ($: EngineInterface) => {
   }
 
   const names = acpxSeats(panelSeats((await readText($, `${dir}/panel.json`)) ?? ''), files)
-  const exits: Record<string, string> = {}
+  const exits: Record<string, string> = Object.create(null)
 
   for (const name of names) {
     if (files.some(file => file.name === `${name}-exit.txt`)) {
@@ -133,19 +133,35 @@ const toplevel = async ($: EngineInterface): Promise<string | null> => {
   }
 }
 
-/** The archive files in the folder, newest first, or null when it cannot be listed. A symlink is not an archive. */
+/**
+ * The archive files in the folder, newest first, or null when it cannot be listed. A symlink is not an archive.
+ * `fs.list` answers { name, kind, size, isLink } only, so each file's modification time comes from `fs.stat`.
+ */
 const listed = async ($: EngineInterface, dir: string): Promise<Listed[] | null> => {
-  try {
-    return (await $.fs.list(dir))
-      .flatMap(entry => {
-        const hit = entry.kind === 'file' && !entry.isLink ? ARCHIVE_NAME.exec(entry.name) : null
+  let entries: Awaited<ReturnType<EngineInterface['fs']['list']>>
 
-        return hit === null ? [] : [{ name: entry.name, id: hit[1] ?? '', mtimeMs: entry.mtimeMs, size: entry.size }]
-      })
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+  try {
+    entries = await $.fs.list(dir)
   } catch {
     return null
   }
+
+  const found = await Promise.all(
+    entries.map(async (entry): Promise<Listed[]> => {
+      const hit = entry.kind === 'file' && !entry.isLink ? ARCHIVE_NAME.exec(entry.name) : null
+
+      if (hit === null) return []
+
+      const mtimeMs = await $.fs.stat(`${dir}/${entry.name}`).then(
+        stat => stat.mtimeMs,
+        () => 0,
+      )
+
+      return [{ name: entry.name, id: hit[1] ?? '', mtimeMs, size: entry.size }]
+    }),
+  )
+
+  return found.flat().sort((a, b) => b.mtimeMs - a.mtimeMs)
 }
 
 /** The newest saved report for `top`, with the decisions saved for its panel. A file that cannot be read is counted and skipped. */
@@ -259,13 +275,20 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
-    const found = findWorkDir(e as unknown as Record<string, unknown>, await $.session.cwd())
+    const current = await read($, workDir)
 
-    if (found !== null && found !== (await read($, workDir)) && (await $.fs.exists(found))) {
-      wasRunning = false
-      await update($, workDir, () => found)
-      await update($, isHidden, () => false)
-      await refresh($)
+    // A call can name several paths (or one a quoted command splits oddly): the first that is a real folder is the panel.
+    for (const found of findWorkDirs(e as unknown as Record<string, unknown>, await $.session.cwd())) {
+      if (found === current) break
+
+      if (await $.fs.exists(found)) {
+        wasRunning = false
+        await update($, workDir, () => found)
+        await update($, isHidden, () => false)
+        await refresh($)
+
+        break
+      }
     }
 
     return next(e)

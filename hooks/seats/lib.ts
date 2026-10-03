@@ -17,18 +17,31 @@ const strings = (value: unknown, depth = 0): string[] => {
   return Object.values(value).flatMap(inner => strings(inner, depth + 1))
 }
 
-/** The panel's work folder, when a tool call names a `.tmp/ai-review-<id>` path (with no `..` in it) anywhere in its input. */
-export const findWorkDir = (input: Record<string, unknown>, cwd: string): string | null => {
-  for (const text of strings(input)) {
-    for (const hit of text.matchAll(MENTION)) {
-      const path = hit[0]
+// A path with spaces in it: a whole field value that is a path (`file_path`), or an argument a command quotes.
+const SPACED = /^(?:\.\/|\/)[^\n]*?\.tmp\/ai-review-[0-9a-f]{8}(?![A-Za-z0-9_-])/
+const QUOTED = /"([^"\n]*)"|'([^'\n]*)'/g
 
-      if (!path.split('/').includes('..')) return path.startsWith('/') ? path : `${cwd}/${path.replace(/^\.\//, '')}`
-    }
-  }
+const mentions = (text: string): string[] => {
+  const pieces = [text, ...[...text.matchAll(QUOTED)].map(one => one[1] ?? one[2] ?? '')]
 
-  return null
+  return [...pieces.flatMap(piece => SPACED.exec(piece)?.[0] ?? []), ...(text.match(MENTION) ?? [])]
 }
+
+/**
+ * Every `.tmp/ai-review-<id>` folder a tool call names (with no `..` in the path), in the order they are likeliest to be
+ * the panel's: a path with spaces first, then the plain words. The caller takes the first one that exists.
+ */
+export const findWorkDirs = (input: Record<string, unknown>, cwd: string): string[] => {
+  const found = strings(input)
+    .flatMap(mentions)
+    .filter(path => !path.split('/').includes('..'))
+    .map(path => (path.startsWith('/') ? path : `${cwd}/${path.replace(/^\.\//, '')}`))
+
+  return [...new Set(found)]
+}
+
+/** The panel's work folder, when a tool call names a `.tmp/ai-review-<id>` path (with no `..` in it) anywhere in its input. */
+export const findWorkDir = (input: Record<string, unknown>, cwd: string): string | null => findWorkDirs(input, cwd)[0] ?? null
 
 /**
  * The acpx seats the selector assigned, read from the panel's own manifest (`panel.json`): the one place
@@ -78,7 +91,7 @@ export const seatsFrom = (
   const hasReview = (seat: string) => files.some(file => file.name === `${seat}-output.md` && file.size > 0)
 
   const processes = acpx.map((name): Seat => {
-    const exit = exits[name]?.trim()
+    const exit = (Object.prototype.hasOwnProperty.call(exits, name) ? exits[name] : undefined)?.trim()
 
     if (exit === undefined) return { name, harness: 'acpx', state: 'running' }
 

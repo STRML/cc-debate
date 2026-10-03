@@ -771,10 +771,11 @@ file that delivered its review: `claude-<persona>-r<N>`, or `claude-<persona>-r<
 and seat scorecard can read it:
 
 1. Write the returned object, verbatim, to `<WORK_DIR>/report.json` (the Write tool).
-2. Run `bash ~/.claude/debate-scripts/seat-report.sh --archive "<WORK_DIR>/report.json" --round <N>`, where `<N>`
-   is the round counter. It validates and sanitizes the report and saves it to `~/.acpx/debate-reports/`. Run it
-   with the sandbox on: it parses reviewer-derived JSON. If it exits non-zero, relay its message and carry on; the
-   review itself is unaffected.
+2. Run `bash ~/.claude/debate-scripts/seat-report.sh --archive '<WORK_DIR>/report.json' --round <N>`, where `<N>`
+   is the round counter. Single-quote the path so the shell expands nothing in it; if `<WORK_DIR>` itself contains a
+   single quote, skip the archive and say why. The script validates and sanitizes the report and saves it to
+   `~/.acpx/debate-reports/`. Run it with the sandbox on: it parses reviewer-derived JSON. If it exits non-zero,
+   relay its message and carry on; the review itself is unaffected.
 
 This is changeset mode only. Plan mode has no report stage, so nothing is archived.
 

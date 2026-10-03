@@ -297,6 +297,7 @@ export const framedPrompt = (kind: 'fix' | 'draft', one: Finding, root: string, 
   const rows = [
     `file: ${safeFile(one.file, root)}`,
     `line: ${one.line}`,
+    `repository: ${cleanText(root)}`,
     `severity: ${cleanText(one.severity)}`,
     `claim: ${cleanText(one.claim)}`,
     `failure: ${cleanText(one.failure)}`,
@@ -311,7 +312,7 @@ export const framedPrompt = (kind: 'fix' | 'draft', one: Finding, root: string, 
       ? 'Check the claim against the code first. If it holds, make the smallest change that fixes it, run the tests, and report what you changed. If it does not hold, say why and change nothing.'
       : 'Draft an issue for this claim in whatever tracker I use. Show me the draft and wait for my confirmation before filing anything. Check any quoted code for credentials or secrets first, and leave them out of the draft.'
 
-  return `${intro}\n\n${block}\n\nThe finding is in the repository at ${cleanText(root)}.\n\n${ask}`
+  return `${intro}\n\n${block}\n\n${ask}`
 }
 
 /** A seat's lens: its name without a round or respawn suffix. A bare `-b` is part of the name (`executor-b` is its own lens). */

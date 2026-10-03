@@ -36,6 +36,18 @@ describe('findWorkDir', () => {
       '/Users/x/proj/.tmp/ai-review-cd34ef56',
     )
   })
+
+  test('finds the folder in a path with spaces, as a structured field or a quoted command argument', async () => {
+    const dir = '/Users/x/My Project/.tmp/ai-review-ab12cd34'
+
+    expect(findWorkDir({ file_path: `${dir}/plan.md` }, '/Users/x/My Project')).toBe(dir)
+    expect(findWorkDir({ command: `cat "${dir}/plan.md"` }, '/Users/x/My Project')).toBe(dir)
+    expect(findWorkDir({ command: `ls '${dir}'` }, '/Users/x/My Project')).toBe(dir)
+  })
+
+  test('a path with spaces and a .. still does not count', async () => {
+    expect(findWorkDir({ file_path: '/Users/x/My Project/../.tmp/ai-review-ab12cd34/plan.md' }, '/Users/x/My Project')).toBeNull()
+  })
 })
 
 describe('panelSeats', () => {
@@ -139,5 +151,15 @@ describe('progress', () => {
         { name: 'c', harness: 'subagent', state: 'failed' },
       ]),
     ).toEqual({ total: 3, done: 1, running: 1, failed: 1 })
+  })
+})
+
+describe('seat names that are also object properties', () => {
+  test('a seat named constructor is running until its exit file exists, and does not throw', async () => {
+    expect(seatsFrom(['constructor'], [], {}, [])).toEqual([{ name: 'constructor', harness: 'acpx', state: 'running' }])
+  })
+
+  test('its own exit file still counts', async () => {
+    expect(seatsFrom(['constructor'], [{ name: 'constructor-output.md', size: 10 }], { constructor: '0\n' }, [])[0]?.state).toBe('done')
   })
 })

@@ -353,6 +353,8 @@ test_report_archive_contract() {
     || { echo "  run.md Step 3: does not run seat-report.sh --archive"; return 1; }
   echo "$flat" | grep -q 'claude-<persona>-r<N>-b' \
     || { echo "  run.md Step 3: Claude teammates are not named by file stem"; return 1; }
+  echo "$flat" | grep -q "seat-report\.sh --archive '<WORK_DIR>/report\.json'" \
+    || { echo "  run.md Step 3: the archive path is not single-quoted"; return 1; }
   grep -m1 '^allowed-tools:' "$f" | grep -q 'seat-report\.sh:\*' \
     || { echo "  run.md: allowed-tools does not allow seat-report.sh"; return 1; }
 }
