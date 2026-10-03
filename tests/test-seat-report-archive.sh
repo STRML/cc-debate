@@ -324,6 +324,19 @@ test_a_failed_write_names_the_entry_to_add() {
   [ "$STATUS" -ne 0 ] && echo "$OUT" | grep -q 'Write(~/.acpx/\*\*)'
 }
 
+test_seat_meta_follows_a_delivery_stem_to_its_manifest_seat() {
+  new_world
+  printf '# review\n' > "$REVIEW/executor-r1-output.md"
+  write_report "r['seatsRun'] = ['executor-r1' if s == 'executor' else s for s in r['seatsRun']]
+for key in ('findings', 'refuted', 'unverified'):
+    for f in r[key]:
+        f['foundBy'] = ['executor-r1' if s == 'executor' else s for s in f['foundBy']]"
+  run_archive 1
+  [ "$STATUS" -eq 0 ] || { echo "$OUT"; return 1; }
+  check_json "$ARCHIVES/ab12cd34-r1.json" "a['seatMeta']['executor-r1'] == {'model': 'gpt-6-luna', 'effort': 'medium', 'est_cost': 0.0135}" || return 1
+  check_json "$ARCHIVES/ab12cd34-r1.json" "a['seatMeta']['claude-opus-skeptic-r1'] == {'model': None, 'effort': None, 'est_cost': None}"
+}
+
 # --- Run ---
 
 echo ""
@@ -345,6 +358,8 @@ run_test "rejects a foundBy that is not a list" reject_case "r['findings'][0]['f
 run_test "rejects a traversal seat name" reject_case "r['seatsRun'].append('../x')" "seat name"
 run_test "rejects a __proto__ seat name" reject_case "r['seatsFailed'].append('__proto__')" "seat name"
 run_test "rejects a seat name with .." reject_case "r['seatsFailed'].append('a..b')" "seat name"
+run_test "rejects more than 200 skipped seats" reject_case "r['seatsSkipped'] = [{'seat': 's%d' % i, 'why': 'x'} for i in range(201)]" "more than 200"
+run_test "rejects more than 200 seats that ran" reject_case "r['seatsRun'] = r['seatsRun'] + ['s%d' % i for i in range(198)]" "more than 200"
 run_test "rejects NaN" reject_case "r['counts']['raw'] = float('nan')" "not valid JSON"
 run_test "rejects a boolean line" reject_case "r['findings'][0]['line'] = True" "line"
 run_test "rejects a negative line" reject_case "r['findings'][0]['line'] = -1" "line"
@@ -372,6 +387,7 @@ run_test "keeps skipped seats as objects" sanitize_case "" "a['report']['seatsSk
 run_test "keeps the refuted why" sanitize_case "" "a['report']['refuted'][0]['why'] == 'It is freed on exit'"
 run_test "keeps the counts" sanitize_case "" "a['report']['counts']['survived'] == 2 and a['report']['counts']['unverified'] == 1"
 run_test "caps and type-checks panel.json fields" test_hostile_panel_json_is_capped_and_type_checked
+run_test "a delivery stem finds its manifest seat's model and cost" test_seat_meta_follows_a_delivery_stem_to_its_manifest_seat
 run_test "refuses a report outside a review folder" test_refuses_a_report_outside_a_review_folder
 run_test "refuses a review folder not inside .tmp" test_refuses_a_review_folder_not_inside_dot_tmp
 run_test "refuses a symlinked report" test_refuses_a_symlinked_report

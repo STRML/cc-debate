@@ -23,6 +23,9 @@ const world = (on: On, disk: Disk, { cwd = ROOT, toplevel = ROOT, archiveFails =
   const runs: { argv: readonly string[]; cwd: string | undefined }[] = []
   const lists: string[] = []
   const reads: string[] = []
+  const toasts: string[] = []
+  // Where the session is and where git says the checkout starts: a test can move it, as `/cd` does.
+  const machine = { cwd, toplevel }
   // The plugin's store, kept here so a test can read what the board saved and seed what an earlier session left.
   const store: Record<string, unknown> = {}
 
@@ -41,7 +44,7 @@ const world = (on: On, disk: Disk, { cwd = ROOT, toplevel = ROOT, archiveFails =
   on('store.keys', () => ({ value: Object.keys(store) }))
 
   on('session.start', () => ({ cwd }))
-  on('session.cwd', () => ({ value: cwd }))
+  on('session.cwd', () => ({ value: machine.cwd }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', (_$, e) => {
     opened.push(e.id)
@@ -49,7 +52,11 @@ const world = (on: On, disk: Disk, { cwd = ROOT, toplevel = ROOT, archiveFails =
     return { value: { isPlaced: true } }
   })
   on('ui.close', () => ({ value: undefined }))
-  on('ui.toast', () => ({ value: undefined }))
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
   on('prompt.submit', (_$, e) => {
     sent.push(e.text)
 
@@ -60,7 +67,13 @@ const world = (on: On, disk: Disk, { cwd = ROOT, toplevel = ROOT, archiveFails =
     runs.push({ argv: e.argv, cwd: e.init?.cwd })
 
     return {
-      value: { exitCode: toplevel === null ? 128 : 0, stdout: toplevel === null ? '' : `${toplevel}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+      value: {
+        exitCode: machine.toplevel === null ? 128 : 0,
+        stdout: machine.toplevel === null ? '' : `${machine.toplevel}\n`,
+        stderr: '',
+        isStdoutTruncated: false,
+        isStderrTruncated: false,
+      },
     }
   })
   on('ui.render', ($, e) => {
@@ -86,7 +99,7 @@ const world = (on: On, disk: Disk, { cwd = ROOT, toplevel = ROOT, archiveFails =
   })
 
   // A button sends its prompt from a timer, outside the press, so tests let the timer fire.
-  return { clock, sent, opened, runs, lists, reads, store, landed: () => clock.advance(100) }
+  return { clock, sent, opened, runs, lists, reads, store, toasts, machine, landed: () => clock.advance(100) }
 }
 
 const start = ($: any, cwd = ROOT) => $.session.start({ cwd, surface: 'terminal', isInteractive: true })
@@ -364,6 +377,19 @@ test('Hide hides the band, and Board opens the board', async ($, on) => {
   expect(await (await band($)).find({ key: 'findings-band' })).toBeUndefined()
 })
 
+test('the Board button reloads for the repo the session is in now, and opens no other repo\'s board', async ($, on) => {
+  const w = world(on, { 'ab12cd34-r1.json': saved() })
+  await start($)
+  await reportWritten($)
+
+  w.machine.cwd = '/Users/x/other'
+  w.machine.toplevel = '/Users/x/other'
+  await (await band($)).press({ key: 'findings-board' })
+
+  expect(w.opened).not.toContain('debate-board')
+  expect(await (await band($)).find({ key: 'findings-band' })).toBeUndefined()
+})
+
 test('the band clears once every finding has a decision', async ($, on) => {
   world(on, { 'ab12cd34-r1.json': saved() })
   await start($)
@@ -405,7 +431,24 @@ test('Fix this sends a framed prompt from a timer, and changes no status', async
   expect(w.sent[0]).toContain('Reads before it writes')
   expect(w.sent[0]).toContain('smallest change')
   expect(w.sent[0]).toMatch(/<<finding-[0-9a-f]{16}>>/)
+  expect(w.sent[0]).toContain(`repository at ${ROOT}`)
   expect(w.store['board:ab12cd34']).toBeUndefined()
+})
+
+test('Fix this refuses, and says why, once the session has moved to another repo', async ($, on) => {
+  const w = world(on, { 'ab12cd34-r1.json': saved() })
+  await start($)
+  await run($, 'debate-board')
+
+  const ui = await pane($)
+
+  w.machine.cwd = '/Users/x/other'
+  w.machine.toplevel = '/Users/x/other'
+  await ui.press({ key: `fix:${KEY}` })
+  await w.landed()
+
+  expect(w.sent).toHaveLength(0)
+  expect(w.toasts.some(text => text.includes('/Users/x/other'))).toBe(true)
 })
 
 test('Draft issue asks for a draft and waits for confirmation, and names no tracker', async ($, on) => {

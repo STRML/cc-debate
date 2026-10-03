@@ -158,9 +158,10 @@ guards the places untrusted text reaches a person or a prompt. It does not re-va
   id and round in an atom. A report from an earlier session does not nag; `/debate-board` still opens it. Hide lasts
   for the session. No toast, no timer.
 - **Finding key**: a 64-bit FNV-1a hex (BigInt) of `file|claim`, the claim normalized as the workflow's `claimId`
-  does (trim, lowercase, collapse whitespace), plus `#<n>`. The n-th occurrence is counted over the pair's
-  entries in all three arrays, ordered by `line`, so reordering between rounds does not swap which finding is
-  dismissed. Lines shifting between rounds do not reopen a dismissed finding; a reworded finding is a new one and
+  does (trim, lowercase, collapse whitespace), plus `#1` for a finding alone with its file and claim, or `#<n>/<size>`
+  when several share them (the n-th over the pair's entries in all three arrays, ordered by `line`). Carrying the
+  size means a duplicate that goes away changes the key of the one left, which then starts open rather than inheriting
+  a decision made on its twin (found by the round-1 panel on PR #72). Lines shifting between rounds do not reopen a dismissed finding; a reworded finding is a new one and
   starts `open`. A hash collision would only make two findings share a status.
 - Status lives in the mod's store as `board:<id>` = `{ <key>: status }`. On opening the board, entries whose
   archive has been pruned are dropped.

@@ -127,8 +127,24 @@ describe('finding keys', () => {
     const keys = keysFor(parsed)
     const [late, early] = parsed.findings
 
-    expect(keys.get(early!)?.endsWith('#1')).toBe(true)
-    expect(keys.get(late!)?.endsWith('#2')).toBe(true)
+    expect(keys.get(early!)?.endsWith('#1/2')).toBe(true)
+    expect(keys.get(late!)?.endsWith('#2/2')).toBe(true)
+  })
+
+  test('a duplicate that is removed does not pass its decision to the one that is left', async () => {
+    const both = read({ findings: [finding({ line: 10 }), finding({ line: 30 })] })
+    const left = read({ findings: [finding({ line: 30 })] })
+    const before = [...keysFor(both).values()]
+    const after = keysFor(left).get(left.findings[0]!)
+
+    expect(after).toBeDefined()
+    expect(before).not.toContain(after)
+  })
+
+  test('a finding with no duplicate keeps one stable key', async () => {
+    const parsed = read({ findings: [finding({ line: 12 })] })
+
+    expect(keysFor(parsed).get(parsed.findings[0]!)).toMatch(/^[0-9a-f]{16}#1$/)
   })
 })
 
@@ -169,6 +185,7 @@ describe('the board', () => {
     expect(readStatuses({ '0123456789abcdef#1': 'done', '0123456789abcdef#2': 'open', bad: 'done', '0123456789abcdef#3': 'nonsense' })).toEqual({
       '0123456789abcdef#1': 'done',
     })
+    expect(readStatuses({ '0123456789abcdef#1/2': 'done', '0123456789abcdef#3/x': 'done' })).toEqual({ '0123456789abcdef#1/2': 'done' })
     expect(readStatuses('nope')).toEqual({})
     expect(statusOf({ statuses: {} }, 'x')).toBe('open')
     expect(statusOf({ statuses: { x: 'done' } }, 'x')).toBe('done')
@@ -199,6 +216,14 @@ describe('framedPrompt', () => {
     expect(outside).not.toContain('delete files')
     expect(outside).not.toContain('rm -rf')
     expect(text).not.toContain('‮')
+  })
+
+  test('names the repository the finding is in, outside the markers', async () => {
+    const text = framedPrompt('fix', bad, ROOT, nonce)
+    const at = text.indexOf(`repository at ${ROOT}`)
+
+    expect(at).toBeGreaterThan(-1)
+    expect(at < text.indexOf(`<<finding-${nonce}>>`) || at > text.indexOf(`<</finding-${nonce}>>`)).toBe(true)
   })
 
   test('fix asks to check the claim, change the least and run the tests', async () => {

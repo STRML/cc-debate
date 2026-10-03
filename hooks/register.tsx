@@ -217,7 +217,16 @@ const openBoard = ($: EngineInterface) => $.ui.open({ id: BOARD, title: 'Finding
 const isArchiveRun = (input: { command?: unknown }) => typeof input.command === 'string' && input.command.includes('seat-report.sh --archive')
 
 /** Sends a board prompt from a timer: a call begun inside a press is dropped when the press ends. */
-const send = ($: EngineInterface, kind: 'fix' | 'draft', finding: Finding, top: string) => {
+const send = async ($: EngineInterface, kind: 'fix' | 'draft', finding: Finding, top: string) => {
+  // The board may have been drawn for another repo before the session moved: a finding's path means nothing in this one.
+  const now = await toplevel($)
+
+  if (now !== top) {
+    $.ui.toast(`This board is for ${top}, but the session is now in ${now ?? 'no git repository'}. Open /debate-board again.`)
+
+    return
+  }
+
   const text = framedPrompt(kind, finding, top, makeNonce())
 
   $.clock.after(100, () => {
@@ -364,7 +373,17 @@ export const register: Register = on => {
         {beneath}
         <Box key="findings-band">
           <Text dimColor>{`${bandText(counts)} `}</Text>
-          <Button key="findings-board" label="Board" variant="primary" onPress={() => openBoard($)} />
+          <Button
+            key="findings-board"
+            label="Board"
+            variant="primary"
+            onPress={async () => {
+              // Reload for the repo the session is in now; another repo's cached board is not opened.
+              const { view: now } = await refreshBoard($)
+
+              if (now !== null) await openBoard($)
+            }}
+          />
           <Button key="findings-hide" label="Hide" dimColor onPress={() => update($, isBandHidden, () => true)} />
         </Box>
       </Box>

@@ -192,7 +192,7 @@ export const readStatuses = (value: unknown): Record<string, Status> => {
   if (!isRecord(value)) return out
 
   for (const [key, status] of Object.entries(value)) {
-    if ((status === 'done' || status === 'dismissed') && /^[0-9a-f]{16}#[0-9]+$/.test(key)) out[key] = status
+    if ((status === 'done' || status === 'dismissed') && /^[0-9a-f]{16}#[0-9]+(\/[0-9]+)?$/.test(key)) out[key] = status
   }
 
   return out
@@ -219,8 +219,9 @@ export const fingerprint = (file: string, claim: string): string => {
 }
 
 /**
- * A key per finding that survives a shifted line: the fingerprint plus `#<n>`, the n-th entry of that file and claim
- * across all three lists, ordered by line, so a reordered list does not swap which finding was dismissed.
+ * A key per finding that survives a shifted line: the fingerprint, then `#1` for a finding alone with its file and claim,
+ * or `#<n>/<size>` when several share them (n-th by line, across all three lists). The size is in the key so a duplicate
+ * that goes away changes the key of the one left, which then starts open instead of inheriting a decision made on its twin.
  */
 export const keysFor = (archive: Pick<Archive, 'findings' | 'refuted' | 'unverified'>): Map<Finding, string> => {
   const groups = new Map<string, Finding[]>()
@@ -234,7 +235,9 @@ export const keysFor = (archive: Pick<Archive, 'findings' | 'refuted' | 'unverif
   const keys = new Map<Finding, string>()
 
   for (const [print, group] of groups) {
-    ;[...group].sort((a, b) => a.line - b.line).forEach((one, at) => keys.set(one, `${print}#${at + 1}`))
+    const size = group.length
+
+    ;[...group].sort((a, b) => a.line - b.line).forEach((one, at) => keys.set(one, size === 1 ? `${print}#1` : `${print}#${at + 1}/${size}`))
   }
 
   return keys
@@ -308,7 +311,7 @@ export const framedPrompt = (kind: 'fix' | 'draft', one: Finding, root: string, 
       ? 'Check the claim against the code first. If it holds, make the smallest change that fixes it, run the tests, and report what you changed. If it does not hold, say why and change nothing.'
       : 'Draft an issue for this claim in whatever tracker I use. Show me the draft and wait for my confirmation before filing anything. Check any quoted code for credentials or secrets first, and leave them out of the draft.'
 
-  return `${intro}\n\n${block}\n\n${ask}`
+  return `${intro}\n\n${block}\n\nThe finding is in the repository at ${cleanText(root)}.\n\n${ask}`
 }
 
 /** A seat's lens: its name without a round or respawn suffix. A bare `-b` is part of the name (`executor-b` is its own lens). */

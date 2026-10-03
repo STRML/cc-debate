@@ -56,9 +56,13 @@ def validate(report):
     for key in ("seatsRun", "seatsFailed", "seatsNotConfigured", "seatsNotTranscribed"):
         if not isinstance(report.get(key) or [], list):
             reject("%s is not a list" % key)
+        if len(report.get(key) or []) > MAX_ARRAY:
+            reject("%s has more than %d entries" % (key, MAX_ARRAY))
     skipped = report.get("seatsSkipped") or []
     if not isinstance(skipped, list) or not all(isinstance(entry, dict) for entry in skipped):
         reject("seatsSkipped must be a list of objects")
+    if len(skipped) > MAX_ARRAY:
+        reject("seatsSkipped has more than %d entries" % MAX_ARRAY)
 
     lists = seat_lists(report)
     names = [name for group in lists.values() for name in group] + [entry.get("seat") for entry in skipped]
@@ -235,6 +239,17 @@ def seat_states(lists, work):
     return states
 
 
+STEM = re.compile(r"^(.*?)-r\d+(-?b)?$")
+
+
+def manifest_entry(seats, name):
+    """The manifest's entry for a seat: its own name first, then the seat a `<seat>-r<N>[-b]` delivery stem belongs to."""
+    if name in seats:
+        return seats[name]
+    stem = STEM.match(name)
+    return seats.get(stem.group(1)) if stem else None
+
+
 def seat_meta(work, names):
     """model, effort and estimated cost from the selector's manifest, for the seats it assigned."""
     meta = {name: {"model": None, "effort": None, "est_cost": None} for name in names}
@@ -244,7 +259,7 @@ def seat_meta(work, names):
         return meta
     if isinstance(seats, dict):
         for name in names:
-            entry = seats.get(name)
+            entry = manifest_entry(seats, name)
             if isinstance(entry, dict):
                 meta[name] = {
                     "model": short(entry.get("model_id"), 64),

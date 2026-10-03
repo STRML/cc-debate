@@ -127,4 +127,4 @@ array of models. `pentester` never runs on `sonnet` (weak at security by design;
 
 Each finding: `{ file, line, severity: critical|major|minor|nit, claim, failure, fix?, foundBy[] }` (`why` on a refuted one). `file` is repo-relative or one of `(outside repo)`, `(unsafe path)`, `(unknown file)`. `est_cost` is the selector's estimate scaled by effort, not measured spend. Seat state precedence: not transcribed, then not configured, then failed (or not in `seatsRun`), then a missing or empty `<seat>-output.md` is `unreadable`, else `reported`.
 
-The mod keeps its own state in the plugin store: `board:<id>` = `{ "<fingerprint>#<n>": "done" | "dismissed" }`.
+The mod keeps its own state in the plugin store: `board:<id>` = `{ "<fingerprint>#1" | "<fingerprint>#<n>/<size>": "done" | "dismissed" }` (the `#<n>/<size>` form is for findings that share a file and claim, so a removed duplicate does not pass its decision to the one left).
