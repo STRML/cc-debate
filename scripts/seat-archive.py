@@ -9,19 +9,85 @@ import time
 
 HEX_DIR = re.compile(r"^ai-review-([0-9a-f]{8})$")
 ROUND = re.compile(r"^[1-9][0-9]{0,2}$")
+SEAT = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+SEVERITIES = ("critical", "major", "minor", "nit")
+MAX_ARRAY = 200
 
 
 def die(message):
     sys.exit("seat-report --archive: " + message)
 
 
+def refuse_constant(name):
+    raise ValueError("%s is not valid JSON" % name)
+
+
 def read_json(path):
     with open(path, "rb") as fh:
-        return json.loads(fh.read().decode("utf-8"))
+        return json.loads(fh.read().decode("utf-8"), parse_constant=refuse_constant)
+
+
+def reject(message):
+    die("rejected: " + message)
 
 
 def seat_lists(report):
     return {key: list(report.get(key) or []) for key in ("seatsRun", "seatsFailed", "seatsNotConfigured", "seatsNotTranscribed")}
+
+
+def validate(report):
+    """Reject (writing nothing) a report that is malformed, oversized or inconsistent; return its seat lists."""
+    if not isinstance(report, dict):
+        reject("the report is not a JSON object")
+
+    for key in ("seatsRun", "seatsFailed", "seatsNotConfigured", "seatsNotTranscribed"):
+        if not isinstance(report.get(key) or [], list):
+            reject("%s is not a list" % key)
+    skipped = report.get("seatsSkipped") or []
+    if not isinstance(skipped, list) or not all(isinstance(entry, dict) for entry in skipped):
+        reject("seatsSkipped must be a list of objects")
+
+    lists = seat_lists(report)
+    names = [name for group in lists.values() for name in group] + [entry.get("seat") for entry in skipped]
+    for name in names:
+        if not isinstance(name, str) or not SEAT.match(name) or ".." in name:
+            reject("seat name %r is not allowed" % (name,))
+
+    sections = {}
+    for key in ("findings", "refuted", "unverified"):
+        value = report.get(key)
+        if not isinstance(value, list):
+            reject("%s is not a list" % key)
+        if len(value) > MAX_ARRAY:
+            reject("%s has more than %d entries" % (key, MAX_ARRAY))
+        sections[key] = value
+
+    counts = report.get("counts")
+    if not isinstance(counts, dict):
+        reject("counts is missing")
+    for count_key, key in (("survived", "findings"), ("refuted", "refuted"), ("unverified", "unverified")):
+        if type(counts.get(count_key)) is not int or counts[count_key] != len(sections[key]):
+            reject("counts.%s is %r but %s has %d entries" % (count_key, counts.get(count_key), key, len(sections[key])))
+
+    ran = set(lists["seatsRun"])
+    for key, entries in sections.items():
+        for entry in entries:
+            if not isinstance(entry, dict):
+                reject("a %s entry is not an object" % key)
+            if entry.get("severity") not in SEVERITIES:
+                reject("a %s entry has an unknown severity %r" % (key, entry.get("severity")))
+            if type(entry.get("line", 0)) is not int or entry.get("line", 0) < 0:
+                reject("a %s entry has a line that is not a whole number >= 0" % key)
+            for field in ("file", "claim", "failure"):
+                if not isinstance(entry.get(field), str):
+                    reject("a %s entry has no %s text" % (key, field))
+            found = entry.get("foundBy")
+            if not isinstance(found, list) or not found:
+                reject("a %s entry has no foundBy list" % key)
+            for name in found:
+                if not isinstance(name, str) or name not in ran:
+                    reject("foundBy name %r is not in seatsRun" % (name,))
+    return lists
 
 
 def has_review(work, seat):
@@ -90,7 +156,7 @@ def main(argv):
     except ValueError as error:
         die("report.json is not valid JSON (%s)" % error)
 
-    lists = seat_lists(report)
+    lists = validate(report)
     states = seat_states(lists, work)
     archive = {
         "v": 1,

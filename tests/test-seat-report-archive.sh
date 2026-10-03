@@ -174,6 +174,28 @@ test_running_again_rewrites_the_same_file() {
   [ "$(ls -A "$ARCHIVES" | wc -l | tr -d ' ')" = "1" ]
 }
 
+# --- Tests: rejections (nothing is written) ---
+
+# reject_case '<python statements>' '<text the message must contain>': exits non-zero, says why, writes nothing.
+reject_case() {
+  new_world
+  write_report "$1"
+  run_archive 1
+  [ "$STATUS" -ne 0 ] || { echo "  expected a rejection"; return 1; }
+  echo "$OUT" | grep -q -- "$2" || { echo "  message lacked '$2': $OUT"; return 1; }
+  [ ! -d "$ARCHIVES" ] || [ -z "$(ls -A "$ARCHIVES")" ] || { echo "  something was written"; return 1; }
+}
+
+# reject_round '<round>': a round the writer must refuse.
+reject_round() {
+  new_world
+  STATUS=0
+  OUT="$(bash "$SCRIPT" --archive "$REVIEW/report.json" --round "$1" 2>&1)" || STATUS=$?
+  [ "$STATUS" -ne 0 ] || { echo "  expected a rejection"; return 1; }
+  echo "$OUT" | grep -q -- "--round" || { echo "  message lacked --round: $OUT"; return 1; }
+  [ ! -d "$ARCHIVES" ] || [ -z "$(ls -A "$ARCHIVES")" ] || { echo "  something was written"; return 1; }
+}
+
 # --- Run ---
 
 echo ""
@@ -188,6 +210,23 @@ run_test "an empty review file is unreadable" test_an_empty_review_file_is_unrea
 run_test "a seat not transcribed is unreadable" test_a_seat_not_transcribed_is_unreadable
 run_test "failed and unstarted seats keep their state" test_failed_and_unstarted_seats_keep_their_state_without_a_review_file
 run_test "running again rewrites the same file" test_running_again_rewrites_the_same_file
+run_test "rejects counts that disagree with the arrays" reject_case "r['counts']['survived'] = 5" "counts.survived"
+run_test "rejects an array of more than 200 entries" reject_case "r['unverified'] = [dict(r['unverified'][0]) for _ in range(201)]; r['counts']['unverified'] = 201" "more than 200"
+run_test "rejects a foundBy outside seatsRun" reject_case "r['findings'][0]['foundBy'] = ['antigravity']" "foundBy"
+run_test "rejects a foundBy that is not a list" reject_case "r['findings'][0]['foundBy'] = 'executor'" "foundBy"
+run_test "rejects a traversal seat name" reject_case "r['seatsRun'].append('../x')" "seat name"
+run_test "rejects a __proto__ seat name" reject_case "r['seatsFailed'].append('__proto__')" "seat name"
+run_test "rejects a seat name with .." reject_case "r['seatsFailed'].append('a..b')" "seat name"
+run_test "rejects NaN" reject_case "r['counts']['raw'] = float('nan')" "not valid JSON"
+run_test "rejects a boolean line" reject_case "r['findings'][0]['line'] = True" "line"
+run_test "rejects a negative line" reject_case "r['findings'][0]['line'] = -1" "line"
+run_test "rejects an unknown severity" reject_case "r['findings'][0]['severity'] = 'urgent'" "severity"
+run_test "rejects a finding with no claim" reject_case "del r['findings'][0]['claim']" "claim"
+run_test "rejects a report that is not an object" reject_case "r = []" "not a JSON object"
+run_test "rejects a round that is not a number" reject_round "abc"
+run_test "rejects round 0" reject_round "0"
+run_test "rejects round 1000" reject_round "1000"
+run_test "rejects a traversal round" reject_round "1/../../x"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="
