@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+- **`zdr_exempt_repos`: opt a repo out of the private-repo ZDR rule.** A private GitHub repo
+  made the selector demand ZDR-capable models, and on an organization account with one ZDR
+  model that cut a six-seat panel to nothing, so the Codex and Gemini seats never ran. A repo
+  whose path starts with an entry in `zdr_exempt_repos` (in `~/.claude/debate-acpx.json`) now
+  counts as not private; the `private_repos` list and the `gh` probe are skipped. Only an
+  explicit `DEBATE_PRIVATE=1` overrides it.
+
 ## [3.2.0] — 2026-08-10 (the parallel runner waits on its own children)
 
 - **`run-parallel-acpx.sh` stopped disowning the reviewers it spawns.** It spawned each

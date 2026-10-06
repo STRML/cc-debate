@@ -255,11 +255,12 @@ model + reasoning effort per seat (Step 1a's model/effort selection):
 **Sensitivity (ZDR).** Auto-detect whether the repo is private — if so, the selector
 prefers ZDR-capable models (route 31501). Signals, highest priority first:
 
-1. `DEBATE_PRIVATE=1` env var
-2. a `private_repos` key in `~/.claude/debate-acpx.json` — if REPO_ROOT is a prefix match for any path in that list
-3. `gh repo view --json isPrivate` (fail → not private)
+1. `DEBATE_PRIVATE=1` env var — always private, and the only signal that overrides the exemption below
+2. a `zdr_exempt_repos` key in `~/.claude/debate-acpx.json` — if REPO_ROOT is a prefix match for any path in that list, the repo is **not** private and signals 3 and 4 are skipped. Use it for repos whose content you are content to send to any reviewer vendor (for example an organization's own repos, where the privacy rule would otherwise cut the panel to one model)
+3. a `private_repos` key in `~/.claude/debate-acpx.json` — if REPO_ROOT is a prefix match for any path in that list
+4. `gh repo view --json isPrivate` (fail → not private)
 
-Set `PRIVATE_FLAG="--private-repo"` when any yields true.
+Set `PRIVATE_FLAG="--private-repo"` when signal 1, 3 or 4 yields true and signal 2 did not exempt the repo.
 
 **Difficulty → effort.** In changeset mode, the classify stage (Step 1f) returns
 `linesAdded` and `addsAbstraction`. Map these to a min-effort tier for the selector
@@ -280,12 +281,21 @@ else
   REGISTRY="<SCRIPT_DIR>/../hermes/templates/debate-models.json"
 fi
 
-# ZDR: detect private repo — env, config list, or gh API. First positive signal wins.
+# ZDR: detect private repo — env, exempt list, config list, or gh API.
+# DEBATE_PRIVATE=1 wins over everything; a zdr_exempt_repos prefix match makes the repo
+# non-private and skips the config list and the gh probe.
 PRIVATE_FLAG=""
+_exempt=""
+if [ "${DEBATE_PRIVATE:-0}" != "1" ] && [ -f "$HOME/.claude/debate-acpx.json" ]; then
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    case "<REPO_ROOT>" in "$p"*) _exempt=1; break;; esac
+  done < <(jq -r '.zdr_exempt_repos[]?' "$HOME/.claude/debate-acpx.json" 2>/dev/null)
+fi
 if [ -z "$PRIVATE_FLAG" ] && [ "${DEBATE_PRIVATE:-0}" = "1" ]; then
   PRIVATE_FLAG="--private-repo"
 fi
-if [ -z "$PRIVATE_FLAG" ] && [ -f "$HOME/.claude/debate-acpx.json" ]; then
+if [ -z "$PRIVATE_FLAG" ] && [ -z "$_exempt" ] && [ -f "$HOME/.claude/debate-acpx.json" ]; then
   # Read paths one per line (jq -r emits one line per element) so spaces in
   # paths don't split on IFS.
   _matched=""
@@ -295,7 +305,7 @@ if [ -z "$PRIVATE_FLAG" ] && [ -f "$HOME/.claude/debate-acpx.json" ]; then
   done < <(jq -r '.private_repos[]?' "$HOME/.claude/debate-acpx.json" 2>/dev/null)
   [ -n "$_matched" ] && PRIVATE_FLAG="--private-repo"
 fi
-if [ -z "$PRIVATE_FLAG" ] && command -v gh >/dev/null 2>&1; then
+if [ -z "$PRIVATE_FLAG" ] && [ -z "$_exempt" ] && command -v gh >/dev/null 2>&1; then
   if gh repo view --json isPrivate --jq .isPrivate 2>/dev/null | grep -qx true; then
     PRIVATE_FLAG="--private-repo"
   fi

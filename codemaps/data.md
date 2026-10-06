@@ -97,6 +97,7 @@ Keyed by model slug. The bundled seed is the fallback; the user copy is preferre
                  "claude_reviewers": {"skeptic": ["fable"], "pentester": "opus"}}
   },
   "private_repos": ["/Users/*/git/private-repo", "/Users/*/work/internal"],
+  "zdr_exempt_repos": ["/Users/me/git/my-org/"],
   "default_reviewers": ["executor", "auditor", "cartographer", "pentester",
                         "simplifier", "antigravity"]
 }
@@ -105,6 +106,12 @@ Keyed by model slug. The bundled seed is the fallback; the user copy is preferre
 `private_repos`: list of repo-root path prefixes. When REPO_ROOT matches one,
 or `DEBATE_PRIVATE=1`, or `gh repo view --json isPrivate` returns true,
 the selector gets `--private-repo` → prefers route 31501 models.
+
+`zdr_exempt_repos`: list of repo-root path prefixes, matched literally (end a directory with `/`
+so `my-org/` does not also match `my-org-secrets`). A match makes the repo non-private: the
+`private_repos` list and the `gh` probe are skipped, so the full panel runs on every vendor.
+Only `DEBATE_PRIVATE=1` overrides an exemption. Use it for repos whose content you are
+content to send to any reviewer vendor.
 
 `claude_reviewers` persona keys: `skeptic` (model-tuned: fable/opus/sonnet), `simplifier`,
 `operator`, `pentester`, `grounder`, or a custom persona file path. Model values:
