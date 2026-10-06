@@ -289,7 +289,8 @@ _exempt=""
 if [ "${DEBATE_PRIVATE:-0}" != "1" ] && [ -f "$HOME/.claude/debate-acpx.json" ]; then
   while IFS= read -r p; do
     [ -z "$p" ] && continue
-    case "<REPO_ROOT>" in "$p"*) _exempt=1; break;; esac
+    # Append "/" so an entry that is exactly the repo root, with its trailing slash, matches.
+    case "<REPO_ROOT>/" in "$p"*) _exempt=1; break;; esac
   done < <(jq -r '.zdr_exempt_repos[]?' "$HOME/.claude/debate-acpx.json" 2>/dev/null)
 fi
 if [ -z "$PRIVATE_FLAG" ] && [ "${DEBATE_PRIVATE:-0}" = "1" ]; then

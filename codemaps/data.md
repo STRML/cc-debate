@@ -109,7 +109,8 @@ the selector gets `--private-repo` → prefers route 31501 models.
 
 `zdr_exempt_repos`: list of repo-root path prefixes, matched literally (end a directory with `/`
 so `my-org/` does not also match `my-org-secrets`). A match makes the repo non-private: the
-`private_repos` list and the `gh` probe are skipped, so the full panel runs on every vendor.
+`private_repos` list and the `gh` probe are skipped, so configured reviewers may use any vendor.
+A lens seat with no `reviewers` config entry is still skipped and reported as failed.
 Only `DEBATE_PRIVATE=1` overrides an exemption. Use it for repos whose content you are
 content to send to any reviewer vendor.
 
