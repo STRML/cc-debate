@@ -47,12 +47,26 @@ test_plan_mode_uses_passed_seats() {
 }
 
 # A syntax error here is invisible until someone spends a panel run finding it.
+#
+# The loader does not treat this file as a module or as CommonJS. It reads `export const
+# meta` as a literal and runs the rest as the body of an async function, where a top-level
+# `return` and `await` are legal. `node --check` judges the file as a file instead, and
+# Node versions disagree about what kind: 20 and 22 compile it as CommonJS and pass, while
+# a current 24 detects the `export` and compiles it as an ES module, where the top-level
+# `return` is a SyntaxError. So compile it the way the loader runs it. This only compiles
+# the body; nothing in it executes.
 test_workflow_parses() {
   if ! have_node; then
     echo -n "(no node, skipped) "
     return 0
   fi
-  node --check "$WF" > /dev/null 2>&1
+  node -e '
+    const fs = require("fs");
+    const src = fs.readFileSync(process.argv[1], "utf8");
+    const body = src.replace(/^export const meta\b/m, "const meta");
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    new AsyncFunction(body);
+  ' "$WF" > /dev/null 2>&1
 }
 
 # meta.phases is what the progress display groups by. A phase() call with no
