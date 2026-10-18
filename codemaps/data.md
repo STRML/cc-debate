@@ -3,7 +3,7 @@ _Updated: 2026-08-05_
 
 ## Temp Work Directory
 
-`<REPO_ROOT>/.tmp/ai-review-<REVIEW_ID>/` (8-char hex ID). `chmod 700`. Deleted by `safe-cleanup.sh` (SHA-gated — refuses if plan drifted post-APPROVED or the plan wasn't durably saved).
+`<REPO_ROOT>/.tmp/ai-review-<REVIEW_ID>/` (8-char hex ID). `chmod 700`. Deleted by `safe-cleanup.sh` (SHA-gated — refuses if plan drifted post-APPROVED or the plan wasn't durably saved). A `/debate:fork` work dir is removed by `fork-cleanup.sh` instead, which has no gates but accepts only a path that resolves to `.tmp/ai-review-<8 hex>`.
 
 ```text
 ai-review-<ID>/
@@ -30,6 +30,10 @@ ai-review-<ID>/
 ├── claude-<persona>-r<N>-output.md   # Round N review (non-empty = delivered)
 ├── claude-<persona>-r<N>-b-output.md # Respawn variant (both kept when both land)
 ├── claude-<persona>-verify-output.md # Verification pass review (Step 6.5)
+
+│ # Per /debate:fork fork (self-written, no runner; same-model lenses):
+├── fork-<lens>-output.md      # One review per lens; delivered iff it ends in VERDICT: ISSUES|CLEAN
+├── fork-<lens>-b-output.md    # Respawn after a wedged fork (both kept when both land)
 ```
 
 ## Registry (`~/.claude/debate-models.json` or `hermes/templates/debate-models.json`)

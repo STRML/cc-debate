@@ -8,6 +8,24 @@
   whose path starts with an entry in `zdr_exempt_repos` (in `~/.claude/debate-acpx.json`) now
   counts as not private; the `private_repos` list and the `gh` probe are skipped. Only an
   explicit `DEBATE_PRIVATE=1` overrides it.
+- **`/debate:fork`: a fast, cheap, single-lab review built on fork subagents.** The session
+  reads the diff (built with `changeset-diff.sh`, so new files are in it) and the files it touches
+  once, picks up to 4 lenses from the diff (8 with `--wide`: correctness and tests unless the
+  change is docs-only, then security, contract, state, simplify, docs-drift, perf as the diff earns them), and forks that
+  many same-model subagents in one message. Each fork inherits
+  the recon already in context, reviews through one lens, and writes `fork-<lens>-output.md`;
+  the orchestrator reconciles the files, dedupes, and verifies every critical and major finding
+  itself before reporting. It is one lab with one set of blind spots, so overlap between lenses is
+  reported as overlap rather than confirmation, and the report says when `/debate:run` is still
+  worth running. Reviewer seats in `run`, `all` and `claude-review` still never fork; a test now
+  fails if the `allowed-tools` line of any command other than `fork.md` grants an `Agent` that
+  is not scoped to `subagent_type: general-purpose`. A wedged fork is bounded at about 10 minutes
+  and respawned once into its own `-b-` file. Forks hold the session's tools, so cleanup goes
+  through the new `scripts/fork-cleanup.sh`, which only removes a `.tmp/ai-review-<8 hex>`
+  directory, instead of `safe-cleanup.sh --force`. The command's file grants use `Edit(...)`
+  rules, since Claude Code never consults `Write(path)` rules. Because a fork inherits the whole
+  conversation, including the reasoning that produced the change, the command says to run it from a
+  fresh session and checks for an authoring conversation before it starts.
 
 ## [3.2.0] — 2026-08-10 (the parallel runner waits on its own children)
 

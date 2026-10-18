@@ -13,6 +13,7 @@ This is a Claude Code CLI plugin — there is no web frontend. "Frontend" here m
 /debate:run                 Full parallel review + synthesis + debate (recommended; alias /debate:all)
 /debate:run tight           Run a named preset panel from the `presets` config object
 /debate:run skip-debate     Skip targeted debate phase
+/debate:fork                Fast single-lab sweep: forked same-model lenses, one pass (--wide for 8)
 /debate:claude-review       Claude review (Fable + Opus skeptic pair default) — Agent context fork + SendMessage
 /debate:claude-double-review  Skeptic pair + Architect in parallel
 /debate:claude-custom-review  Interactive personality + model picker

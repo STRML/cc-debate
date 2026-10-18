@@ -520,6 +520,7 @@ The value of multiple reviewers is getting genuinely different lenses. Some idea
 | `/debate:acpx-setup` | Interactive reviewer configuration: pick agents, set up OpenRouter models, probe connectivity |
 | `/debate:run [reviewers\|preset] [skip-debate]` | Run the acpx panel (all, a subset, or a named `presets` panel) in parallel, synthesize, debate, iterate up to 3 rounds. No Claude teammates unless a preset asks for them. |
 | `/debate:all [reviewers\|preset] [skip-debate]` | Same, plus the Claude teammates from `claude_reviewers`. |
+| `/debate:fork [--wide] [--base <ref>] [lenses]` | Fast single-lab sweep of your own changes: the session reads the change once (new files included), then forks up to 4 (8 with `--wide`) same-model subagents, one lens each, and merges the findings. One pass, no debate. Not a merge gate: use `/debate:run` for that. Not for a diff you did not write: a fork is a full copy of the session, tools included, so use a restricted panel such as the sample config's `untrusted` preset. Run it from a fresh session (or after `/clear`): a fork also inherits the reasoning that produced the change, and a reviewer should judge the result, not the author's justification. |
 | `/debate:claude-review` | Claude review — model-tuned skeptic pair by default (Fable Skeptic + Opus Skeptic). Up to 5 rounds. |
 | `/debate:claude-double-review` | Skeptic pair + Architect in parallel. |
 | `/debate:claude-custom-review` | Interactive picker — choose personalities and model. |

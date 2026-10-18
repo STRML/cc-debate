@@ -115,6 +115,13 @@ product of a panel. Seats stay `general-purpose` with the plan inlined; re-inlin
 price of a real panel. Fork's context inheritance also does not fix the Rounds-2+ wedge,
 which is a scheduling problem, not an addressing one — keep spawning fresh teammates.
 
+The one deliberate exception is `/debate:fork` (`commands/fork.md`): it is not a panel, it
+trades model diversity for speed and cost on purpose. The session does the recon once, then
+forks N same-model lenses that share that cached prefix and each write
+`<WORK_DIR>/fork-<lens>-output.md`. One pass, no debate rounds, no verifier subagent. It is the
+only command whose `allowed-tools` grants `subagent_type: fork`
+(`test_only_the_fork_command_may_fork` enforces this).
+
 Before v2.6.0 the Claude side was mailbox-based and lossy: a teammate's SendMessage'd
 review could drop silently, shrinking the panel. A reconciliation gate now asserts every
 spawned teammate produced a non-empty output file before a round is recorded, and wedge

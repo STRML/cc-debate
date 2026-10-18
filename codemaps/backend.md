@@ -6,6 +6,7 @@ _Updated: 2026-08-12_
 | File | Slash Command | Purpose |
 |------|--------------|---------|
 | `run.md` | `/debate:run [reviewers\|preset] [skip-debate]` | Master: parallel review + synthesis + debate (up to 3 rounds) via acpx. Alias: `/debate:all` (`all.md`) |
+| `fork.md` | `/debate:fork [--wide] [--base <ref>] [lenses]` | Fast single-lab sweep: recon once, then `subagent_type: fork` lenses that share the cached prefix; one pass, no debate. The only command allowed to fork |
 | `claude-review.md` | `/debate:claude-review` | Consolidated Claude review — 6 personalities (Fable + Opus skeptic pair default), plan inlined into subagent prompt, `claude_reviewers.skeptic` preference |
 | `claude-double-review.md` | `/debate:claude-double-review` | Shortcut: skeptic pair + Architect |
 | `claude-custom-review.md` | `/debate:claude-custom-review` | Shortcut: interactive personality + model picker |
