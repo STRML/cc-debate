@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Shortcut for claude-review with a single Opus Skeptic (precision checks - arithmetic, boundaries, consistency sweeps, test coverage).
 allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: opus)
 ---

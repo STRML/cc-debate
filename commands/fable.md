@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Shortcut for claude-review with a single Fable Skeptic (deep behavioral reasoning, pinned to fable). Ignores the stored claude_reviewers.skeptic preference — invoking this is explicit consent to fable's cost.
 allowed-tools: SendMessage(*), Agent(subagent_type: general-purpose, model: fable)
 ---

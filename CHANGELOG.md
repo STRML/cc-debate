@@ -1,6 +1,10 @@
 # Changelog
-
 ## [Unreleased]
+
+- **Every command is user-invoked only.** Each command file now sets
+  `disable-model-invocation: true`, so Claude cannot pick a review or setup command on its
+  own; it runs only when you type it. Behavior after invocation is unchanged.
+  `tests/test-references.sh` fails if a command file is missing the flag.
 
 - **`zdr_exempt_repos`: opt a repo out of the private-repo ZDR rule.** A private GitHub repo
   made the selector demand ZDR-capable models, and on an organization account with one ZDR
