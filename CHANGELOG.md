@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- **`/debate:acpx-setup` catches registered agents that cannot start.** `acpx sessions
+  ensure` exits 0 and reuses a stale session id even when an agent's `command` points at a
+  missing file, so a broken wrapper passed setup and only failed at review time with a
+  misleading "No acpx session found". Setup now checks every agent in
+  `~/.acpx/config.json` (not just panel reviewers) for a missing or non-executable command,
+  keeps `sessions ensure` for idempotency, and treats the test prompt as the real health
+  check. It also documents `mode: "exec"` for opencode-backed seats that go blank on
+  session-mode turns.
+
 - **`zdr_exempt_repos`: opt a repo out of the private-repo ZDR rule.** A private GitHub repo
   made the selector demand ZDR-capable models, and on an organization account with one ZDR
   model that cut a six-seat panel to nothing, so the Codex and Gemini seats never ran. A repo
