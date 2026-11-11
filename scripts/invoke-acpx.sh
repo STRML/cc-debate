@@ -430,6 +430,41 @@ output_is_blank() {
     | LC_ALL=C grep -c '[^[:space:][:punct:]]' > /dev/null
 }
 
+# A provider error that the agent reported as a finished turn. acpx's Codex adapter
+# ends the turn as a successful end_turn when the provider rejects the request
+# (openclaw/acpx#850), so the seat exits 0 and its "review" is the provider's error
+# envelope. Observed on a model the adapter advertises but the account can't use:
+#
+#   Warning: Model metadata for `gpt-6.1-sol` not found. Defaulting to fallback ...
+#
+#   {"type":"error","status":400,"error":{"type":"invalid_request_error",...}}
+#
+# Counted as delivered, that seat reaches synthesis as a reviewer with nothing to say.
+# The test is narrow on purpose: EVERY non-blank line must be a `Warning:` line or a
+# JSON object whose top-level "type" is "error", and at least one must be the latter.
+# A real review that quotes an error envelope has prose around it and stays a review.
+# The VERDICT marker plays no part, for the reason given in handle_invocation_result.
+output_is_provider_error() {
+  local file="$1" line saw_error=0
+  [ -s "$file" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -n "$line" ] || continue
+    case "$line" in
+      Warning:*) continue ;;
+      '{'*'}')
+        if printf '%s' "$line" | jq -e 'type == "object" and .type == "error"' > /dev/null 2>&1; then
+          saw_error=1
+          continue
+        fi
+        ;;
+    esac
+    return 1
+  done < "$file"
+  [ "$saw_error" -eq 1 ]
+}
+
 # Runs one reviewer invocation, retrying while it comes back blank.
 #
 # $1 is a shell function that performs a single attempt: it must write the review
@@ -479,6 +514,24 @@ handle_invocation_result() {
     # a non-Latin review may carry no English VERDICT marker. This line is purely for
     # the operator; a seat that delivers without the marker simply stays quiet here.
     echo "[$REVIEWER] Review received." >&2
+  fi
+
+  # A provider error is a failure even when the agent exited 0 (see
+  # output_is_provider_error). Keep the envelope in the output so the operator sees why,
+  # and decide this before publishing, for the same reason as the blank check below.
+  if [ "$EXIT_CODE" -eq 0 ] && output_is_provider_error "$WORK_DIR/${REVIEWER}-output.md"; then
+    local provider_message
+    provider_message=$(grep -E '^[[:space:]]*\{' "$WORK_DIR/${REVIEWER}-output.md" \
+      | jq -r 'select(type == "object" and .type == "error") | (.error.message // .message // empty)' 2>/dev/null \
+      | head -1) || true
+    echo "[$REVIEWER] $label returned a provider error instead of a review: ${provider_message:-no message}" >&2
+    {
+      echo "Provider error from $label (the agent exited 0, but this is not a review):"
+      echo ""
+      cat "$WORK_DIR/${REVIEWER}-output.md"
+    } > "$WORK_DIR/${REVIEWER}-output.md.tmp"
+    mv "$WORK_DIR/${REVIEWER}-output.md.tmp" "$WORK_DIR/${REVIEWER}-output.md"
+    EXIT_CODE=1
   fi
 
   # A final blank turn is a failure, whatever the process exited with. Decide that

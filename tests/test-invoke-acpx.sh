@@ -299,6 +299,73 @@ test_empty_response_detected() {
   rm -rf "$work_dir"
 }
 
+# openclaw/acpx#850: the Codex adapter ends a rejected request as a successful turn,
+# so acpx exits 0 with the provider's error envelope on stdout. This is the exact
+# output observed for a model the adapter advertised but the account could not use.
+PROVIDER_ERROR_RESPONSE='Warning: Model metadata for `gpt-x` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
+
+{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The '"'"'gpt-x'"'"' model is not supported when using Codex with a ChatGPT account.","code":"model_not_found"}}'
+
+test_provider_error_is_not_a_review() {
+  local work_dir config exit_code
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  set +e
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_EXIT=0 \
+  MOCK_ACPX_RESPONSE="$PROVIDER_ERROR_RESPONSE" \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+  exit_code=$?
+  set -e
+
+  [ "$exit_code" -eq 1 ] || return 1
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "1" ] || return 1
+  # The reason survives, so the operator can tell why the seat failed.
+  grep -q "Provider error from" "$work_dir/test-reviewer-output.md" || return 1
+  grep -q "model_not_found" "$work_dir/test-reviewer-output.md" || return 1
+
+  rm -rf "$work_dir"
+}
+
+test_bare_provider_error_is_not_a_review() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_EXIT=0 \
+  MOCK_ACPX_RESPONSE='{"type":"error","status":503,"error":{"type":"server_overloaded","message":"Try again later."}}' \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null || true
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "1" ] || return 1
+
+  rm -rf "$work_dir"
+}
+
+# A review may quote an error envelope (say, a plan about error handling). Prose
+# around it means it is a review, so it must still count as delivered.
+test_review_quoting_provider_error_still_delivered() {
+  local work_dir config
+  work_dir=$(setup_work_dir)
+  config=$(setup_config "$work_dir")
+
+  SKIP_SESSION_CHECK=1 \
+  PATH="$SCRIPT_DIR:$PATH" \
+  MOCK_ACPX_EXIT=0 \
+  MOCK_ACPX_RESPONSE='Step 3 should handle a rejected model, which arrives as:
+{"type":"error","status":400,"error":{"type":"invalid_request_error","code":"model_not_found"}}
+VERDICT: REVISE' \
+    bash "$INVOKE" "$config" "$work_dir" "test-reviewer" 2>/dev/null
+
+  [ "$(cat "$work_dir/test-reviewer-exit.txt")" = "0" ] || return 1
+  ! grep -q "Provider error from" "$work_dir/test-reviewer-output.md" || return 1
+
+  rm -rf "$work_dir"
+}
+
 test_missing_config_fails() {
   local work_dir
   work_dir=$(setup_work_dir)
@@ -1884,6 +1951,9 @@ run_test "initial prompt includes plan" test_initial_prompt_includes_plan
 run_test "fallback system prompt" test_fallback_system_prompt
 run_test "acpx failure populates output" test_acpx_failure_populates_output
 run_test "empty response detected" test_empty_response_detected
+run_test "provider error is not a review" test_provider_error_is_not_a_review
+run_test "bare provider error is not a review" test_bare_provider_error_is_not_a_review
+run_test "review quoting a provider error still delivered" test_review_quoting_provider_error_still_delivered
 run_test "missing config fails" test_missing_config_fails
 run_test "tilde config path is expanded" test_accepts_tilde_config
 run_test "missing plan fails" test_missing_plan_fails

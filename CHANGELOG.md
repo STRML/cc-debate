@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- **A provider error is no longer counted as a review.** acpx's Codex adapter ends a
+  rejected request as a successful turn (openclaw/acpx#850), so a seat exited 0 with the
+  provider's error JSON as its "review" and reached synthesis as a reviewer with nothing to
+  say. Seen on a model the adapter advertises but the account cannot use (`model_not_found`).
+  `invoke-acpx.sh` now treats output that is only `Warning:` lines and JSON error objects as
+  a failed seat (exit 1) and keeps the error in `<name>-output.md`. A review that quotes an
+  error among its own text still counts.
+
 - **`zdr_exempt_repos`: opt a repo out of the private-repo ZDR rule.** A private GitHub repo
   made the selector demand ZDR-capable models, and on an organization account with one ZDR
   model that cut a six-seat panel to nothing, so the Codex and Gemini seats never ran. A repo
