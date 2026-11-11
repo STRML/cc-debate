@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Check debate plugin prerequisites, verify acpx is installed, and print the exact settings.json snippet for fully unattended (no-prompt) operation.
 allowed-tools: Bash(which acpx:*), Bash(which npx:*), Bash(which jq:*), Bash(which agy:*), Bash(bash ~/.claude/plugins/cache/cc-debate/debate/*/scripts/create-links.sh:*), Bash(ls:*), Bash(cat:*), Bash(jq:*), Bash(cp:*), Write(~/.claude/debate-acpx.json), Read(~/.claude/settings.json), Edit(~/.claude/settings.json), Write(~/.claude/settings.json)
 ---

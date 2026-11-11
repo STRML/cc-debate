@@ -1,4 +1,5 @@
 ---
+disable-model-invocation: true
 description: Check acpx CLI installation, validate debate-acpx.json config, probe each configured agent, and print permission allowlist for unattended operation.
 allowed-tools: Bash(bash ~/.claude/debate-scripts/acpx-env-snapshot.sh:*), Bash(which npx:*), Bash(acpx:*), Bash(npx acpx@latest:*), Bash(agy:*), Bash(agy models:*), Bash(which agy:*), Bash(bash ~/.claude/debate-scripts/debate-setup.sh:*), Bash(bash ~/.claude/debate-scripts/create-litellm-agent.sh:*), Bash(ls:*), Bash(chmod:*), Bash(mkdir:*), Bash(jq:*), Bash(cp:*), Write(~/.claude/debate-acpx.json), Write(~/.acpx/*), Write(~/.acpx/**), Read(~/.acpx/**), Edit(~/.acpx/**), Write(~/.opencode.json), Read(~/.claude/settings.json), Edit(~/.claude/settings.json), Write(~/.claude/settings.json)
 ---

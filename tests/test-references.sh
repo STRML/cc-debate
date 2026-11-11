@@ -341,6 +341,15 @@ test_alias_allowed_tools_parity() {
   [ "$run_line" = "$all_line" ] || { echo "  allowed-tools mismatch between all.md and run.md"; return 1; }
 }
 
+test_all_commands_are_user_invoked_only() {
+  local f fm
+  for f in "$PROJECT_DIR"/commands/*.md; do
+    fm=$(awk 'NR == 1 && $0 == "---" { fm=1; next } fm && $0 == "---" { exit } fm { print }' "$f")
+    printf '%s\n' "$fm" | grep -qx 'disable-model-invocation: true' ||
+      { echo "  missing explicit-only flag: ${f##*/}"; return 1; }
+  done
+}
+
 # --- Run ---
 
 echo ""
@@ -366,6 +375,7 @@ run_test "run.md is canonical orchestrator" test_run_is_canonical_orchestrator
 run_test "all.md is alias to run" test_all_is_alias_to_run
 run_test "run defaults to no Claude teammates" test_run_defaults_to_no_claude_teammates
 run_test "alias allowed-tools parity" test_alias_allowed_tools_parity
+run_test "all commands are user-invoked only" test_all_commands_are_user_invoked_only
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ($(( PASS + FAIL )) total) ==="
