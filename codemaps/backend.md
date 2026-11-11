@@ -88,6 +88,14 @@ timeout goes straight to `handle_invocation_result`. A blank review is detected 
 `output_is_blank`, not `[ -s ]` — acpx writes a trailing newline even when the agent
 said nothing, so a contentless run is 1 byte, not 0.
 
+A turn that exits 0 with only a provider error is a failure too, and is not retried.
+acpx's Codex adapter ends a rejected request as a successful turn (openclaw/acpx#850),
+leaving the provider's error envelope as the "review". `output_is_provider_error`
+matches output whose every non-blank line is a `Warning:` line or a JSON object with
+top-level `"type": "error"`. `handle_invocation_result` then records exit 1 and keeps
+the envelope in `<name>-output.md` under a "Provider error from" header. A review that
+quotes an envelope among its own prose is unaffected.
+
 ## Plugin Metadata (`.claude-plugin/`)
 
 - `plugin.json` — name, version, description, author, license
